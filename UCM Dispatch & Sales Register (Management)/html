@@ -1,0 +1,44 @@
+<div id="ucm-report" class="ucmw-root">
+  <div class="ucmw-progress"></div>
+
+  <div class="page-head ucmw-head">
+    <div class="ucmw-head-in">
+      <div class="ucmw-title">
+        <h3 class="title-text">UCM Dispatch &amp; Sales Register</h3>
+        <div class="ucmw-sub">Management &middot; Credit notes &amp; returns excluded</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ucmw-filterbar">
+    <div class="page-form standard-filter-section" id="ucmw-filters"></div>
+    <div class="page-actions ucmw-actions"></div>
+  </div>
+
+  <div class="ucmw-tabs" role="tablist">
+    <button type="button" class="ucmw-tab on" data-tab="summary" role="tab">Summary</button>
+    <button type="button" class="ucmw-tab" data-tab="data" role="tab">Orders <span class="ucmw-tab-count" id="ucmw-count"></span></button>
+    <div class="ucmw-tabs-meta" id="ucmw-period"></div>
+  </div>
+
+  <div class="layout-main-section ucmw-main">
+    <section class="ucmw-panel" data-panel="summary">
+      <div id="ucmw-summary"></div>
+      <div class="report-summary"></div>
+      <div class="ucmw-summary-note" id="ucmw-summary-note" hidden></div>
+    </section>
+    <section class="ucmw-panel" data-panel="data" hidden>
+      <div class="ucmw-src-row">
+        <div class="ucmw-src-tabs" role="tablist">
+          <button type="button" class="ucmw-src-tab on" data-src="Delivery Note">Delivery Note</button>
+          <button type="button" class="ucmw-src-tab" data-src="Sales Invoice">Sales Invoice</button>
+        </div>
+        <div class="ucmw-search"><input type="search" class="ucmw-search-input" placeholder="Search records — customer, product, document, state…"></div>
+        <div class="ucmw-table-info" id="ucmw-info"></div>
+      </div>
+      <div class="report-wrapper frappe-card" id="ucmw-table">
+        <div class="ucmw-empty"><span class="ucmw-spin"></span>Loading report…</div>
+      </div>
+    </section>
+  </div>
+</div>
