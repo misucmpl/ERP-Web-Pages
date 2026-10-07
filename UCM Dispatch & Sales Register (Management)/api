@@ -1,0 +1,503 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_dispatch_sales_register
+#   Allow Guest : NO (untick)
+#   Access      : SIRF System Manager role (baaki users ko "no access")
+#
+# "UCM Dispatch & Sales Register (Management)" Script Report ka POORA Python,
+# ab API ke roop mein — taaki Web Page report delete hone ke baad bhi chale.
+# Logic, SQL, summary cards, role check — sab report jaisa hi hai.
+#
+# Input : from_date, to_date, customer, item_group, source (alag-alag arguments)
+# Output: {"columns": [...], "result": [...rows], "report_summary": [...] or None}
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Access: sirf login kiye hue company users (portal / customer users nahi) ──
+if frappe.session.user == "Guest":
+    frappe.throw("Please log in.")
+if frappe.db.get_value("User", frappe.session.user, "user_type") != "System User":
+    frappe.throw("UCM_NO_ACCESS: You do not have access to this page.")
+
+# ── Sirf System Manager: baaki sab ko "no access" (web page apna access screen dikhata hai) ──
+ucm_roles = set(frappe.get_all(
+    "Has Role",
+    filters={"parent": frappe.session.user, "parenttype": "User"},
+    pluck="role"
+))
+if "System Manager" not in ucm_roles:
+    frappe.throw("UCM_NO_ACCESS: You do not have access to this page.")
+
+# Web page pehle sirf access check karta hai (filters/data banne se pehle)
+if frappe.form_dict.get("check_access"):
+    frappe.response["message"] = {"access": 1}
+else:
+
+    # ── Filters (report mein Frappe khud deta tha; yahan request se lete hain) ────
+    # Web page har filter alag argument mein bhejta hai (JSON parse ki zaroorat nahi)
+    filters = {}
+    for key in ["from_date", "to_date", "customer", "item_group", "source", "delivery_note", "sales_invoice"]:
+        value = frappe.form_dict.get(key)
+        if value:
+            filters[key] = value
+
+    # ── Defaults (handle empty filters when all are hidden) ───────────────────────
+    if not filters.get("from_date"):
+        filters["from_date"] = frappe.utils.nowdate()
+    if not filters.get("to_date"):
+        filters["to_date"] = frappe.utils.nowdate()
+    columns = [
+        {"label": "Date", "fieldname": "posting_date", "fieldtype": "Date", "width": 120},
+        {"label": "Status", "fieldname": "status", "fieldtype": "HTML", "width": 150},
+        {"label": "Document ID", "fieldname": "name_html", "fieldtype": "HTML", "width": 180},
+        {"label": "Customer Name", "fieldname": "customer_name", "fieldtype": "Data", "width": 200},
+        {"label": "City / Town", "fieldname": "city", "fieldtype": "Data", "width": 120},
+        {"label": "State", "fieldname": "state", "fieldtype": "Data", "width": 120},
+        {"label": "Product Name", "fieldname": "item_name_html", "fieldtype": "HTML", "width": 250},
+        {"label": "Sales Order Type", "fieldname": "custom_sales_order_type", "fieldtype": "Data", "width": 120},
+        {"label": "Quantity", "fieldname": "qty", "fieldtype": "Float", "width": 100},
+        {"label": "Rate", "fieldname": "rate", "fieldtype": "Currency", "width": 120},
+        {"label": "Amount", "fieldname": "amount", "fieldtype": "Currency", "width": 120},
+        {"label": "Batch", "fieldname": "batch_no", "fieldtype": "Data", "width": 140},
+        {"label": "Warehouse", "fieldname": "warehouse", "fieldtype": "Data", "width": 160},
+        {"label": "Cost Rate", "fieldname": "cost_rate", "fieldtype": "Currency", "width": 110},
+        {"label": "Cost Amount", "fieldname": "cost_amount", "fieldtype": "Currency", "width": 120},
+        {"label": "Profit", "fieldname": "profit", "fieldtype": "Currency", "width": 120},
+        {"label": "Margin %", "fieldname": "margin_pct", "fieldtype": "Percent", "width": 100},
+        {"label": "OA NO", "fieldname": "custom_oa_no", "fieldtype": "Data", "width": 140},
+        {"label": "Order By", "fieldname": "custom_order_by", "fieldtype": "Data", "width": 150},
+        {"label": "Freight / Incoterm", "fieldname": "incoterm_label", "fieldtype": "Data", "width": 250},
+    ]
+
+    # ── Filters ───────────────────────────────────────────────────────────────────
+    source             = filters.get("source") or "Delivery Note"
+    customer           = filters.get("customer")
+    delivery_note      = filters.get("delivery_note")
+    sales_invoice      = filters.get("sales_invoice")
+    item_group         = filters.get("item_group")
+
+    customer_condition          = "AND dn.customer = %(customer)s"          if customer      else ""
+    delivery_note_condition     = "AND dn.name = %(delivery_note)s"         if (delivery_note and source == "Delivery Note")  else ""
+    sales_invoice_condition     = "AND dn.name = %(sales_invoice)s"         if (sales_invoice and source == "Sales Invoice")  else ""
+    item_group_condition        = "AND it.item_group = %(item_group)s"      if item_group    else ""
+
+    # ── Return / Credit Note exclusion (used in every query below) ────────────────
+    # is_return = 1  ->  Delivery Note = Sales Return, Sales Invoice = Credit Note
+    no_return_condition = "AND IFNULL(dn.is_return, 0) = 0"
+
+    # ── Incoterm CASE ─────────────────────────────────────────────────────────────
+    incoterm_case = """
+        CASE dn.incoterm
+            WHEN 'FTP' THEN 'Freight to Pay by Customer'
+            WHEN 'EXW' THEN 'Ex Works'
+            WHEN 'FCA' THEN 'Free Carrier'
+            WHEN 'CPT' THEN 'Carriage Paid To'
+            WHEN 'CIP' THEN 'Carriage and Insurance Paid To'
+            WHEN 'DPU' THEN 'Delivered at Place Unloaded'
+            WHEN 'DAP' THEN 'Delivered at Place'
+            WHEN 'DDP' THEN 'Delivered Duty Paid'
+            WHEN 'FAS' THEN 'Free Alongside Ship'
+            WHEN 'FOB' THEN 'Free On Board'
+            WHEN 'CFR' THEN 'Cost and Freight'
+            WHEN 'CIF' THEN 'Cost Insurance and Freight'
+            WHEN 'FOR' THEN 'Free On Road'
+            ELSE dn.incoterm
+        END AS incoterm_label
+    """
+
+    # ── Category CASE ─────────────────────────────────────────────────────────────
+    category_case = """
+        dn.custom_sales_order_type AS custom_sales_order_type
+    """
+
+    # ── SQL ───────────────────────────────────────────────────────────────────────
+    if source == "Delivery Note":
+        sql = """
+            SELECT
+                dn.posting_date,
+                CASE
+                    WHEN dn.docstatus = 0 THEN 'Draft'
+                    WHEN dn.docstatus = 1 THEN 'Completed'
+                END AS dn_status,
+                dn.name,
+                dn.customer_name,
+                addr.city,
+                addr.state,
+                dni.item_code,
+                dni.item_name,
+                it.item_group AS item_group,
+                """ + category_case + """,
+                dni.qty,
+                dni.rate,
+                (dni.qty * dni.rate) AS amount,
+                sle.batch_no AS batch_no,
+                sle.warehouse AS warehouse,
+                COALESCE(sle.cost_amount, 0) AS cost_amount,
+                CASE
+                    WHEN dni.qty != 0
+                    THEN COALESCE(sle.cost_amount, 0) / dni.qty
+                    ELSE 0
+                END AS cost_rate,
+                dn.custom_oa_no,
+                dn.custom_order_by,
+                """ + incoterm_case + """
+            FROM `tabDelivery Note` dn
+            INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+            LEFT JOIN `tabAddress` addr ON addr.name = dn.customer_address
+            LEFT JOIN `tabItem` it ON it.name = dni.item_code
+            LEFT JOIN (
+                SELECT
+                    voucher_detail_no,
+                    GROUP_CONCAT(DISTINCT batch_no SEPARATOR ', ') AS batch_no,
+                    GROUP_CONCAT(DISTINCT warehouse SEPARATOR ', ') AS warehouse,
+                    SUM(ABS(COALESCE(stock_value_difference, 0))) AS cost_amount
+                FROM `tabStock Ledger Entry`
+                WHERE voucher_type = 'Delivery Note' AND is_cancelled = 0
+                GROUP BY voucher_detail_no
+            ) sle ON sle.voucher_detail_no = dni.name
+            WHERE
+                dn.docstatus = 1
+                AND dn.posting_date BETWEEN %(from_date)s AND %(to_date)s
+                AND (UPPER(dn.custom_sales_order_type) = 'ULTRA' OR UPPER(dn.custom_sales_order_type) = 'LARGE BLOW')
+                """ + no_return_condition + """
+                """ + customer_condition + """
+                """ + delivery_note_condition + """
+                """ + item_group_condition + """
+            ORDER BY dn.posting_date DESC, dn.name, dni.idx
+        """
+
+    else:  # Sales Invoice
+        sql = """
+            SELECT
+                dn.posting_date,
+                CASE
+                    WHEN dn.docstatus = 0 THEN 'Draft'
+                    WHEN dn.docstatus = 1 THEN 'Completed'
+                END AS dn_status,
+                dn.name,
+                dn.customer_name,
+                addr.city,
+                addr.state,
+                dni.item_code,
+                dni.item_name,
+                it.item_group AS item_group,
+                """ + category_case + """,
+                dni.qty,
+                dni.rate,
+                (dni.qty * dni.rate) AS amount,
+                COALESCE(sle_dn.batch_no, sle_si.batch_no) AS batch_no,
+                COALESCE(sle_dn.warehouse, sle_si.warehouse) AS warehouse,
+                COALESCE(sle_dn.cost_amount, sle_si.cost_amount, 0) AS cost_amount,
+                CASE
+                    WHEN dni.qty != 0
+                    THEN COALESCE(sle_dn.cost_amount, sle_si.cost_amount, 0) / dni.qty
+                    ELSE 0
+                END AS cost_rate,
+                '' AS custom_oa_no,
+                dn.custom_order_by AS custom_order_by,
+                """ + incoterm_case + """
+            FROM `tabSales Invoice` dn
+            INNER JOIN `tabSales Invoice Item` dni ON dni.parent = dn.name
+            LEFT JOIN `tabAddress` addr ON addr.name = dn.customer_address
+            LEFT JOIN `tabItem` it ON it.name = dni.item_code
+            LEFT JOIN (
+                SELECT
+                    voucher_detail_no,
+                    GROUP_CONCAT(DISTINCT batch_no SEPARATOR ', ') AS batch_no,
+                    GROUP_CONCAT(DISTINCT warehouse SEPARATOR ', ') AS warehouse,
+                    SUM(ABS(COALESCE(stock_value_difference, 0))) AS cost_amount
+                FROM `tabStock Ledger Entry`
+                WHERE voucher_type = 'Delivery Note' AND is_cancelled = 0
+                GROUP BY voucher_detail_no
+            ) sle_dn ON sle_dn.voucher_detail_no = dni.dn_detail
+            LEFT JOIN (
+                SELECT
+                    voucher_detail_no,
+                    GROUP_CONCAT(DISTINCT batch_no SEPARATOR ', ') AS batch_no,
+                    GROUP_CONCAT(DISTINCT warehouse SEPARATOR ', ') AS warehouse,
+                    SUM(ABS(COALESCE(stock_value_difference, 0))) AS cost_amount
+                FROM `tabStock Ledger Entry`
+                WHERE voucher_type = 'Sales Invoice' AND is_cancelled = 0
+                GROUP BY voucher_detail_no
+            ) sle_si ON sle_si.voucher_detail_no = dni.name
+            WHERE
+                dn.docstatus = 1
+                AND dn.posting_date BETWEEN %(from_date)s AND %(to_date)s
+                AND (UPPER(dn.custom_sales_order_type) = 'ULTRA' OR UPPER(dn.custom_sales_order_type) = 'LARGE BLOW')
+                """ + no_return_condition + """
+                """ + customer_condition + """
+                """ + sales_invoice_condition + """
+                """ + item_group_condition + """
+            ORDER BY dn.posting_date DESC, dn.name, dni.idx
+        """
+
+    rows = frappe.db.sql(sql, filters, as_dict=True)
+
+    # ── Margin % calculation ──────────────────────────────────────────────────────
+    for row in rows:
+        amount      = row.get("amount") or 0
+        cost_amount = row.get("cost_amount") or 0
+        row["profit"] = amount - cost_amount
+        if amount != 0:
+            row["margin_pct"] = (row["profit"] / amount) * 100
+        else:
+            row["margin_pct"] = 0
+
+    # ── Summary Row Query — ALWAYS from Sales Invoice for top cards ───────────────
+    sales_invoice_summary_sql = """
+        SELECT
+            dn.name,
+            dn.posting_date,
+            CASE
+                WHEN dn.docstatus = 0 THEN 'Draft'
+                WHEN dn.docstatus = 1 THEN 'Completed'
+            END AS dn_status,
+            """ + category_case + """,
+            SUM(dni.qty) AS qty,
+            SUM(dni.qty * dni.rate) AS amount,
+            SUM(COALESCE(sle_dn.cost_amount, sle_si.cost_amount, 0)) AS cost_amount
+        FROM `tabSales Invoice` dn
+        INNER JOIN `tabSales Invoice Item` dni ON dni.parent = dn.name
+        LEFT JOIN `tabItem` it ON it.name = dni.item_code
+        LEFT JOIN (
+            SELECT
+                voucher_detail_no,
+                SUM(ABS(COALESCE(stock_value_difference, 0))) AS cost_amount
+            FROM `tabStock Ledger Entry`
+            WHERE voucher_type = 'Delivery Note' AND is_cancelled = 0
+            GROUP BY voucher_detail_no
+        ) sle_dn ON sle_dn.voucher_detail_no = dni.dn_detail
+        LEFT JOIN (
+            SELECT
+                voucher_detail_no,
+                SUM(ABS(COALESCE(stock_value_difference, 0))) AS cost_amount
+            FROM `tabStock Ledger Entry`
+            WHERE voucher_type = 'Sales Invoice' AND is_cancelled = 0
+            GROUP BY voucher_detail_no
+        ) sle_si ON sle_si.voucher_detail_no = dni.name
+        WHERE
+            dn.docstatus = 1
+            AND dn.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            AND (UPPER(dn.custom_sales_order_type) = 'ULTRA' OR UPPER(dn.custom_sales_order_type) = 'LARGE BLOW')
+            """ + no_return_condition + """
+            """ + customer_condition + """
+            """ + item_group_condition + """
+        GROUP BY dn.name
+    """
+
+    summary_rows = frappe.db.sql(sales_invoice_summary_sql, filters, as_dict=True)
+
+    for row in summary_rows:
+        amount      = row.get("amount") or 0
+        cost_amount = row.get("cost_amount") or 0
+        row["profit"] = amount - cost_amount
+
+    # ── Last Month (same date range) comparison ────────────────────────────────────
+    last_month_filters = dict(filters)
+    last_month_filters["from_date"] = frappe.utils.add_months(filters["from_date"], -1)
+    last_month_filters["to_date"]   = frappe.utils.add_months(filters["to_date"], -1)
+
+    last_month_summary_sql = """
+        SELECT
+            """ + category_case + """,
+            SUM(dni.qty) AS qty,
+            SUM(dni.qty * dni.rate) AS amount
+        FROM `tabSales Invoice` dn
+        INNER JOIN `tabSales Invoice Item` dni ON dni.parent = dn.name
+        LEFT JOIN `tabItem` it ON it.name = dni.item_code
+        WHERE
+            dn.docstatus = 1
+            AND dn.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            AND (UPPER(dn.custom_sales_order_type) = 'ULTRA' OR UPPER(dn.custom_sales_order_type) = 'LARGE BLOW')
+            """ + no_return_condition + """
+            """ + customer_condition + """
+            """ + item_group_condition + """
+        GROUP BY dn.custom_sales_order_type
+    """
+
+    last_month_rows = frappe.db.sql(last_month_summary_sql, last_month_filters, as_dict=True)
+
+    last_month_category_totals = {}
+    last_month_qty_totals = {}
+    for row in last_month_rows:
+        lm_category = row.get("custom_sales_order_type") or "Uncategorized"
+        last_month_category_totals[lm_category] = row.get("amount") or 0
+        last_month_qty_totals[lm_category] = row.get("qty") or 0
+
+    # ── Role check ────────────────────────────────────────────────────────────────
+    allowed_roles = {"System Manager", "UCM Admin"}
+    user_roles = set(frappe.get_all(
+        "Has Role",
+        filters={"parent": frappe.session.user},
+        pluck="role"
+    ))
+    show_summary = bool(allowed_roles & user_roles)
+
+    # ── Summary calculations ──────────────────────────────────────────────────────
+    total_orders     = set()
+    completed_orders = set()
+    total_amount = total_cost = total_profit = 0
+    total_qty = 0
+    category_totals = {}  # category -> {"qty": ..., "amount": ...}
+
+    for row in summary_rows:
+        dn_name     = row.get("name")
+        dn_status   = row.get("dn_status", "")
+        category    = row.get("custom_sales_order_type") or "Uncategorized"
+        qty         = row.get("qty") or 0
+        amount      = row.get("amount") or 0
+        cost_amount = row.get("cost_amount") or 0
+        profit      = row.get("profit") or 0
+
+        if dn_name:
+            total_orders.add(dn_name)
+            if dn_status == "Completed":
+                completed_orders.add(dn_name)
+
+        if dn_status == "Completed":
+            total_amount = total_amount + amount
+            total_cost = total_cost + cost_amount
+            total_profit = total_profit + profit
+            total_qty = total_qty + qty
+
+            bucket = category_totals.setdefault(category, {"qty": 0, "amount": 0})
+            bucket["qty"] = bucket["qty"] + qty
+            bucket["amount"] = bucket["amount"] + amount
+
+    overall_margin_pct = (total_profit / total_amount * 100) if total_amount else 0
+
+    # ── Item link helper ──────────────────────────────────────────────────────────
+    def item_link(item_code, item_name):
+        if not item_code:
+            return ""
+        safe_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+        encoded = []
+        for byte in str(item_code).encode("utf-8"):
+            ch = chr(byte)
+            encoded.append(ch if ch in safe_chars else "%%%02X" % byte)
+        display_name = frappe.utils.escape_html(item_name or item_code)
+        return '<a href="/app/item/%s" target="_blank">%s</a>' % ("".join(encoded), display_name)
+
+    # ── Document link helper ──────────────────────────────────────────────────────
+    def doc_link(doctype, name):
+        if not name:
+            return ""
+        safe_chars = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+        encoded = []
+        for byte in str(name).encode("utf-8"):
+            ch = chr(byte)
+            encoded.append(ch if ch in safe_chars else "%%%02X" % byte)
+        slug = doctype.lower().replace(" ", "-")
+        return '<a href="/app/%s/%s" target="_blank">%s</a>' % (
+            slug, "".join(encoded), frappe.utils.escape_html(name)
+        )
+
+    # ── Report Summary ────────────────────────────────────────────────────────────
+    report_summary = None
+
+    if show_summary:
+        category_indicators = ["blue", "purple", "orange", "darkgrey", "green", "red"]
+        sorted_categories = sorted(
+            category_totals.items(), key=lambda kv: kv[1]["amount"], reverse=True
+        )
+
+        report_summary = [
+            {
+                "value": total_amount,
+                "label": "Total Sale Amount",
+                "datatype": "Currency",
+                "indicator": "green"
+            },
+            {
+                "value": len(completed_orders),
+                "label": "Completed Orders",
+                "datatype": "Int",
+                "indicator": "green"
+            },
+            {
+                "value": total_qty,
+                "label": "Total Quantity Sold",
+                "datatype": "Float",
+                "indicator": "blue"
+            },
+        ]
+
+        for idx, (cat_name, totals) in enumerate(sorted_categories):
+            report_summary.append({
+                "value": totals["amount"],
+                "label": "%s Amount" % cat_name,
+                "datatype": "Currency",
+                "indicator": category_indicators[idx % len(category_indicators)]
+            })
+            report_summary.append({
+                "value": last_month_category_totals.get(cat_name, 0),
+                "label": "%s Amount LM" % cat_name,
+                "datatype": "Currency",
+                "indicator": "grey"
+            })
+            report_summary.append({
+                "value": last_month_qty_totals.get(cat_name, 0),
+                "label": "%s Quantity LM" % cat_name,
+                "datatype": "Float",
+                "indicator": "grey"
+            })
+
+        report_summary += [
+            {
+                "value": total_cost,
+                "label": "Total Cost (COGS)",
+                "datatype": "Currency",
+                "indicator": "orange"
+            },
+            {
+                "value": total_profit,
+                "label": "Total Profit",
+                "datatype": "Currency",
+                "indicator": "green"
+            },
+            {
+                "value": round(overall_margin_pct, 2),
+                "label": "Overall Margin %",
+                "datatype": "Percent",
+                "indicator": "blue"
+            },
+        ]
+
+    data = []
+    seen = set()
+
+    for row in rows:
+        key = row.get("name")
+        dn_status = row.get("dn_status", "")
+        dn_name = key or ""
+        color = "orange" if dn_status == "Draft" else "green"
+
+        row["item_name_html"] = item_link(row.get("item_code"), row.get("item_name"))
+
+        if key in seen:
+            row["posting_date"] = ""
+            row["name_html"] = ""
+            row["status"] = '<span data-dn-name="%s" data-dn-status="%s"></span>' % (dn_name, dn_status)
+        else:
+            seen.add(key)
+            row["name_html"] = doc_link(source, dn_name)
+            if dn_status == "Completed":
+                row["status"] = (
+                    '<span class="ucm-dn-total-trigger" data-dn-name="%s" data-dn-total="1" '
+                    'data-dn-status="%s" title="View cost breakup for %s" '
+                    'style="cursor:pointer; color:%s; font-weight:bold; text-decoration:underline dotted; '
+                    'text-underline-offset:3px;">%s</span>'
+                ) % (dn_name, dn_status, dn_name, color, dn_status)
+            else:
+                row["status"] = '<span data-dn-name="%s" data-dn-status="%s" style="color:%s; font-weight:bold;">%s</span>' % (
+                    dn_name, dn_status, color, dn_status
+                )
+
+        data.append(row)
+
+    # ── Response (Web Page ka adapter isi shape ko padhta hai) ─────────────────────
+    frappe.response["message"] = {
+        "columns": columns,
+        "result": data,
+        "report_summary": report_summary,
+    }
