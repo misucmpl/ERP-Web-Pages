@@ -1,0 +1,429 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_customer_insights
+#   Allow Guest : NO (untick)
+#
+# "Customer Insights" web page ka backend (sirf VIEW). Teen report ek page par:
+#   action = "me"          → mera access (kaun se tabs)
+#   action = "acquisition" → UCM Customer Acquisition Report    · from_date, to_date, company
+#   action = "inactive"    → UCM Customer Insights (inactive)   · transaction_type, item_group, inactive_days
+#   action = "territory"   → UCM Territory Coverage             · from_date, to_date, sales_order_type, customer
+#   action = "item_groups" → Inactive tab ke Item Group filter ke liye list
+#   action = "list" / "set"→ ⚙️ Settings (sirf System Manager) · user, reports = "acquisition,inactive,territory" / ""
+#
+# Access: System Manager ko sab. Baaki user ko har report ka alag role:
+#   UCM CI Acquisition · UCM CI Inactive · UCM CI Territory   (teeno = Full)
+#
+# Slider (detail) ke liye page pehle se bane API scripts hi use karta hai:
+#   ucm_customer_acquisition_detail · ucm_customer_insights_detail · ucm_territory_till_date_summary
+#
+# RestrictedPython: function / lambda / comprehension top-level variables nahi dekh sakte —
+# isliye har jagah seedhe loops.
+# ═══════════════════════════════════════════════════════════════════════════
+
+CI_ROLES = {
+    "acquisition": "UCM CI Acquisition",
+    "inactive": "UCM CI Inactive",
+    "territory": "UCM CI Territory",
+}
+CI_KEYS = ["acquisition", "inactive", "territory"]
+
+ci_user = frappe.session.user
+if ci_user == "Guest":
+    frappe.throw("Please log in.")
+
+ci_role_names = ["System Manager"]
+for k in CI_KEYS:
+    ci_role_names.append(CI_ROLES[k])
+ci_my_roles = frappe.get_all("Has Role", filters={"parent": ci_user, "parenttype": "User",
+                                                  "role": ["in", ci_role_names]}, pluck="role")
+ci_is_admin = ci_user == "Administrator" or "System Manager" in ci_my_roles
+ci_access = {}
+for k in CI_KEYS:
+    ci_access[k] = ci_is_admin or CI_ROLES[k] in ci_my_roles
+
+ci_action = frappe.form_dict.get("action") or "me"
+
+
+if ci_action == "me":
+    frappe.response["message"] = {
+        "user": ci_user,
+        "full_name": frappe.db.get_value("User", ci_user, "full_name") or ci_user,
+        "is_admin": ci_is_admin,
+        "access": ci_access,
+    }
+
+# ───────────────────────────── SETTINGS ─────────────────────────────
+elif ci_action == "list" or ci_action == "set":
+    if not ci_is_admin:
+        frappe.throw("Only a System Manager can change access to this page.")
+    for k in CI_KEYS:
+        if not frappe.db.exists("Role", CI_ROLES[k]):
+            frappe.get_doc({"doctype": "Role", "role_name": CI_ROLES[k], "desk_access": 1}).insert(ignore_permissions=True)
+
+    if ci_action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        want_raw = frappe.form_dict.get("reports") or ""
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have full access.")
+        want = []
+        for x in want_raw.split(","):
+            x = x.strip()
+            if x in CI_ROLES and x not in want:
+                want.append(x)
+        all_ci_roles = []
+        for k in CI_KEYS:
+            all_ci_roles.append(CI_ROLES[k])
+        user_doc = frappe.get_doc("User", target)
+        keep = []
+        for r in user_doc.roles:
+            if r.role not in all_ci_roles:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        for k in want:
+            user_doc.append("roles", {"role": CI_ROLES[k]})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+        if want:
+            saved = frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User",
+                                                        "role": ["in", all_ci_roles]}, pluck="role")
+            if len(saved) < len(want):
+                frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the "
+                             "UCM CI roles to that Role Profile.")
+
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", ci_role_names]},
+                               fields=["parent", "role"])
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+    users = []
+    if user_roles:
+        # Disabled users (System Manager ho ya nahi) list mein nahi dikhte
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
+                                   fields=["name", "full_name"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            reps = []
+            for k in CI_KEYS:
+                if CI_ROLES[k] in r:
+                    reps.append(k)
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "admin": 1 if "System Manager" in r else 0, "reports": reps})
+    users = sorted(users, key=lambda x: (0 if x["admin"] else 1, (x["full_name"] or "").lower()))
+    candidates = []
+    for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1,
+                                               "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+# ───────────────────── 1. ACQUISITION (UCM Customer Acquisition Report) ─────────────────────
+elif ci_action == "acquisition":
+    if not ci_access["acquisition"]:
+        frappe.throw("You do not have access to the Acquisition report.")
+    aq_from = frappe.utils.getdate(frappe.form_dict.get("from_date") or "2026-04-01")
+    aq_to = frappe.utils.getdate(frappe.form_dict.get("to_date") or "2027-03-31")
+    aq_company = frappe.form_dict.get("company") or ""
+    AQ_CUTOFF = "2026-07-01"   # custom_sales_order_type 1-Jul-2026 se; usse pehle Item Group se
+
+    AQ_TYPE_COND = """
+        AND (
+            (so.transaction_date >= %(cutoff)s AND so.custom_sales_order_type IN ('Large Blow', 'Ultra'))
+            OR (
+                so.transaction_date < %(cutoff)s
+                AND EXISTS (
+                    SELECT 1 FROM `tabSales Order Item` soi_t
+                    INNER JOIN `tabItem` i_t ON soi_t.item_code = i_t.name
+                    WHERE soi_t.parent = so.name
+                      AND (UPPER(i_t.item_group) LIKE '%%ULTRA%%' OR UPPER(i_t.item_group) LIKE '%%LARGE BLOW%%')
+                )
+            )
+        )
+    """
+    AQ_TYPE_COND2 = """
+        AND (
+            (so2.transaction_date >= %(cutoff)s AND so2.custom_sales_order_type IN ('Large Blow', 'Ultra'))
+            OR (
+                so2.transaction_date < %(cutoff)s
+                AND EXISTS (
+                    SELECT 1 FROM `tabSales Order Item` soi_t2
+                    INNER JOIN `tabItem` i_t2 ON soi_t2.item_code = i_t2.name
+                    WHERE soi_t2.parent = so2.name
+                      AND (UPPER(i_t2.item_group) LIKE '%%ULTRA%%' OR UPPER(i_t2.item_group) LIKE '%%LARGE BLOW%%')
+                )
+            )
+        )
+    """
+    aq_company_cond = " AND so.company = %(company)s" if aq_company else ""
+
+    aq_months = []
+    yy = aq_from.year
+    mm = aq_from.month
+    while (yy < aq_to.year) or (yy == aq_to.year and mm <= aq_to.month):
+        aq_months.append([yy, mm])
+        mm = mm + 1
+        if mm > 12:
+            mm = 1
+            yy = yy + 1
+        if len(aq_months) > 36:
+            break
+
+    MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July",
+                   "August", "September", "October", "November", "December"]
+    aq_rows = []
+    for ym in aq_months:
+        yy = ym[0]
+        mm = ym[1]
+        vals = {"y": yy, "m": mm, "cutoff": AQ_CUTOFF, "company": aq_company}
+        # Total (sample nahi)
+        tot = frappe.db.sql("""
+            SELECT COUNT(DISTINCT so.customer) AS n, COALESCE(SUM(so.grand_total), 0) AS amt
+            FROM `tabSales Order` so INNER JOIN `tabCustomer` c ON so.customer = c.name
+            WHERE c.disabled = 0 AND so.docstatus = 1 AND COALESCE(so.custom_sample, 0) = 0
+              AND YEAR(so.transaction_date) = %(y)s AND MONTH(so.transaction_date) = %(m)s
+        """ + AQ_TYPE_COND + aq_company_cond, vals, as_dict=True)
+        # Sample
+        smp = frappe.db.sql("""
+            SELECT COUNT(DISTINCT so.customer) AS n
+            FROM `tabSales Order` so INNER JOIN `tabCustomer` c ON so.customer = c.name
+            WHERE c.disabled = 0 AND so.docstatus = 1 AND COALESCE(so.custom_sample, 0) = 1
+              AND YEAR(so.transaction_date) = %(y)s AND MONTH(so.transaction_date) = %(m)s
+        """ + AQ_TYPE_COND + aq_company_cond, vals, as_dict=True)
+        # Repeat: existing customer, ya financial year (1 April) se is mahine se pehle bhi order
+        fy = yy if mm >= 4 else yy - 1
+        vals["fy_start"] = str(fy) + "-04-01"
+        vals["month_start"] = str(yy) + "-" + ("0" if mm < 10 else "") + str(mm) + "-01"
+        rep = frappe.db.sql("""
+            SELECT COUNT(DISTINCT so.customer) AS n
+            FROM `tabSales Order` so INNER JOIN `tabCustomer` c ON so.customer = c.name
+            WHERE c.disabled = 0 AND so.docstatus = 1 AND COALESCE(so.custom_sample, 0) = 0
+              AND YEAR(so.transaction_date) = %(y)s AND MONTH(so.transaction_date) = %(m)s
+        """ + AQ_TYPE_COND + aq_company_cond + """
+              AND (
+                  c.custom_existing = 1
+                  OR so.customer IN (
+                      SELECT DISTINCT so2.customer FROM `tabSales Order` so2
+                      WHERE so2.docstatus = 1 AND COALESCE(so2.custom_sample, 0) = 0
+                        AND so2.transaction_date >= %(fy_start)s AND so2.transaction_date < %(month_start)s
+        """ + AQ_TYPE_COND2 + """
+                  )
+              )
+        """, vals, as_dict=True)
+        n_tot = frappe.utils.cint(tot[0].n) if tot else 0
+        n_rep = frappe.utils.cint(rep[0].n) if rep else 0
+        n_smp = frappe.utils.cint(smp[0].n) if smp else 0
+        aq_rows.append({
+            "year": yy, "month": mm, "month_name": MONTH_NAMES[mm],
+            "new_customers": n_tot - n_rep,
+            "repeat_customers": n_rep,
+            "sample_customers": n_smp,
+            "total_customers": n_tot,
+            "sales": frappe.utils.flt(tot[0].amt) if tot else 0,
+        })
+    frappe.response["message"] = {"rows": aq_rows, "from_date": str(aq_from), "to_date": str(aq_to)}
+
+# ───────────────────── 2. INACTIVE CUSTOMERS (UCM Customer Insights) ─────────────────────
+elif ci_action == "inactive":
+    if not ci_access["inactive"]:
+        frappe.throw("You do not have access to the Inactive Customers report.")
+    in_f = {
+        "data_floor": "2026-06-01",   # ERP go-live — isse pehle ke orders gine nahi jaate
+        "inactive_days": frappe.utils.cint(frappe.form_dict.get("inactive_days") or 30) or 30,
+        "item_group": frappe.form_dict.get("item_group") or "",
+    }
+    in_type = frappe.form_dict.get("transaction_type") or "Sales Order"
+    if in_type == "Sales Invoice":
+        DT = "Sales Invoice"; CT = "Sales Invoice Item"; DF = "posting_date"
+    else:
+        in_type = "Sales Order"
+        DT = "Sales Order"; CT = "Sales Order Item"; DF = "transaction_date"
+
+    in_sql = """
+    SELECT
+        c.name AS customer,
+        c.customer_name,
+        (
+            SELECT COALESCE(ct.mobile_no, ct.phone)
+            FROM `tabContact` ct
+            INNER JOIN `tabDynamic Link` dl
+                ON dl.parent = ct.name AND dl.parenttype = 'Contact'
+                AND dl.link_doctype = 'Customer' AND dl.link_name = c.name
+            WHERE COALESCE(ct.mobile_no, ct.phone) IS NOT NULL AND COALESCE(ct.mobile_no, ct.phone) != ''
+            ORDER BY ct.is_primary_contact DESC, ct.creation ASC
+            LIMIT 1
+        ) AS contact_no,
+        c.gstin AS gstin,
+        (SELECT addr.city FROM `tabAddress` addr WHERE addr.name = (
+            SELECT d_last.customer_address FROM `tab{DT}` d_last
+            WHERE d_last.customer = c.name AND d_last.docstatus != 2 AND d_last.{DF} >= %(data_floor)s
+            ORDER BY d_last.{DF} DESC LIMIT 1)) AS city,
+        (SELECT addr.state FROM `tabAddress` addr WHERE addr.name = (
+            SELECT d_last.customer_address FROM `tab{DT}` d_last
+            WHERE d_last.customer = c.name AND d_last.docstatus != 2 AND d_last.{DF} >= %(data_floor)s
+            ORDER BY d_last.{DF} DESC LIMIT 1)) AS state,
+        COUNT(DISTINCT d.name) AS number_of_orders,
+        ROUND(SUM(COALESCE(d.rounded_total, 0)), 2) AS total_order_value,
+        (SELECT d2.rounded_total FROM `tab{DT}` d2 WHERE d2.customer = c.name AND d2.docstatus != 2
+            AND d2.{DF} >= %(data_floor)s ORDER BY d2.{DF} DESC LIMIT 1) AS last_order_amount,
+        (SELECT d2.{DF} FROM `tab{DT}` d2 WHERE d2.customer = c.name AND d2.docstatus != 2
+            AND d2.{DF} >= %(data_floor)s ORDER BY d2.{DF} DESC LIMIT 1) AS last_order_date,
+        DATEDIFF(CURDATE(), (SELECT d2.{DF} FROM `tab{DT}` d2 WHERE d2.customer = c.name AND d2.docstatus != 2
+            AND d2.{DF} >= %(data_floor)s ORDER BY d2.{DF} DESC LIMIT 1)) AS days_since_last_order,
+        (
+            SELECT i.item_group FROM `tab{CT}` di
+            INNER JOIN `tabItem` i ON di.item_code = i.name
+            WHERE di.parent = (
+                SELECT d_latest.name FROM `tab{DT}` d_latest
+                WHERE d_latest.customer = c.name AND d_latest.docstatus != 2 AND d_latest.{DF} >= %(data_floor)s
+                ORDER BY d_latest.{DF} DESC, d_latest.creation DESC LIMIT 1
+            )
+            ORDER BY di.idx ASC LIMIT 1
+        ) AS item_group
+    FROM `tabCustomer` c
+    LEFT JOIN `tab{DT}` d ON d.customer = c.name AND d.docstatus != 2 AND d.{DF} >= %(data_floor)s
+    WHERE c.disabled = 0
+    """.replace("{DT}", DT).replace("{CT}", CT).replace("{DF}", DF)
+    if in_f["item_group"]:
+        in_sql = in_sql + """ AND (SELECT i2.item_group FROM `tab{CT}` di2 INNER JOIN `tabItem` i2 ON di2.item_code = i2.name
+            WHERE di2.parent = d.name LIMIT 1) = %(item_group)s""".replace("{CT}", CT)
+    in_sql = in_sql + """
+    GROUP BY c.name
+    HAVING days_since_last_order >= %(inactive_days)s AND last_order_date IS NOT NULL
+    ORDER BY days_since_last_order DESC, last_order_date DESC
+    """
+    in_rows = frappe.db.sql(in_sql, in_f, as_dict=True)
+
+    in_overall = frappe.db.sql("""
+        SELECT COUNT(DISTINCT c.name) AS cnt FROM `tabCustomer` c
+        INNER JOIN `tab{DT}` d ON d.customer = c.name AND d.docstatus != 2 AND d.{DF} >= %(data_floor)s
+        WHERE c.disabled = 0
+    """.replace("{DT}", DT).replace("{DF}", DF), in_f, as_dict=True)
+
+    in_out = []
+    cnt = {"ultra": 0, "large_blow": 0, "others": 0, "no_gst": 0}
+    for r in in_rows:
+        ig = str(r.get("item_group") or "")
+        seg = "others"
+        if "ULTRA" in ig.upper():
+            seg = "ultra"
+        elif "LARGE BLOW" in ig.upper():
+            seg = "large_blow"
+        cnt[seg] = cnt[seg] + 1
+        if not r.get("gstin"):
+            cnt["no_gst"] = cnt["no_gst"] + 1
+        in_out.append({
+            "customer": r.get("customer"),
+            "customer_name": r.get("customer_name") or r.get("customer"),
+            "contact_no": r.get("contact_no") or "",
+            "gst": 1 if r.get("gstin") else 0,
+            "number_of_orders": frappe.utils.cint(r.get("number_of_orders")),
+            "total_order_value": frappe.utils.flt(r.get("total_order_value")),
+            "last_order_amount": frappe.utils.flt(r.get("last_order_amount")),
+            "last_order_date": str(r.get("last_order_date")) if r.get("last_order_date") else None,
+            "days": frappe.utils.cint(r.get("days_since_last_order")),
+            "item_group": ig,
+            "segment": seg,
+            "city": r.get("city") or "",
+            "state": r.get("state") or "",
+        })
+    frappe.response["message"] = {
+        "rows": in_out,
+        "overall": frappe.utils.cint(in_overall[0].cnt) if in_overall else 0,
+        "counts": cnt,
+        "transaction_type": in_type,
+        "inactive_days": in_f["inactive_days"],
+        "data_floor": in_f["data_floor"],
+    }
+
+elif ci_action == "item_groups":
+    if not ci_access["inactive"]:
+        frappe.throw("You do not have access to the Inactive Customers report.")
+    frappe.response["message"] = frappe.get_all("Item Group", filters={"is_group": 0}, pluck="name",
+                                                order_by="name asc", limit_page_length=300)
+
+# ───────────────────── 3. TERRITORY COVERAGE (UCM Territory Coverage) ─────────────────────
+elif ci_action == "territory":
+    if not ci_access["territory"]:
+        frappe.throw("You do not have access to the Territory Coverage report.")
+    tr_f = {
+        "from_date": frappe.form_dict.get("from_date") or str(frappe.utils.get_first_day(frappe.utils.nowdate())),
+        "to_date": frappe.form_dict.get("to_date") or frappe.utils.nowdate(),
+        "sot": (frappe.form_dict.get("sales_order_type") or "Large Blow").strip().upper(),
+        "customer": frappe.form_dict.get("customer") or "",
+    }
+    tr_cust_cond = "AND si.customer = %(customer)s" if tr_f["customer"] else ""
+    tr_raw = frappe.db.sql("""
+        SELECT addr.state AS state, addr.city AS city, si.customer AS customer, si.customer_name AS customer_name,
+               COUNT(DISTINCT si.name) AS invoices, SUM(sii.qty) AS qty, SUM(sii.qty * sii.rate) AS amount
+        FROM `tabSales Invoice` si
+        INNER JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+        LEFT JOIN `tabAddress` addr ON addr.name = si.customer_address
+        WHERE si.docstatus = 1
+          AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s
+          AND UPPER(si.custom_sales_order_type) = %(sot)s
+          """ + tr_cust_cond + """
+        GROUP BY addr.state, addr.city, si.customer, si.customer_name
+    """, tr_f, as_dict=True)
+
+    tr_states = {}
+    tr_grand = 0
+    for r in tr_raw:
+        st = (r.get("state") or "").strip() or "Unknown"
+        ct = (r.get("city") or "").strip() or "Unknown"
+        cust = r.get("customer") or ""
+        amt = frappe.utils.flt(r.get("amount"))
+        qty = frappe.utils.flt(r.get("qty"))
+        inv = frappe.utils.cint(r.get("invoices"))
+        if st not in tr_states:
+            tr_states[st] = {"amount": 0, "qty": 0, "invoices": 0, "customers": {}, "cities": {}, "cust_rows": []}
+        s = tr_states[st]
+        s["amount"] = s["amount"] + amt
+        s["qty"] = s["qty"] + qty
+        s["invoices"] = s["invoices"] + inv
+        s["customers"][cust] = 1
+        s["cust_rows"].append({"customer": cust, "customer_name": r.get("customer_name") or cust, "city": ct,
+                               "invoices": inv, "qty": qty, "amount": amt})
+        if ct not in s["cities"]:
+            s["cities"][ct] = {"amount": 0, "qty": 0, "invoices": 0, "customers": {}}
+        c = s["cities"][ct]
+        c["amount"] = c["amount"] + amt
+        c["qty"] = c["qty"] + qty
+        c["invoices"] = c["invoices"] + inv
+        c["customers"][cust] = 1
+        tr_grand = tr_grand + amt
+
+    tr_pairs = []
+    for k in tr_states:
+        tr_pairs.append([tr_states[k]["amount"], k])
+    tr_pairs.sort(reverse=True)
+    tr_out = []
+    for sp in tr_pairs:
+        s = tr_states[sp[1]]
+        cps = []
+        for k in s["cities"]:
+            cps.append([s["cities"][k]["amount"], k])
+        cps.sort(reverse=True)
+        cities = []
+        for cp in cps:
+            c = s["cities"][cp[1]]
+            cities.append({"name": cp[1], "amount": c["amount"], "qty": c["qty"], "invoices": c["invoices"],
+                           "customers": len(c["customers"])})
+        tr_out.append({"name": sp[1], "amount": s["amount"], "qty": s["qty"], "invoices": s["invoices"],
+                       "customers": len(s["customers"]), "cities": cities, "cust_rows": s["cust_rows"]})
+    frappe.response["message"] = {"states": tr_out, "grand_total": tr_grand,
+                                  "from_date": str(tr_f["from_date"]), "to_date": str(tr_f["to_date"]),
+                                  "sales_order_type": tr_f["sot"]}
+
+else:
+    frappe.throw("Unknown action.")
