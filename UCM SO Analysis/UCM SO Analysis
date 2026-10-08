@@ -1,0 +1,240 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_so_analysis
+#   Allow Guest : NO (untick)
+#
+# "Sales Order Analysis" web page ka backend (sirf VIEW):
+#   action = "me"          → mera access
+#   action = "data"        → report rows (UCM Sales Order Analysis jaisa)
+#                            from_date, to_date, customer, item_group, status_filter
+#   action = "filters"     → Customer + Item Group list (filter dropdown ke liye)
+#   action = "list"/"set"  → ⚙️ Settings (sirf System Manager) · user, level = view / none
+#
+# Access: System Manager hamesha. Baaki users ko ⚙️ se "UCM SO Analysis Viewer" role.
+# Summary cards sirf System Manager / UCM Admin ko (report jaisa).
+# Sales Orders + Packing Material slider ke liye page pehle se bane API scripts use karta hai:
+#   ucm_so_type_summary · ucm_packing_material_summary · ucm_so_top_customers · ucm_so_customer_detail
+#
+# RestrictedPython: function / lambda / comprehension top-level variables nahi dekh sakte —
+# isliye har jagah seedhe loops.
+# ═══════════════════════════════════════════════════════════════════════════
+
+SOA_ROLE = "UCM SO Analysis Viewer"
+
+soa_user = frappe.session.user
+if soa_user == "Guest":
+    frappe.throw("Please log in.")
+
+soa_my_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": soa_user, "parenttype": "User", "role": ["in", [SOA_ROLE, "System Manager", "UCM Admin"]]},
+    pluck="role"
+)
+soa_is_admin = soa_user == "Administrator" or "System Manager" in soa_my_roles
+soa_can_view = soa_is_admin or SOA_ROLE in soa_my_roles
+soa_show_summary = soa_is_admin or "UCM Admin" in soa_my_roles
+
+soa_action = frappe.form_dict.get("action") or "me"
+
+if soa_action == "me":
+    frappe.response["message"] = {
+        "user": soa_user,
+        "full_name": frappe.db.get_value("User", soa_user, "full_name") or soa_user,
+        "can_view": soa_can_view,
+        "is_admin": soa_is_admin,
+        "show_summary": soa_show_summary,
+    }
+
+# ───────────────────────────── SETTINGS ─────────────────────────────
+elif soa_action == "list" or soa_action == "set":
+    if not soa_is_admin:
+        frappe.throw("Only a System Manager can change access to this page.")
+    if not frappe.db.exists("Role", SOA_ROLE):
+        frappe.get_doc({"doctype": "Role", "role_name": SOA_ROLE, "desk_access": 1}).insert(ignore_permissions=True)
+
+    if soa_action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        level = frappe.form_dict.get("level") or "none"
+        if level not in ["view", "none"]:
+            frappe.throw("Invalid access level.")
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have access.")
+        user_doc = frappe.get_doc("User", target)
+        keep = []
+        for r in user_doc.roles:
+            if r.role != SOA_ROLE:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        if level == "view":
+            user_doc.append("roles", {"role": SOA_ROLE})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+        if level == "view":
+            if not frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": SOA_ROLE}, pluck="role"):
+                frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the role "
+                             + SOA_ROLE + " to that Role Profile.")
+
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", [SOA_ROLE, "System Manager"]]},
+                               fields=["parent", "role"])
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+    users = []
+    if user_roles:
+        # Disabled users (System Manager ho ya nahi) list mein nahi dikhte
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
+                                   fields=["name", "full_name", "enabled"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "enabled": 1, "level": "admin" if "System Manager" in r else "view"})
+    users = sorted(users, key=lambda x: (0 if x["level"] == "admin" else 1, (x["full_name"] or "").lower()))
+    candidates = []
+    for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1,
+                                               "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+# ───────────────────────────── FILTER LISTS ─────────────────────────────
+elif soa_action == "filters":
+    if not soa_can_view:
+        frappe.throw("You do not have access to this report.")
+    custs = frappe.db.sql("""
+        SELECT DISTINCT so.customer AS customer, so.customer_name AS customer_name
+        FROM `tabSales Order` so
+        WHERE so.docstatus < 2 AND UPPER(TRIM(IFNULL(so.custom_sales_order_type, ''))) IN ('ULTRA', 'LARGE BLOW')
+        ORDER BY so.customer_name
+    """, as_dict=True)
+    cl = []
+    for c in custs:
+        cl.append({"customer": c.customer, "customer_name": c.customer_name or c.customer})
+    frappe.response["message"] = {
+        "customers": cl,
+        "item_groups": frappe.get_all("Item Group", filters={"is_group": 0}, pluck="name",
+                                      order_by="name asc", limit_page_length=500),
+    }
+
+# ───────────────────────────── DATA (report jaisa) ─────────────────────────────
+elif soa_action == "data":
+    if not soa_can_view:
+        frappe.throw("You do not have access to this report.")
+    today = frappe.utils.getdate(frappe.utils.nowdate())
+    f = {
+        "from_date": frappe.form_dict.get("from_date") or str(frappe.utils.get_first_day(today)),
+        "to_date": frappe.form_dict.get("to_date") or str(frappe.utils.get_last_day(today)),
+        "customer": frappe.form_dict.get("customer") or None,
+        "item_group": frappe.form_dict.get("item_group") or None,
+        "status_filter": frappe.form_dict.get("status_filter") or "All",
+    }
+    if f["status_filter"] not in ["All", "Pending", "Completed", "Overdue", "Draft"]:
+        f["status_filter"] = "All"
+
+    rows = frappe.db.sql("""
+    SELECT
+        so.name, so.customer, so.customer_name, so.transaction_date, so.delivery_date,
+        so.po_no, so.po_date, so.status, so.per_delivered, so.base_net_total, so.custom_sales_order_type,
+        soi.item_code, soi.item_name, item.item_name AS current_item_name,
+        soi.qty, soi.delivered_qty, soi.base_rate, item.item_group,
+        CASE WHEN soi.qty > 0 THEN ROUND((soi.delivered_qty / soi.qty) * 100, 2) ELSE 0 END AS item_per_delivered,
+        ROUND(soi.qty - soi.delivered_qty, 2) AS pending_qty,
+        ROUND(soi.delivered_qty * soi.base_rate, 2) AS delivered_value,
+        ROUND(soi.qty * soi.base_rate, 2) AS line_item_grand_total,
+        CASE
+            WHEN so.per_delivered >= 100 THEN 0
+            WHEN so.delivery_date IS NULL THEN 0
+            WHEN so.delivery_date < CURDATE() THEN DATEDIFF(CURDATE(), so.delivery_date)
+            ELSE 0
+        END AS delay_days
+    FROM `tabSales Order` so
+    INNER JOIN `tabSales Order Item` soi ON soi.parent = so.name
+    INNER JOIN `tabItem` item ON item.name = soi.item_code
+    WHERE
+        so.transaction_date BETWEEN %(from_date)s AND %(to_date)s
+        AND UPPER(TRIM(IFNULL(so.custom_sales_order_type, ''))) IN ('ULTRA', 'LARGE BLOW')
+        AND (%(customer)s IS NULL OR %(customer)s = '' OR so.customer = %(customer)s)
+        AND (%(item_group)s IS NULL OR item.item_group = %(item_group)s)
+        AND (
+            (%(status_filter)s = 'Draft' AND so.docstatus = 0)
+            OR (
+                %(status_filter)s != 'Draft' AND so.docstatus = 1
+                AND (
+                    %(status_filter)s = 'All'
+                    OR (%(status_filter)s = 'Pending' AND soi.qty > soi.delivered_qty)
+                    OR (%(status_filter)s = 'Completed' AND so.status = 'Completed')
+                    OR (%(status_filter)s = 'Overdue' AND so.per_delivered < 100 AND so.delivery_date < CURDATE())
+                )
+            )
+        )
+    ORDER BY so.transaction_date DESC, so.name ASC, soi.idx ASC
+    """, f, as_dict=True)
+
+    out = []
+    tot_so = {}
+    over_so = {}
+    seen = {}
+    net_total = 0
+    delivered_value = 0
+    delay_sum = 0
+    for r in rows:
+        days = frappe.utils.cint(r.get("delay_days"))
+        so_name = r.get("name")
+        delivered_value = delivered_value + frappe.utils.flt(r.get("delivered_value"))
+        tot_so[so_name] = 1
+        if days > 0:
+            over_so[so_name] = 1
+        if so_name not in seen:
+            seen[so_name] = 1
+            net_total = net_total + frappe.utils.flt(r.get("base_net_total"))
+            delay_sum = delay_sum + days
+        ig = r.get("item_group") or ""
+        out.append({
+            "so": so_name,
+            "customer": r.get("customer"),
+            "customer_name": r.get("customer_name") or r.get("customer"),
+            "date": str(r.get("transaction_date")) if r.get("transaction_date") else None,
+            "delivery_date": str(r.get("delivery_date")) if r.get("delivery_date") else None,
+            "po_no": r.get("po_no") or "",
+            "po_date": str(r.get("po_date")) if r.get("po_date") else None,
+            "status": r.get("status") or "",
+            "per_delivered": frappe.utils.flt(r.get("per_delivered")),
+            "sot": r.get("custom_sales_order_type") or "",
+            "item_code": r.get("item_code"),
+            "item_name": r.get("current_item_name") or r.get("item_name") or r.get("item_code"),
+            "item_group": ig.title(),
+            "rate": frappe.utils.flt(r.get("base_rate")),
+            "qty": frappe.utils.flt(r.get("qty")),
+            "delivered_qty": frappe.utils.flt(r.get("delivered_qty")),
+            "pending_qty": frappe.utils.flt(r.get("pending_qty")),
+            "pct": frappe.utils.flt(r.get("item_per_delivered")),
+            "delay_days": days,
+            "amount": frappe.utils.flt(r.get("line_item_grand_total")),
+        })
+
+    summary = None
+    if soa_show_summary:
+        n_so = len(seen)
+        summary = {
+            "total_so": len(tot_so),
+            "overdue_so": len(over_so),
+            "avg_delay": round(delay_sum * 1.0 / n_so, 1) if n_so else 0,
+            "order_value": net_total,
+            "delivered_value": delivered_value,
+            "pending_value": net_total - delivered_value,
+        }
+    frappe.response["message"] = {"rows": out, "summary": summary, "from_date": str(f["from_date"]),
+                                  "to_date": str(f["to_date"]), "status_filter": f["status_filter"]}
+
+else:
+    frappe.throw("Unknown action.")
