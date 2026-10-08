@@ -8,6 +8,7 @@
 #   action = "me"         → mera access              (koi bhi logged-in user)
 #   action = "repack"     → Dispatch Entry: 2 Repack Stock Entries + 1 Delivery Note, sab submit (Dispatch Entry access)
 #                           product, qty, vehicle_no, distance
+#   action = "undo"       → popup se: Delivery Note + Repack entries cancel + delete (Dispatch Entry access)
 #   action = "stock"      → Dispatch Entry popup ke liye WH2 - UCM stock (View access)
 #   action = "data"       → report data              (View access)  · customer, from_date, to_date
 #   action = "customers"  → customer search          (View access)  · q
@@ -316,6 +317,46 @@ elif agr_action == "repack":
         "available_before": rp_avail,
         "delivery_note": rp_dn,
     }
+
+elif agr_action == "undo":
+    # ═════ Dispatch Entry popup: galat entry ho to Delivery Note + dono Repack cancel karke delete ═════
+    # Sirf wahi documents jo is web page ne banaye (remarks mein "AG Dispatch Entry (web page)").
+    # Order: pehle Delivery Note cancel, phir Repack entries cancel, phir sab delete.
+    # Koi bhi step fail ho (jaise DN par Sales Invoice ban chuka ho) to kuch nahi badalta.
+    if not agr_can_entry:
+        frappe.throw("You do not have access to delete Dispatch Entry documents.")
+    ud_dn = (frappe.form_dict.get("delivery_note") or "").strip()
+    ud_se_raw = frappe.form_dict.get("stock_entries") or ""
+    if isinstance(ud_se_raw, str):
+        ud_se_raw = ud_se_raw.split(",")
+    ud_se = []
+    for x in ud_se_raw:
+        x = (x or "").strip()
+        if x and x not in ud_se:
+            ud_se.append(x)
+    if not ud_dn and not ud_se:
+        frappe.throw("Nothing to delete.")
+    UD_MARK = "AG Dispatch Entry (web page)"
+    ud_docs = []
+    if ud_dn:
+        d = frappe.get_doc("Delivery Note", ud_dn)
+        if UD_MARK not in (d.get("remarks") or ""):
+            frappe.throw(ud_dn + " was not created from the Dispatch Entry page, so it cannot be deleted here.")
+        ud_docs.append(d)
+    for n in ud_se:
+        d = frappe.get_doc("Stock Entry", n)
+        if UD_MARK not in (d.get("remarks") or "") or d.stock_entry_type != "Repack":
+            frappe.throw(n + " was not created from the Dispatch Entry page, so it cannot be deleted here.")
+        ud_docs.append(d)
+    ud_done = []
+    for d in ud_docs:
+        if d.docstatus == 1:
+            d.flags.ignore_permissions = True
+            d.cancel()
+    for d in ud_docs:
+        frappe.delete_doc(d.doctype, d.name, ignore_permissions=True)
+        ud_done.append(d.doctype + " " + d.name)
+    frappe.response["message"] = {"deleted": ud_done}
 
 elif agr_action == "stock":
     # Dispatch Entry popup: Fender / Chain Set ka WH2 - UCM mein abhi ka stock (Bin se)
