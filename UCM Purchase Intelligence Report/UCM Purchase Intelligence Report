@@ -1,0 +1,430 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_pir
+#   Allow Guest : NO (untick)
+#
+# "UCM Purchase Intelligence" web page ka backend (sirf VIEW):
+#   action = "me"    → mera access                 (koi bhi logged-in user)
+#   action = "data"  → report data                 (View access)
+#                      days, item_group, mode = below / all / nonmoving / dana
+#   action = "list"  → access wale users           (sirf System Manager)
+#   action = "set"   → access do / hatao           (sirf System Manager) · user, level = view / none
+#
+# Access: System Manager hamesha. Baaki users ko ⚙️ Settings se "UCM PIR Viewer" role.
+# Calculation BILKUL wahi hai jo Script Report "UCM Purchase Intelligence Report" mein hai.
+# Report mein logic badle (jaise Dana ki item list) to yahan bhi wahi badlaav karein.
+# ═══════════════════════════════════════════════════════════════════════════
+
+PIR_ROLE = "UCM PIR Viewer"
+PIR_WAREHOUSE = "WH1 - UCM"
+
+pir_user = frappe.session.user
+if pir_user == "Guest":
+    frappe.throw("Please log in.")
+
+pir_my_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": pir_user, "parenttype": "User", "role": ["in", [PIR_ROLE, "System Manager"]]},
+    pluck="role"
+)
+pir_is_admin = pir_user == "Administrator" or "System Manager" in pir_my_roles
+pir_can_view = pir_is_admin or PIR_ROLE in pir_my_roles
+
+pir_action = frappe.form_dict.get("action") or "me"
+
+if pir_action == "me":
+    frappe.response["message"] = {
+        "user": pir_user,
+        "full_name": frappe.db.get_value("User", pir_user, "full_name") or pir_user,
+        "can_view": pir_can_view,
+        "is_admin": pir_is_admin,
+        "warehouse": PIR_WAREHOUSE,
+    }
+
+elif pir_action == "list" or pir_action == "set":
+    if not pir_is_admin:
+        frappe.throw("Only a System Manager can change access to this report.")
+    if not frappe.db.exists("Role", PIR_ROLE):
+        frappe.get_doc({"doctype": "Role", "role_name": PIR_ROLE, "desk_access": 1}).insert(ignore_permissions=True)
+
+    if pir_action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        level = frappe.form_dict.get("level") or "none"
+        if level not in ["view", "none"]:
+            frappe.throw("Invalid access level.")
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have access.")
+        user_doc = frappe.get_doc("User", target)
+        keep = []
+        for r in user_doc.roles:
+            if r.role != PIR_ROLE:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        if level == "view":
+            user_doc.append("roles", {"role": PIR_ROLE})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+        if level == "view":
+            saved = frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": PIR_ROLE}, pluck="role")
+            if not saved:
+                frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the role "
+                             + PIR_ROLE + " to that Role Profile.")
+
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", [PIR_ROLE, "System Manager"]]},
+                               fields=["parent", "role"])
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+    users = []
+    if user_roles:
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+                                   fields=["name", "full_name", "enabled"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "enabled": info.get("enabled"), "level": "admin" if "System Manager" in r else "view"})
+    users = sorted(users, key=lambda x: (0 if x["level"] == "admin" else 1, (x["full_name"] or "").lower()))
+    candidates = []
+    for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1, "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+elif pir_action == "data":
+    if not pir_can_view:
+        frappe.throw("You do not have access to this report.")
+
+    days = frappe.utils.cint(frappe.form_dict.get("days") or 30)
+    if days < 1 or days > 730:
+        days = 30
+    item_group = (frappe.form_dict.get("item_group") or "").strip()
+    if item_group not in ["", "Packaging Materials", "Master Batch", "Granuals"]:
+        item_group = ""
+    mode = frappe.form_dict.get("mode") or "below"
+    if mode not in ["below", "all", "nonmoving", "dana"]:
+        mode = "below"
+    show_items = "Show Below Reorder"
+    if mode == "all":
+        show_items = "Show All Items"
+    elif mode == "nonmoving":
+        show_items = "Non Moving"
+    warehouse = PIR_WAREHOUSE
+
+    to_date = frappe.utils.nowdate()
+    from_date = frappe.utils.add_days(to_date, -(days - 1))
+
+    out_rows = []
+
+    if mode == "dana":
+        # ── Hardcoded item_code -> Dana category (report jaisa hi) ──
+        DANA_ITEM_TO_CATEGORY = {
+            "RM-GR-H110MA-PP-REL": "PP Molding",
+            "RM-GR-M12RR-PP-MIT": "PP Molding",
+            "RM-GR-AM120N-PP-REL": "PP Molding",
+            "RM-GR-H200MK-PP-REL": "PP Molding",
+            "RM-GR-AM650N-PP-REL": "PP Molding",
+            "RM-GR-IHP120A-PP": "PP Molding",
+
+            "RM-GR-SRM100NC-RANDOM-REL": "PP Randam",
+            "RM-GR-SRM 160 N-PP": "PP Randam",
+            "RM-GR-SRM 250 N-PP": "PP Randam",
+            "RM-GR-SRM 60 N-PP": "PP Randam",
+
+            "RM-GR-CM12RR-CP-MIT": "PPCP",
+            "RM-GR-3030MG-PP-IOC": "PPCP",
+            "RM-GR-R103-PP-HAL": "PPCP",
+            "RM-GR-3050MG-PP-IOC": "PPCP",
+
+            "RM-GR-B120MA-CP-REL": "PPCP(AG)",
+            "RM-GR-3120-CP": "PPCP(AG)",
+            "RM-GR-4080MA-CP": "PPCP(AG)",
+
+            "RM-GR-24F5040-LDPE-REL": "LD040",
+            "RM-GR-2427K-LDPE-SDP": "LD040",
+
+            "RM-GR-JF190-LLDPE-REL": "LL",
+            "RM-GR-22FA002-LDPE-REL": "LL",
+            "RM-GR-F18-LLDPE-GAIL": "LL",
+            "RM-GR-71602W-LLDPE-NCR": "LL",
+
+            "RM-GR-I26A500U-LLDPE-GAI": "I26500UA",
+            "RM-GR-R36A050U-LLDPE-GAI": "ROTO",
+            "RM-GRIN-AER003N-PP": "A3R003N",
+            "RM-GR-B52A003-HDPE-GAI": "B52",
+            "RM-GR-B63-HDPE-GAIL": "B63",
+            "RM-GR-B55-HDPE-GAI": "B55",
+            "RM-GR-50MA180-HDPE-REL": "I180",
+            "RM-GR-M5002L-HDPE-HAL": "5002L",
+            "RM-GR-M6007L-HDPE-HAL": "M6007L",
+            "RM-GR-M5026L-LLDPE": "M5026L",
+            "RM-GR-M60075-HDPE-REL": "M60075",
+            "RM-GR-D120MA-PP": "D120MA",
+            "RM-GR-B6401-HDPE-HAL": "B6401",
+            "RM-2nd-CP-BLACK": "Black Dana",
+            "RM-GR-16MA400-LDPE-REL": "16MA400",
+        }
+        DANA_DISPLAY_ORDER = [
+            "PP Molding", "PP Randam", "PPCP", "PPCP(AG)", "I180", "LD040", "LL", "I26500UA", "ROTO",
+            "A3R003N", "B52", "B63", "B55", "5002L", "16MA400", "M6007L", "M5026L", "M60075", "D120MA",
+            "B6401", "Black Dana",
+        ]
+        DANA_FIXED_LEAD_TIME_DAYS = 3
+
+        item_rows = frappe.db.sql("""
+            SELECT
+                i.item_code,
+                i.item_name,
+                IFNULL(SUM(b.actual_qty), 0)                AS current_balance,
+                IFNULL(MAX(ir.warehouse_reorder_level), 0)  AS reorder_level,
+                IFNULL(MAX(ir.warehouse_reorder_qty), 0)    AS reorder_qty,
+                IFNULL(cons.total_consumption, 0)           AS total_consumption,
+                IFNULL(cons.avg_daily, 0)                   AS avg_daily,
+                cons.last_consumption
+            FROM `tabItem` i
+            LEFT JOIN `tabBin` b ON b.item_code = i.item_code AND b.warehouse = %(warehouse)s
+            LEFT JOIN `tabItem Reorder` ir ON ir.parent = i.name AND ir.warehouse = %(warehouse)s
+            LEFT JOIN (
+                SELECT
+                    sle.item_code,
+                    SUM(ABS(sle.actual_qty))                        AS total_consumption,
+                    ROUND(SUM(ABS(sle.actual_qty)) / %(days)s, 2)  AS avg_daily,
+                    MAX(sle.posting_date)                           AS last_consumption
+                FROM `tabStock Ledger Entry` sle
+                WHERE sle.docstatus = 1
+                  AND sle.actual_qty < 0
+                  AND sle.warehouse = %(warehouse)s
+                  AND sle.posting_date >= DATE_SUB(CURDATE(), INTERVAL (%(days)s - 1) DAY)
+                  AND NOT (
+                      sle.voucher_type = 'Stock Entry'
+                      AND EXISTS (SELECT 1 FROM `tabStock Entry` se WHERE se.name = sle.voucher_no AND se.purpose = 'Repack')
+                  )
+                GROUP BY sle.item_code
+            ) cons ON cons.item_code = i.item_code
+            WHERE i.item_code IN %(item_codes)s
+            GROUP BY i.item_code, i.item_name, cons.total_consumption, cons.avg_daily, cons.last_consumption
+        """, {"warehouse": warehouse, "days": days, "item_codes": tuple(DANA_ITEM_TO_CATEGORY.keys())}, as_dict=True)
+
+        category_agg = {}
+        for item_row in item_rows:
+            cat = DANA_ITEM_TO_CATEGORY.get(item_row.get("item_code"))
+            if not cat:
+                continue
+            if cat not in category_agg:
+                category_agg[cat] = {
+                    "item_code": cat, "description": cat, "category": cat,
+                    "current_balance": 0, "reorder_level": 0, "reorder_qty": 0,
+                    "total_consumption": 0, "avg_daily": 0, "last_consumption": None,
+                    "members": [],
+                }
+            agg = category_agg[cat]
+            agg["current_balance"] = agg["current_balance"] + frappe.utils.flt(item_row.get("current_balance"))
+            agg["reorder_level"] = agg["reorder_level"] + frappe.utils.flt(item_row.get("reorder_level"))
+            agg["reorder_qty"] = agg["reorder_qty"] + frappe.utils.flt(item_row.get("reorder_qty"))
+            agg["total_consumption"] = agg["total_consumption"] + frappe.utils.flt(item_row.get("total_consumption"))
+            agg["avg_daily"] = agg["avg_daily"] + frappe.utils.flt(item_row.get("avg_daily"))
+            item_last = item_row.get("last_consumption")
+            if item_last and (not agg["last_consumption"] or item_last > agg["last_consumption"]):
+                agg["last_consumption"] = item_last
+            agg["members"].append({
+                "item_code": item_row.get("item_code"),
+                "item_name": item_row.get("item_name") or "",
+                "current_balance": frappe.utils.flt(item_row.get("current_balance")),
+                "total_consumption": frappe.utils.flt(item_row.get("total_consumption")),
+                "avg_daily": frappe.utils.flt(item_row.get("avg_daily")),
+            })
+
+        ordered = []
+        for cat in DANA_DISPLAY_ORDER:
+            if cat in category_agg:
+                ordered.append(category_agg[cat])
+        for cat in category_agg:
+            if cat not in DANA_DISPLAY_ORDER:
+                ordered.append(category_agg[cat])
+
+        for row in ordered:
+            current = row["current_balance"]
+            reorder = row["reorder_level"]
+            avg = row["avg_daily"]
+            row["days_left"] = round(current / avg, 1) if avg > 0 else None
+            row["below_reorder"] = 1 if current < reorder else 0
+            row["below_since"] = None
+            row["is_dana"] = 1
+            row["lead_time_days"] = DANA_FIXED_LEAD_TIME_DAYS
+            row["max_level"] = round(DANA_FIXED_LEAD_TIME_DAYS * avg, 2)
+            if row["last_consumption"]:
+                row["last_consumption"] = str(row["last_consumption"])
+            if current <= 0:
+                row["status"] = "out"
+            elif current < reorder:
+                row["status"] = "below"
+            else:
+                row["status"] = "ok"
+            out_rows.append(row)
+
+    else:
+        rows = frappe.db.sql("""
+            SELECT
+                i.item_code,
+                i.item_name,
+                i.description,
+                i.item_group,
+                i.stock_uom,
+                i.custom_item_category,
+                IFNULL(SUM(b.actual_qty), 0)                AS current_balance,
+                IFNULL(MAX(ir.warehouse_reorder_level), 0)  AS reorder_level,
+                IFNULL(MAX(ir.warehouse_reorder_qty), 0)    AS reorder_qty,
+                IFNULL(cons.total_consumption, 0)           AS total_consumption,
+                IFNULL(cons.avg_daily, 0)                   AS avg_daily,
+                cons.last_consumption
+            FROM `tabItem` i
+            LEFT JOIN `tabBin` b ON b.item_code = i.item_code AND b.warehouse = %(warehouse)s
+            LEFT JOIN `tabItem Reorder` ir ON ir.parent = i.name AND ir.warehouse = %(warehouse)s
+            LEFT JOIN (
+                SELECT
+                    sle.item_code,
+                    SUM(ABS(sle.actual_qty))                        AS total_consumption,
+                    ROUND(SUM(ABS(sle.actual_qty)) / %(days)s, 2)  AS avg_daily,
+                    MAX(sle.posting_date)                           AS last_consumption
+                FROM `tabStock Ledger Entry` sle
+                WHERE sle.docstatus = 1
+                  AND sle.actual_qty < 0
+                  AND sle.warehouse = %(warehouse)s
+                  AND sle.posting_date >= DATE_SUB(CURDATE(), INTERVAL (%(days)s - 1) DAY)
+                  AND NOT (
+                      sle.voucher_type = 'Stock Entry'
+                      AND EXISTS (SELECT 1 FROM `tabStock Entry` se WHERE se.name = sle.voucher_no AND se.purpose = 'Repack')
+                  )
+                GROUP BY sle.item_code
+            ) cons ON cons.item_code = i.item_code
+            WHERE i.disabled = 0
+              AND i.has_variants = 0
+              AND i.item_group IN ('Packaging Materials', 'Master Batch', 'Granuals')
+              AND (%(item_group)s = '' OR i.item_group = %(item_group)s)
+            GROUP BY i.item_code, i.item_name, i.description, i.item_group, i.stock_uom, i.custom_item_category,
+                     cons.total_consumption, cons.avg_daily, cons.last_consumption
+            HAVING
+                %(show_items)s = 'Show All Items'
+                OR (
+                    %(show_items)s = 'Non Moving'
+                    AND IFNULL(cons.total_consumption, 0) = 0
+                    AND IFNULL(SUM(b.actual_qty), 0) <> 0
+                )
+                OR (
+                    %(show_items)s = 'Show Below Reorder'
+                    AND IFNULL(SUM(b.actual_qty), 0) < IFNULL(MAX(ir.warehouse_reorder_level), 0)
+                )
+            ORDER BY
+                CASE
+                    WHEN IFNULL(SUM(b.actual_qty), 0) <= 0 THEN 1
+                    WHEN IFNULL(SUM(b.actual_qty), 0) < IFNULL(MAX(ir.warehouse_reorder_level), 0) THEN 2
+                    ELSE 3
+                END,
+                i.custom_item_category,
+                i.item_code
+        """, {"warehouse": warehouse, "days": days, "item_group": item_group, "show_items": show_items}, as_dict=True)
+
+        for row in rows:
+            current = frappe.utils.flt(row.get("current_balance"))
+            reorder = frappe.utils.flt(row.get("reorder_level"))
+            avg = frappe.utils.flt(row.get("avg_daily"))
+            item_code = row.get("item_code")
+
+            mr_name = ""
+            po_raised = 0
+            below_since = None
+
+            if current < reorder:
+                # ── Auto Indent: latest PURCHASE Material Request for this item + warehouse ──
+                mr = frappe.db.sql("""
+                    SELECT mri.parent AS mr_name
+                    FROM `tabMaterial Request Item` mri
+                    INNER JOIN `tabMaterial Request` mr ON mr.name = mri.parent
+                    WHERE mri.item_code = %(item_code)s
+                      AND mri.warehouse = %(warehouse)s
+                      AND mr.docstatus = 1
+                      AND mr.material_request_type = 'Purchase'
+                      AND mr.status NOT IN ('Stopped', 'Cancelled')
+                    ORDER BY mr.creation DESC
+                    LIMIT 1
+                """, {"item_code": item_code, "warehouse": warehouse}, as_dict=True)
+                if not mr:
+                    # Report jaisa: reorder se neeche par MR nahi bana -> row nahi dikhani
+                    continue
+                mr_name = mr[0].get("mr_name")
+                po = frappe.db.sql("""
+                    SELECT poi.parent
+                    FROM `tabPurchase Order Item` poi
+                    INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+                    WHERE poi.material_request = %(mr_name)s
+                      AND poi.item_code = %(item_code)s
+                      AND po.docstatus = 1
+                    LIMIT 1
+                """, {"mr_name": mr_name, "item_code": item_code}, as_dict=True)
+                po_raised = 1 if po else 0
+
+                # ── Below Reorder Since: kab se stock reorder level se neeche hai ──
+                if reorder > 0:
+                    history = frappe.db.sql("""
+                        SELECT posting_date, qty_after_transaction
+                        FROM `tabStock Ledger Entry`
+                        WHERE item_code = %(item_code)s AND warehouse = %(warehouse)s AND docstatus = 1
+                        ORDER BY posting_date DESC, creation DESC
+                    """, {"item_code": item_code, "warehouse": warehouse}, as_dict=True)
+                    for entry in history:
+                        if frappe.utils.flt(entry.get("qty_after_transaction")) < reorder:
+                            below_since = entry.get("posting_date")
+                        else:
+                            break
+
+            if current <= 0:
+                status = "out"
+            elif current < reorder:
+                status = "below"
+            else:
+                status = "ok"
+
+            cat = row.get("custom_item_category") or ""
+            out_rows.append({
+                "item_code": item_code,
+                "item_name": row.get("item_name") or "",
+                "description": row.get("description") or "",
+                "item_group": row.get("item_group") or "",
+                "uom": row.get("stock_uom") or "",
+                "category": cat.title() if cat else "",
+                "current_balance": current,
+                "reorder_level": reorder,
+                "reorder_qty": frappe.utils.flt(row.get("reorder_qty")),
+                "total_consumption": frappe.utils.flt(row.get("total_consumption")),
+                "avg_daily": avg,
+                "days_left": round(current / avg, 1) if avg > 0 else None,
+                "last_consumption": str(row.get("last_consumption")) if row.get("last_consumption") else None,
+                "below_reorder": 1 if current < reorder else 0,
+                "below_since": str(below_since) if below_since else None,
+                "mr_name": mr_name,
+                "po_raised": po_raised,
+                "status": status,
+            })
+
+    frappe.response["message"] = {
+        "rows": out_rows,
+        "mode": mode,
+        "days": days,
+        "item_group": item_group,
+        "warehouse": warehouse,
+        "from_date": str(from_date),
+        "to_date": str(to_date),
+    }
+
+else:
+    frappe.throw("Unknown action.")
