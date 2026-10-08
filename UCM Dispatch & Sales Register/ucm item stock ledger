@@ -1,0 +1,189 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_item_stock_ledger
+#   Allow Guest : NO (untick)
+#
+# Dispatch & Sales Register → Product name par click → Stock slider.
+#   - Current stock (WH2 - UCM, Bin se)
+#   - Pichhle 30 din ka POORA stock ledger (har voucher type: Delivery Note,
+#     Sales Invoice, Stock Entry, Stock Reconciliation, Purchase Receipt ...)
+#     har line par running balance ke saath, sabse naya upar.
+#   - Tabs: all / dispatched / manufactured / stock_adjustment
+#   - Agar item ek SET hai (Product Bundle, warna default BOM): uske andar ke items,
+#     har set mein kitne lagte hain, unka stock aur kitne set ban sakte hain
+#
+# Input : item_code, (optional) warehouse, days
+# ═══════════════════════════════════════════════════════════════════════════
+
+if frappe.session.user == "Guest":
+    frappe.throw("Please log in.")
+
+item_code = (frappe.form_dict.get("item_code") or "").strip()
+warehouse = (frappe.form_dict.get("warehouse") or "WH2 - UCM").strip()
+days = frappe.utils.cint(frappe.form_dict.get("days") or 30)
+if days < 1 or days > 366:
+    days = 30
+
+if not item_code or not frappe.db.exists("Item", item_code):
+    frappe.throw("Item not found: " + item_code)
+
+item = frappe.db.get_value("Item", item_code, ["item_name", "description", "stock_uom"], as_dict=True) or {}
+
+to_date = frappe.utils.nowdate()
+from_date = frappe.utils.add_days(to_date, -(days - 1))
+
+current_stock = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"))
+
+# Window shuru hone se pehle ka balance (opening)
+opening_rows = frappe.db.sql("""
+    SELECT qty_after_transaction
+    FROM `tabStock Ledger Entry`
+    WHERE item_code = %(item)s AND warehouse = %(wh)s AND is_cancelled = 0
+      AND posting_date < %(from)s
+    ORDER BY posting_date DESC, posting_time DESC, creation DESC
+    LIMIT 1
+""", {"item": item_code, "wh": warehouse, "from": from_date}, as_dict=True)
+opening_qty = frappe.utils.flt(opening_rows[0].qty_after_transaction) if opening_rows else 0
+
+sle = frappe.db.sql("""
+    SELECT posting_date, posting_time, voucher_type, voucher_no, actual_qty, qty_after_transaction
+    FROM `tabStock Ledger Entry`
+    WHERE item_code = %(item)s AND warehouse = %(wh)s AND is_cancelled = 0
+      AND posting_date BETWEEN %(from)s AND %(to)s
+    ORDER BY posting_date DESC, posting_time DESC, creation DESC
+""", {"item": item_code, "wh": warehouse, "from": from_date, "to": to_date}, as_dict=True)
+
+# Stock Entry ka type (Manufacture / Material Transfer / Material Receipt ...)
+se_names = []
+for r in sle:
+    if r.voucher_type == "Stock Entry" and r.voucher_no not in se_names:
+        se_names.append(r.voucher_no)
+se_type = {}
+if se_names:
+    for s in frappe.get_all("Stock Entry", filters={"name": ["in", se_names]}, fields=["name", "stock_entry_type", "purpose"]):
+        se_type[s.name] = s.stock_entry_type or s.purpose or ""
+
+# Party (customer / supplier) for sale & purchase vouchers
+party = {}
+dn_names = []
+si_names = []
+pr_names = []
+for r in sle:
+    if r.voucher_type == "Delivery Note":
+        dn_names.append(r.voucher_no)
+    elif r.voucher_type == "Sales Invoice":
+        si_names.append(r.voucher_no)
+    elif r.voucher_type == "Purchase Receipt":
+        pr_names.append(r.voucher_no)
+if dn_names:
+    for x in frappe.get_all("Delivery Note", filters={"name": ["in", dn_names]}, fields=["name", "customer_name"]):
+        party[x.name] = x.customer_name or ""
+if si_names:
+    for x in frappe.get_all("Sales Invoice", filters={"name": ["in", si_names]}, fields=["name", "customer_name"]):
+        party[x.name] = x.customer_name or ""
+if pr_names:
+    for x in frappe.get_all("Purchase Receipt", filters={"name": ["in", pr_names]}, fields=["name", "supplier_name"]):
+        party[x.name] = x.supplier_name or ""
+
+all_rows = []
+dispatched = []
+manufactured = []
+stock_adjustment = []
+total_in = 0
+total_out = 0
+for r in sle:
+    q = frappe.utils.flt(r.actual_qty)
+    if q > 0:
+        total_in += q
+    else:
+        total_out += -q
+    detail = se_type.get(r.voucher_no, "") if r.voucher_type == "Stock Entry" else party.get(r.voucher_no, "")
+    row = {
+        "posting_date": str(r.posting_date),
+        "posting_time": str(r.posting_time or ""),
+        "voucher_type": r.voucher_type,
+        "voucher_no": r.voucher_no,
+        "detail": detail,
+        "qty_change": q,
+        "balance_qty": frappe.utils.flt(r.qty_after_transaction),
+    }
+    all_rows.append(row)
+    if r.voucher_type in ["Delivery Note", "Sales Invoice"]:
+        dispatched.append(row)
+    elif r.voucher_type == "Stock Entry" and detail == "Manufacture":
+        manufactured.append(row)
+    elif r.voucher_type == "Stock Reconciliation" or (r.voucher_type == "Stock Entry" and detail in ["Material Receipt", "Material Issue"]):
+        stock_adjustment.append(row)
+
+# ── SET: is item ke andar kaun se items lagte hain (Product Bundle, warna default BOM) ──
+components = []
+set_source = ""
+set_name = ""
+if frappe.db.exists("Product Bundle", item_code):
+    set_source = "Product Bundle"
+    set_name = item_code
+    for c in frappe.get_all("Product Bundle Item", filters={"parent": item_code, "parenttype": "Product Bundle"},
+                            fields=["item_code", "qty", "uom", "idx"], order_by="idx asc"):
+        components.append({"item_code": c.item_code, "per_set": frappe.utils.flt(c.qty), "uom": c.uom or ""})
+else:
+    bom = frappe.db.get_value("BOM", {"item": item_code, "is_default": 1, "is_active": 1, "docstatus": 1}, ["name", "quantity"], as_dict=True)
+    if bom:
+        set_source = "BOM"
+        set_name = bom.name
+        bom_qty = frappe.utils.flt(bom.quantity) or 1
+        for c in frappe.get_all("BOM Item", filters={"parent": bom.name, "parenttype": "BOM"},
+                                fields=["item_code", "stock_qty", "stock_uom", "idx"], order_by="idx asc"):
+            components.append({"item_code": c.item_code, "per_set": frappe.utils.flt(c.stock_qty) / bom_qty, "uom": c.stock_uom or ""})
+
+sets_possible = None
+if components:
+    codes = []
+    for c in components:
+        codes.append(c["item_code"])
+    names = {}
+    for it in frappe.get_all("Item", filters={"name": ["in", codes]}, fields=["name", "item_name", "stock_uom"]):
+        names[it.name] = it
+    wh_stock = {}
+    all_stock = {}
+    for b in frappe.get_all("Bin", filters={"item_code": ["in", codes]}, fields=["item_code", "warehouse", "actual_qty"]):
+        q = frappe.utils.flt(b.actual_qty)
+        all_stock[b.item_code] = all_stock.get(b.item_code, 0) + q
+        if b.warehouse == warehouse:
+            wh_stock[b.item_code] = wh_stock.get(b.item_code, 0) + q
+    for c in components:
+        info = names.get(c["item_code"]) or {}
+        c["item_name"] = info.get("item_name") or c["item_code"]
+        if not c["uom"]:
+            c["uom"] = info.get("stock_uom") or ""
+        c["stock"] = wh_stock.get(c["item_code"], 0)
+        c["stock_all"] = all_stock.get(c["item_code"], 0)
+        if c["per_set"] > 0:
+            c["sets"] = int(max(c["stock"], 0) // c["per_set"])
+            if sets_possible is None or c["sets"] < sets_possible:
+                sets_possible = c["sets"]
+        else:
+            c["sets"] = None
+
+frappe.response["message"] = {
+    "item_code": item_code,
+    "item_name": item.get("item_name") or item_code,
+    "description": item.get("description") or "",
+    "stock_uom": item.get("stock_uom") or "",
+    "warehouse": warehouse,
+    "current_stock": current_stock,
+    "from_date": str(from_date),
+    "to_date": str(to_date),
+    "days": days,
+    "opening_qty": opening_qty,
+    "total_in": total_in,
+    "total_out": total_out,
+    "all": all_rows,
+    "dispatched": dispatched,
+    "manufactured": manufactured,
+    "stock_adjustment": stock_adjustment,
+    "set_source": set_source,
+    "set_name": set_name,
+    "components": components,
+    "sets_possible": sets_possible,
+}
