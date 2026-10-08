@@ -1,0 +1,1039 @@
+/* ============================================================
+   UCMPL \u00b7 Purchase Intelligence \u2014 Web Page JS
+   Web Page \u2192 Javascript box mein poora paste karein.
+   API (Server Script): ucm_pir  (data + access + settings)
+   Item slider API    : ucm_item_purchase_and_transaction_history (pehle se bana hua)
+   ============================================================ */
+(function () {
+  "use strict";
+  var d = document, w = window;
+  var API = "/api/method/ucm_pir";
+  var PANEL_API = "/api/method/ucm_item_purchase_and_transaction_history";
+  var WAREHOUSE = "WH1 - UCM";
+
+  var root = d.getElementById("ucm-pir");
+  if (!root) return;
+
+  /* --------- helpers --------- */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function $(s, el) { return (el || d).querySelector(s); }
+  function $$(s, el) { return Array.prototype.slice.call((el || d).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  var nf2 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
+  var nfC = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function num(v, dec) {
+    if (v === null || v === undefined || v === "") return "\u2013";
+    var n = parseFloat(v); if (isNaN(n)) return "\u2013";
+    if (Math.abs(n) < 5e-4) n = 0;
+    return (dec === 0 ? nf0 : nf2).format(n);
+  }
+  function inr(v) { if (v === null || v === undefined || v === "") return "\u2013"; return "\u20b9" + nfC.format(+v || 0); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
+  function parseIso(s) { var p = String(s || "").split(" ")[0].split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+  function dmy(s) { var m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + "-" + m[2] + "-" + m[1] : (s ? esc(s) : "\u2013"); }
+  function shortDate(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()]; }
+  function longDate(s) { var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
+  function daysAgo(s) { if (!s) return null; var t = new Date(); t.setHours(0, 0, 0, 0); return Math.round((t - parseIso(s)) / 864e5); }
+  function initials(s) { var p = String(s || "?").trim().split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+  function plain(html) { var t = d.createElement("div"); t.innerHTML = String(html == null ? "" : html); return (t.textContent || "").replace(/\s+/g, " ").trim(); }
+  function slug(dt) { return String(dt || "").toLowerCase().replace(/ /g, "-"); }
+  function docLink(dt, name, label) {
+    if (!name) return "\u2013";
+    return '<a href="/app/' + slug(dt) + "/" + encodeURIComponent(name) + '" target="_blank" rel="noopener">' + esc(label || name) + "</a>";
+  }
+  function cookie(k) { var m = d.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; }
+  function store(k, v) { try { if (v === undefined) return w.localStorage.getItem("ucm-pir-" + k); w.localStorage.setItem("ucm-pir-" + k, v); } catch (e) { return null; } }
+
+  var I = {
+    gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+    down: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    sort: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6 6 6-6"/><path d="m6 9 6-6 6 6"/></svg>',
+    caret: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    box: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>',
+    ban: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/></svg>',
+    warn: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+    ok: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>',
+    cart: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.6L21 7H6"/></svg>',
+    doc: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg>',
+    zz: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
+  };
+
+  async function call(url, params, method) {
+    var token = (w.frappe && w.frappe.csrf_token) || w.csrf_token || "";
+    var opts = { credentials: "same-origin", headers: { Accept: "application/json", "X-Frappe-CSRF-Token": token } };
+    if (method === "POST") { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(params); }
+    else url += "?" + Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k] == null ? "" : params[k]); }).join("&");
+    var r = await fetch(url, opts);
+    if (r.status === 401 || (r.status === 403 && !cookie("user_id"))) { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      var reason = "";
+      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script not found";
+      throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+    }
+    return j.message;
+  }
+  function api(params, method) { return call(API, params, method); }
+
+  /* --------- state --------- */
+  var TABS = [
+    { k: "below", label: "Below Reorder", short: "Below", hint: "Stock below reorder level (with an Auto Indent)" },
+    { k: "all", label: "All Items", short: "All", hint: "Every Packaging, Master Batch and Granuals item" },
+    { k: "nonmoving", label: "Non Moving", short: "Non Moving", hint: "Stock in hand but no consumption in the period" },
+    { k: "dana", label: "Dana", short: "Dana", hint: "Granuals grouped by Dana category" }
+  ];
+  var GROUPS = [["", "All Groups"], ["Packaging Materials", "Packaging"], ["Master Batch", "Master Batch"], ["Granuals", "Granuals"]];
+  var DAY_CHIPS = [7, 15, 30, 60, 90];
+  var S = {
+    acc: null,
+    mode: "below", group: "", days: 30,
+    rows: [], from: "", to: "",
+    card: null, q: "", sort: null, seq: 0
+  };
+  S.sec = "stock"; S.pg = "Packaging Materials"; S.loadedOnce = false;
+  (function restore() {
+    var sc = store("sec"); if (sc === "purchase") S.sec = sc;
+    var pg = store("pgroup"); if (pg) S.pg = pg;
+    var m = store("mode"); if (m && TABS.some(function (t) { return t.k === m; })) S.mode = m;
+    var g = store("group"); if (g !== null && GROUPS.some(function (x) { return x[0] === g; })) S.group = g;
+    var dd = parseInt(store("days"), 10); if (dd > 0 && dd <= 730) S.days = dd;
+  })();
+
+  var PGROUPS_HTML = [["Packaging Materials", "Packaging Materials"], ["Master Batch", "Master Batch"], ["Granuals", "Granuals"]].map(function (g) { return '<button type="button" data-pg="' + esc(g[0]) + '">' + esc(g[1]) + "</button>"; }).join("");
+  /* --------- shell --------- */
+  root.innerHTML =
+    '<div class="pir-gate" id="pir-gate"><div class="pir-gate-card"><span class="pir-spin"></span><p>Checking access\u2026</p></div></div>' +
+    '<div class="pir-app" id="pir-app" hidden>' +
+      '<header class="pir-head" id="pir-head">' +
+        '<div class="pir-title"><h1>Purchase Intelligence</h1><p class="pir-sub"></p></div>' +
+        '<div class="pir-sec" role="tablist">' +
+          '<button type="button" role="tab" data-sec="stock">' + I.box + '<span>Stock</span></button>' +
+          '<button type="button" role="tab" data-sec="purchase">' + I.cart + '<span>Purchase</span></button>' +
+        "</div>" +
+        '<div class="pir-head-act" id="pir-act">' +
+          '<button type="button" class="pir-ibtn" id="pir-print" title="Print">' + I.print + "</button>" +
+          '<button type="button" class="pir-ibtn" id="pir-refresh" title="Refresh">' + I.refresh + "</button>" +
+          '<button type="button" class="pir-ibtn is-gear" id="pir-gear" title="Access settings" hidden>' + I.gear + "</button>" +
+        "</div>" +
+      "</header>" +
+      '<div class="pir-secbar">' + '<div class="pir-sec is-bar" role="tablist">' +
+          '<button type="button" role="tab" data-sec="stock">' + I.box + '<span>Stock</span></button>' +
+          '<button type="button" role="tab" data-sec="purchase">' + I.cart + '<span>Purchase</span></button>' +
+        "</div>" + "</div>" +
+      '<section class="pir-band" id="pir-band">' +
+        '<nav class="pir-tabs" id="pir-tabs" role="tablist">' +
+          TABS.map(function (t) { return '<button type="button" role="tab" data-tab="' + t.k + '" title="' + esc(t.hint) + '"><span class="l">' + esc(t.label) + '</span><span class="s">' + esc(t.short) + '</span><em class="ct"></em></button>'; }).join("") +
+        "</nav>" +
+        '<div class="pir-filters">' +
+          '<div class="pir-f pir-f-grp" id="pir-f-grp" title="Item Group"><span>Item Group</span><div class="pir-pills" id="pir-groups">' +
+            GROUPS.map(function (g) { return '<button type="button" data-g="' + esc(g[0]) + '">' + esc(g[1]) + "</button>"; }).join("") +
+          "</div></div>" +
+          '<div class="pir-f" title="Consumption Period"><span>Consumption Period</span><div class="pir-days">' +
+            '<div class="pir-pills" id="pir-daychips">' + DAY_CHIPS.map(function (n) { return '<button type="button" data-d="' + n + '">' + n + "d</button>"; }).join("") + "</div>" +
+            '<label class="pir-dayin"><input type="number" id="pir-days" min="1" max="730" inputmode="numeric"><i>days</i></label>' +
+            '<b class="pir-range" id="pir-range"></b>' +
+          "</div></div>" +
+        "</div>" +
+      "</section>" +
+      '<main class="pir-main" id="pir-main">' +
+        '<div class="pir-kpis" id="pir-kpis"></div>' +
+        '<section class="pir-reg">' +
+          '<div class="pir-reg-h"><div class="pir-reg-t"><h2 id="pir-reg-title"></h2><p id="pir-reg-sub"></p></div>' +
+            '<div class="pir-reg-tools"><label class="pir-search">' + I.search + '<input type="search" id="pir-q" placeholder="Search item, code or category\u2026"></label>' +
+            '<button type="button" class="pir-ibtn" id="pir-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+          '<div class="pir-chipline" id="pir-chipline" hidden></div>' +
+          '<div class="pir-tw" id="pir-tw"><div class="pir-empty"><span class="pir-spin"></span>Loading\u2026</div></div>' +
+          '<div class="pir-mlist" id="pir-mlist"></div>' +
+        "</section>" +
+      "</main>" +
+      '<section class="pir-band pir-pband" id="pir-pband" hidden>' +
+        '<div class="pir-ptab"><b>Purchase History</b><span>Purchase Receipts \u00b7 last 5 months</span></div>' +
+        '<div class="pir-filters">' +
+          '<div class="pir-f" title="Item Group"><span>Item Group</span><div class="pir-pills" id="pir-pgroups">' +
+            PGROUPS_HTML +
+          "</div></div>" +
+          '<b class="pir-range is-keep" id="pir-prange"></b>' +
+        "</div>" +
+      "</section>" +
+      '<main class="pir-main pir-pmain" id="pir-pmain" hidden><div class="pir-reg"><div class="pir-empty"><span class="pir-spin"></span>Loading\u2026</div></div></main>' +
+    "</div>" +
+    '<div class="pir-scrim" id="pir-scrim"></div>' +
+    '<aside class="pir-drawer" id="pir-drawer" aria-hidden="true"></aside>' +
+    '<div class="pir-modal-bg" id="pir-set" hidden><div class="pir-modal" role="dialog" aria-label="Access settings"></div></div>';
+
+  /* --------- load --------- */
+  async function load() {
+    var my = ++S.seq;
+    root.classList.add("is-busy"); d.body.classList.add("pir-busy");
+    $("#pir-main").classList.add("is-loading");
+    try {
+      var m = await api({ action: "data", mode: S.mode, item_group: S.group, days: S.days });
+      if (!m || my !== S.seq) return;
+      S.rows = m.rows || []; S.from = m.from_date; S.to = m.to_date;
+      render();
+    } catch (e) {
+      if (my !== S.seq) return;
+      S.rows = [];
+      $("#pir-kpis").innerHTML = "";
+      $("#pir-tw").innerHTML = '<div class="pir-error"><b>Could not load the report.</b> ' + esc(e.message) + "</div>";
+      $("#pir-mlist").innerHTML = "";
+    } finally {
+      if (my === S.seq) { root.classList.remove("is-busy"); d.body.classList.remove("pir-busy"); $("#pir-main").classList.remove("is-loading"); }
+    }
+  }
+
+  /* --------- filters ui --------- */
+  function rangeLabel() {
+    var t = new Date(), f = new Date(); f.setDate(t.getDate() - (S.days - 1));
+    return f.getDate() + " " + MON[f.getMonth()] + " \u2013 " + t.getDate() + " " + MON[t.getMonth()] + " " + t.getFullYear();
+  }
+  function syncFilters() {
+    $$("#pir-tabs [data-tab]").forEach(function (b) { var on = b.getAttribute("data-tab") === S.mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); if (!on) b.querySelector(".ct").textContent = ""; });
+    $$("#pir-groups [data-g]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-g") === S.group); });
+    $("#pir-f-grp").hidden = S.mode === "dana";
+    $$("#pir-daychips [data-d]").forEach(function (b) { b.classList.toggle("on", +b.getAttribute("data-d") === S.days); });
+    $("#pir-days").value = S.days;
+    $("#pir-range").textContent = rangeLabel();
+    syncSub();
+  }
+  $("#pir-tabs").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-tab]"); if (!b) return;
+    var k = b.getAttribute("data-tab"); if (k === S.mode) return;
+    S.mode = k; S.card = null; S.sort = null; store("mode", k);
+    syncFilters(); clearView(); load();
+  });
+  $("#pir-groups").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-g]"); if (!b) return;
+    S.group = b.getAttribute("data-g"); S.card = null; store("group", S.group);
+    syncFilters(); load();
+  });
+  $("#pir-daychips").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-d]"); if (!b) return;
+    setDays(+b.getAttribute("data-d"));
+  });
+  $("#pir-days").addEventListener("change", function () { setDays(parseInt(this.value, 10)); });
+  function setDays(n) {
+    if (!(n >= 1 && n <= 730)) { $("#pir-days").value = S.days; return; }
+    if (n === S.days) return;
+    S.days = n; store("days", String(n)); syncFilters(); load();
+  }
+  var qT = null;
+  $("#pir-q").addEventListener("input", function () { var v = this.value; clearTimeout(qT); qT = setTimeout(function () { S.q = v.trim().toLowerCase(); renderList(); }, 120); });
+  $("#pir-refresh").addEventListener("click", function () { if (S.sec === "purchase") loadPurchase(); else load(); });
+  $("#pir-print").addEventListener("click", function () { w.print(); });
+  $("#pir-csv").addEventListener("click", downloadCSV);
+
+  function clearView() {
+    $("#pir-kpis").innerHTML = "";
+    $("#pir-tw").innerHTML = '<div class="pir-empty"><span class="pir-spin"></span>Loading\u2026</div>';
+    $("#pir-mlist").innerHTML = "";
+  }
+
+  /* --------- cards --------- */
+  var CARDS = {
+    out: { label: "Out of Stock", icon: I.ban, cls: "is-out", f: function (r) { return r.status === "out"; } },
+    below: { label: "Below Reorder", icon: I.warn, cls: "is-below", f: function (r) { return r.status === "below"; } },
+    ok: { label: "OK", icon: I.ok, cls: "is-ok", f: function (r) { return r.status === "ok"; } },
+    po: { label: "PO Raised", icon: I.cart, cls: "is-po", f: function (r) { return !!r.mr_name && !!r.po_raised; } },
+    mr: { label: "MR Only, No PO", icon: I.doc, cls: "is-mr", f: function (r) { return !!r.mr_name && !r.po_raised; } },
+    low7: { label: "Under 7 Days Left", icon: I.zz, cls: "is-low", f: function (r) { return r.days_left !== null && r.days_left !== undefined && +r.days_left < 7; } }
+  };
+  function cardSet() {
+    if (S.mode === "below") return ["out", "below", "po", "mr"];
+    if (S.mode === "nonmoving") return ["out", "below", "ok"];
+    if (S.mode === "dana") return ["out", "below", "ok", "low7"];
+    return ["out", "below", "ok", "low7"];
+  }
+  function renderKpis() {
+    var rows = S.rows, set = cardSet();
+    var total = '<button type="button" class="pir-kpi is-total' + (S.card ? "" : " on") + '" data-card="">' +
+      '<span class="ic">' + I.box + '</span><span class="lb">' + (S.mode === "dana" ? "Dana Categories" : "Items Shown") + '</span><b>' + nf0.format(rows.length) + "</b>" +
+      '<em>' + esc(S.mode === "dana" ? "Granuals \u00b7 " + WAREHOUSE : (S.group || "All groups") + " \u00b7 " + WAREHOUSE) + "</em></button>";
+    $("#pir-kpis").innerHTML = total + set.map(function (k) {
+      var c = CARDS[k], n = rows.filter(c.f).length;
+      var pct = rows.length ? Math.round(n * 100 / rows.length) : 0;
+      return '<button type="button" class="pir-kpi ' + c.cls + (S.card === k ? " on" : "") + '" data-card="' + k + '">' +
+        '<span class="ic">' + c.icon + '</span><span class="lb">' + esc(c.label) + "</span><b>" + nf0.format(n) + "</b>" +
+        '<em><i style="width:' + pct + '%"></i></em></button>';
+    }).join("");
+  }
+  $("#pir-kpis").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-card]"); if (!b) return;
+    var k = b.getAttribute("data-card") || null;
+    S.card = (S.card === k) ? null : k;
+    renderKpis(); renderList();
+  });
+
+  /* --------- register --------- */
+  function cols() {
+    if (S.mode === "dana") return [
+      { k: "item_code", label: "Dana Category", cls: "c-item" },
+      { k: "current_balance", label: "Current Stock", n: 1 },
+      { k: "reorder_level", label: "Reorder Level", n: 1 },
+      { k: "reorder_qty", label: "Reorder Qty", n: 1, cls: "c-rq" },
+      { k: "total_consumption", label: "Consumption", n: 1 },
+      { k: "avg_daily", label: "Avg / Day", n: 1 },
+      { k: "max_level", label: "Max Level (3 Days)", n: 1 },
+      { k: "days_left", label: "Days Left", n: 1 },
+      { k: "last_consumption", label: "Last Used", cls: "c-last" },
+      { k: "status", label: "Status" }
+    ];
+    var c = [
+      { k: "description", label: "Item", cls: "c-item" },
+      { k: "category", label: "Category", cls: "c-cat" },
+      { k: "current_balance", label: "Current Stock", n: 1 },
+      { k: "reorder_level", label: "Reorder Level", n: 1 },
+      { k: "reorder_qty", label: "Reorder Qty", n: 1, cls: "c-rq" },
+      { k: "total_consumption", label: "Consumption", n: 1 },
+      { k: "avg_daily", label: "Avg / Day", n: 1 },
+      { k: "days_left", label: "Days Left", n: 1 },
+      { k: "last_consumption", label: "Last Used", cls: "c-last" }
+    ];
+    if (S.mode !== "nonmoving") { c.push({ k: "below_since", label: "Below Since" }); c.push({ k: "mr_name", label: "Auto Indent" }); }
+    c.push({ k: "status", label: "Status" });
+    return c;
+  }
+  var STATUS = { out: ["Out of Stock", "is-out"], below: ["Below Reorder", "is-below"], ok: ["OK", "is-ok"] };
+  var STATUS_RANK = { out: 0, below: 1, ok: 2 };
+  function statusPill(s) { var x = STATUS[s] || ["\u2013", ""]; return '<span class="pir-st ' + x[1] + '">' + esc(x[0]) + "</span>"; }
+  function indentPill(r) {
+    if (!r.mr_name) return '<span class="pir-dash">\u2013</span>';
+    return '<a class="pir-ind ' + (r.po_raised ? "is-po" : "is-mr") + '" href="/app/material-request/' + encodeURIComponent(r.mr_name) + '" target="_blank" rel="noopener" title="Open Material Request">' +
+      (r.po_raised ? "PO Raised" : "MR Only") + "<small>" + esc(r.mr_name) + "</small></a>";
+  }
+  function daysLeftCell(r) {
+    if (r.days_left === null || r.days_left === undefined) return '<span class="pir-dash">\u2013</span>';
+    var v = +r.days_left, cls = v < 7 ? "is-out" : v < 15 ? "is-below" : "is-ok";
+    var pct = Math.max(4, Math.min(100, v / 30 * 100));
+    return '<span class="pir-dl ' + cls + '"><b>' + num(v) + '</b><i><u style="width:' + pct + '%"></u></i></span>';
+  }
+  function lastUsed(s) {
+    if (!s) return '<span class="pir-dash">\u2013</span>';
+    var a = daysAgo(s);
+    return '<span class="pir-dt">' + dmy(s) + "<small>" + (a === 0 ? "today" : a === 1 ? "yesterday" : a + " days ago") + "</small></span>";
+  }
+  function belowSince(s) {
+    if (!s) return '<span class="pir-dash">\u2013</span>';
+    var a = daysAgo(s);
+    return '<span class="pir-dt is-warn">' + dmy(s) + "<small>" + (a <= 0 ? "since today" : a + " day" + (a === 1 ? "" : "s")) + "</small></span>";
+  }
+  function title(r) { return S.mode === "dana" ? r.item_code : (plain(r.description) || r.item_name || r.item_code); }
+
+  function visible() {
+    var list = S.rows.slice();
+    if (S.card && CARDS[S.card]) list = list.filter(CARDS[S.card].f);
+    if (S.q) list = list.filter(function (r) {
+      var hay = (r.item_code + " " + plain(r.description) + " " + (r.item_name || "") + " " + (r.category || "") + " " + (r.mr_name || "") + " " +
+        (r.members || []).map(function (m) { return m.item_code + " " + (m.item_name || ""); }).join(" ")).toLowerCase();
+      return hay.indexOf(S.q) >= 0;
+    });
+    if (S.sort) {
+      var k = S.sort.k, dir = S.sort.dir;
+      list.sort(function (a, b) {
+        var x = a[k], y = b[k];
+        if (k === "status") { x = STATUS_RANK[x]; y = STATUS_RANK[y]; }
+        else if (k === "description" || k === "item_code") { x = title(a).toLowerCase(); y = title(b).toLowerCase(); }
+        var xn = x === null || x === undefined || x === "", yn = y === null || y === undefined || y === "";
+        if (xn && yn) return 0; if (xn) return 1; if (yn) return -1;
+        if (typeof x === "number" || typeof y === "number") return (+x - +y) * dir;
+        return String(x).localeCompare(String(y)) * dir;
+      });
+    }
+    return list;
+  }
+
+  function render() {
+    syncFilters();
+    var t = TABS.filter(function (x) { return x.k === S.mode; })[0];
+    var on = $('#pir-tabs [data-tab="' + S.mode + '"] .ct'); if (on) on.textContent = nf0.format(S.rows.length);
+    $("#pir-reg-title").textContent = t.label;
+    $("#pir-reg-sub").textContent = t.hint + " \u00b7 " + (S.mode === "dana" ? "" : (S.group || "All groups") + " \u00b7 ") + "click an item to see its purchase history";
+    renderKpis(); renderList();
+  }
+
+  function renderList() {
+    var list = visible(), C = cols();
+    var chip = $("#pir-chipline");
+    if (S.card || S.q) {
+      chip.hidden = false;
+      chip.innerHTML = "Showing <b>" + nf0.format(list.length) + "</b> of " + nf0.format(S.rows.length) +
+        (S.card ? ' \u00b7 <span class="pir-chip">' + esc(CARDS[S.card].label) + "</span>" : "") +
+        (S.q ? ' \u00b7 <span class="pir-chip">\u201c' + esc(S.q) + "\u201d</span>" : "") +
+        ' <button type="button" id="pir-clear">Clear</button>';
+      $("#pir-clear").addEventListener("click", function () { S.card = null; S.q = ""; $("#pir-q").value = ""; renderKpis(); renderList(); });
+    } else chip.hidden = true;
+
+    if (!S.rows.length) {
+      var msg = S.mode === "below" ? "Nothing is below its reorder level right now." : S.mode === "nonmoving" ? "No non-moving items in this period." : "No items found.";
+      $("#pir-tw").innerHTML = '<div class="pir-empty is-good">' + I.ok + esc(msg) + "</div>";
+      $("#pir-mlist").innerHTML = ""; return;
+    }
+    if (!list.length) {
+      $("#pir-tw").innerHTML = '<div class="pir-empty">No items match this filter.</div>';
+      $("#pir-mlist").innerHTML = ""; return;
+    }
+
+    var head = "<tr>" + C.map(function (c) {
+      var s = S.sort && S.sort.k === c.k ? (S.sort.dir > 0 ? " asc" : " desc") : "";
+      return '<th class="' + (c.n ? "n " : "") + (c.cls || "") + s + '"><button type="button" data-sort="' + c.k + '">' + esc(c.label) + I.sort + "</button></th>";
+    }).join("") + "</tr>";
+
+    var body = list.map(function (r) {
+      var idx = S.rows.indexOf(r);
+      return '<tr class="st-' + r.status + '" data-i="' + idx + '">' + C.map(function (c) {
+        var v = r[c.k];
+        if (c.k === "description" || (S.mode === "dana" && c.k === "item_code")) {
+          var sub = S.mode === "dana" ? (r.members || []).length + " item" + ((r.members || []).length === 1 ? "" : "s") + " combined" : r.item_code;
+          return '<td class="c-item"><button type="button" class="pir-open" data-i="' + idx + '"><b>' + esc(title(r)) + "</b><small>" + esc(sub) + "</small></button></td>";
+        }
+        if (c.k === "category") return '<td class="c-cat">' + (v ? '<span class="pir-cat">' + esc(v) + "</span>" : '<span class="pir-dash">\u2013</span>') + "</td>";
+        if (c.k === "current_balance") return '<td class="n c-cur"><b>' + num(v) + "</b>" + (r.uom ? "<small>" + esc(r.uom) + "</small>" : "") + "</td>";
+        if (c.k === "days_left") return '<td class="n">' + daysLeftCell(r) + "</td>";
+        if (c.k === "last_consumption") return '<td class="c-last">' + lastUsed(v) + "</td>";
+        if (c.k === "below_since") return "<td>" + belowSince(v) + "</td>";
+        if (c.k === "mr_name") return "<td>" + indentPill(r) + "</td>";
+        if (c.k === "status") return "<td>" + statusPill(v) + "</td>";
+        return '<td class="n' + (c.cls ? " " + c.cls : "") + '">' + num(v) + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+    $("#pir-tw").innerHTML = '<table class="pir-t"><thead>' + head + "</thead><tbody>" + body + "</tbody></table>";
+
+    /* mobile cards */
+    $("#pir-mlist").innerHTML = list.map(function (r) {
+      var idx = S.rows.indexOf(r);
+      var sub = S.mode === "dana" ? (r.members || []).length + " items combined" : r.item_code + (r.category ? " \u00b7 " + r.category : "");
+      return '<button type="button" class="pir-mc st-' + r.status + '" data-i="' + idx + '">' +
+        '<div class="t"><b>' + esc(title(r)) + "</b>" + statusPill(r.status) + "</div>" +
+        '<div class="s">' + esc(sub) + "</div>" +
+        '<div class="g">' +
+          "<span><em>Stock</em><b>" + num(r.current_balance) + "</b></span>" +
+          "<span><em>Reorder</em><b>" + num(r.reorder_level) + "</b></span>" +
+          "<span><em>Avg / Day</em><b>" + num(r.avg_daily) + "</b></span>" +
+          "<span><em>Days Left</em><b>" + (r.days_left === null || r.days_left === undefined ? "\u2013" : num(r.days_left)) + "</b></span>" +
+        "</div>" +
+        ((r.mr_name || r.below_since) ? '<div class="f">' + (r.below_since ? "<span>Below since " + dmy(r.below_since) + "</span>" : "<span></span>") +
+          (r.mr_name ? '<span class="pir-ind ' + (r.po_raised ? "is-po" : "is-mr") + '">' + (r.po_raised ? "PO Raised" : "MR Only") + "<small>" + esc(r.mr_name) + "</small></span>" : "") + "</div>" : "") +
+        "</button>";
+    }).join("");
+  }
+  $("#pir-tw").addEventListener("click", function (e) {
+    var s = e.target.closest("[data-sort]");
+    if (s) {
+      var k = s.getAttribute("data-sort");
+      if (S.sort && S.sort.k === k) { if (S.sort.dir === 1) S.sort.dir = -1; else S.sort = null; }
+      else S.sort = { k: k, dir: (k === "description" || k === "item_code" || k === "category" || k === "status") ? 1 : -1 };
+      renderList(); return;
+    }
+    if (e.target.closest("a")) return;
+    var o = e.target.closest("[data-i]");
+    if (o) openItem(S.rows[+o.getAttribute("data-i")]);
+  });
+  $("#pir-mlist").addEventListener("click", function (e) {
+    var o = e.target.closest("[data-i]"); if (o) openItem(S.rows[+o.getAttribute("data-i")]);
+  });
+
+  function downloadCSV() {
+    var list = visible(); if (!list.length) return;
+    var C = S.mode === "dana"
+      ? [["item_code", "Dana Category"], ["current_balance", "Current Stock"], ["reorder_level", "Reorder Level"], ["reorder_qty", "Reorder Qty"], ["total_consumption", "Consumption"], ["avg_daily", "Avg Daily"], ["max_level", "Max Level (3 Days)"], ["days_left", "Days Left"], ["last_consumption", "Last Used"], ["status", "Status"], ["members", "Items"]]
+      : [["item_code", "Item Code"], ["description", "Description"], ["item_group", "Item Group"], ["category", "Category"], ["current_balance", "Current Stock"], ["reorder_level", "Reorder Level"], ["reorder_qty", "Reorder Qty"], ["total_consumption", "Consumption"], ["avg_daily", "Avg Daily"], ["days_left", "Days Left"], ["last_consumption", "Last Used"], ["below_since", "Below Since"], ["mr_name", "Material Request"], ["po_raised", "PO Raised"], ["status", "Status"]];
+    var qq = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var out = [C.map(function (c) { return qq(c[1]); }).join(",")];
+    list.forEach(function (r) {
+      out.push(C.map(function (c) {
+        var v = r[c[0]];
+        if (c[0] === "description") v = plain(v);
+        if (c[0] === "status") v = (STATUS[v] || [""])[0];
+        if (c[0] === "po_raised") v = r.mr_name ? (v ? "Yes" : "No") : "";
+        if (c[0] === "members") v = (v || []).map(function (m) { return m.item_code; }).join(" | ");
+        return qq(v);
+      }).join(","));
+    });
+    var blob = new Blob(["\ufeff" + out.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "purchase-intelligence-" + S.mode + "-" + S.days + "d-" + iso(new Date()) + ".csv";
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+
+  /* ============ item slider (purchase + transaction history) ============ */
+  var DR = { seq: 0 };
+  function fromStr() { var f = new Date(); f.setDate(f.getDate() - (S.days - 1)); return iso(f); }
+
+  function openItem(r) {
+    if (!r) return;
+    var my = ++DR.seq, isDana = !!r.is_dana, members = r.members || [];
+    var dr = $("#pir-drawer");
+    dr.classList.toggle("is-wide", isDana);
+    var sub = isDana ? "Dana Category \u00b7 " + members.length + " item" + (members.length === 1 ? "" : "s") : r.item_code + (r.category ? " \u00b7 " + r.category : "") + (r.item_group && (r.item_group || "").toLowerCase() !== (r.category || "").toLowerCase() ? " \u00b7 " + r.item_group : "");
+    dr.innerHTML =
+      '<header class="pir-dr-h st-' + r.status + '"><div class="tx"><div class="k">' + statusPill(r.status) + "<span>" + esc(WAREHOUSE) + "</span></div>" +
+        "<h3>" + esc(title(r)) + '</h3><div class="s">' + esc(sub) + "</div></div>" +
+        '<div class="pir-dr-act">' + (isDana ? "" : '<a class="pir-ibtn is-dark" href="/app/item/' + encodeURIComponent(r.item_code) + '" target="_blank" rel="noopener" title="Open Item">' + I.doc + "</a>") +
+        '<button type="button" class="pir-ibtn is-dark" id="pir-dr-x" title="Close">' + I.x + "</button></div></header>" +
+      '<div class="pir-dr-b" id="pir-dr-b">' +
+        (isDana ? membersHTML(members) : "") +
+        summaryHTML(r) +
+        '<div class="pir-dr-load" id="pir-dr-load"><span class="pir-spin"></span>Loading transactions &amp; purchase history\u2026</div>' +
+      "</div>";
+    dr.classList.add("on"); dr.setAttribute("aria-hidden", "false"); $("#pir-scrim").classList.add("on");
+    lock(true);
+    $("#pir-dr-x").addEventListener("click", closeItem);
+
+    var codes = isDana ? members.map(function (m) { return m.item_code; }) : [r.item_code];
+    Promise.all(codes.map(function (code) {
+      var p = { item_code: code, warehouse: WAREHOUSE, days: S.days };
+      if (isDana) p.used_in_days = S.days;
+      return call(PANEL_API, p).then(function (m) {
+        if (m && m.transactions) m.transactions.forEach(function (t) { if (!t.item_code) t.item_code = code; });
+        return m;
+      }, function (e) { return { __err: e.message }; });
+    })).then(function (list) {
+      if (my !== DR.seq) return;
+      var good = list.filter(function (x) { return x && !x.__err; });
+      if (!good.length) {
+        var err = (list[0] && list[0].__err) || "No data";
+        $("#pir-dr-load").outerHTML = '<div class="pir-error"><b>Could not load purchase history.</b> ' + esc(err) + '<br><small>Check that the Server Script <b>ucm_item_purchase_and_transaction_history</b> is saved and enabled.</small></div>';
+        return;
+      }
+      var pay = isDana ? mergeDana(good) : good[0];
+      renderPanel(pay, isDana);
+    });
+  }
+  function closeItem() { DR.seq++; var dr = $("#pir-drawer"); dr.classList.remove("on"); dr.setAttribute("aria-hidden", "true"); $("#pir-scrim").classList.remove("on"); lock(false); }
+  function lock(on) { d.documentElement.style.overflow = on ? "hidden" : ""; d.body.style.overflow = on ? "hidden" : ""; }
+  $("#pir-scrim").addEventListener("click", closeItem);
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeItem(); closeSettings(); } });
+
+  function sec(t, body, extra) { return '<section class="pir-ps' + (extra ? " " + extra : "") + '"><h4>' + t + "</h4>" + body + "</section>"; }
+  function summaryHTML(r) {
+    var cells = [
+      ["Current Stock", num(r.current_balance), r.status === "ok" ? "" : "is-" + r.status],
+      ["Reorder Level", num(r.reorder_level)],
+      ["Reorder Qty", num(r.reorder_qty)],
+      ["Consumption (" + S.days + "d)", num(r.total_consumption)],
+      ["Avg Daily", num(r.avg_daily)],
+      ["Days of Stock Left", r.days_left === null || r.days_left === undefined ? "\u2013" : num(r.days_left)],
+      [r.is_dana ? "Max Level (3 Days)" : "Below Reorder Since", r.is_dana ? num(r.max_level) : (r.below_since ? dmy(r.below_since) : "\u2013")],
+      ["Last Consumption", r.last_consumption ? dmy(r.last_consumption) : "\u2013"]
+    ];
+    var ind = (!r.is_dana && r.mr_name) ? '<div class="pir-ps-ind">Auto Indent: ' + indentPill(r) + "</div>" : "";
+    return sec("Summary", '<div class="pir-sum" id="pir-sum">' + cells.map(function (c) { return '<div class="' + (c[2] || "") + '"><em>' + esc(c[0]) + "</em><b>" + c[1] + "</b></div>"; }).join("") + "</div>" + ind);
+  }
+  function membersHTML(m) {
+    if (!m.length) return "";
+    return sec("Items In This Category (" + m.length + ")", '<div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Item Code</th><th class="n">Current Stock</th><th class="n">Consumption</th><th class="n">Avg / Day</th></tr></thead><tbody>' +
+      m.map(function (x) { return "<tr><td>" + docLink("Item", x.item_code) + (x.item_name && x.item_name !== x.item_code ? "<small>" + esc(x.item_name) + "</small>" : "") + '</td><td class="n">' + num(x.current_balance) + '</td><td class="n">' + num(x.total_consumption) + '</td><td class="n">' + num(x.avg_daily) + "</td></tr>"; }).join("") +
+      "</tbody></table></div>");
+  }
+  function mergeDana(list) {
+    var tx = [], po = [], used = {};
+    list.forEach(function (p) {
+      tx = tx.concat(p.transactions || []); po = po.concat(p.purchase_orders || []);
+      (p.used_in_products || []).forEach(function (u) {
+        var k = u.product_code;
+        if (!used[k]) used[k] = { product_code: u.product_code, product_name: u.product_name, total_qty_consumed: 0, work_orders: [] };
+        used[k].total_qty_consumed += (+u.total_qty_consumed || 0);
+        used[k].work_orders = used[k].work_orders.concat(u.work_orders || []);
+      });
+    });
+    tx.sort(function (a, b) { var x = (a.posting_date || "") + " " + (a.posting_time || ""), y = (b.posting_date || "") + " " + (b.posting_time || ""); return x < y ? 1 : x > y ? -1 : 0; });
+    po.sort(function (a, b) { return a.po_date < b.po_date ? 1 : a.po_date > b.po_date ? -1 : 0; });
+    var u = Object.keys(used).map(function (k) { return used[k]; }).sort(function (a, b) { return b.total_qty_consumed - a.total_qty_consumed; });
+    return { transactions: tx, purchase_orders: po.slice(0, 5), used_in_products: u };
+  }
+  function danaBreak(tx) {
+    var b = { inward: 0, sold: 0, mfg: 0, issue: 0 };
+    tx.forEach(function (t) {
+      var q = parseFloat(t.actual_qty) || 0;
+      if (q > 0) { b.inward += q; return; }
+      if (!q) return;
+      var a = Math.abs(q), vt = t.voucher_type || "", st = t.stock_entry_type || "";
+      if (vt === "Delivery Note" || st === "BT Material Issue") b.sold += a;
+      else if (st === "Manufacture") b.mfg += a;
+      else if (st === "Material Issue") b.issue += a;
+    });
+    return b;
+  }
+  function poStatus(s) {
+    var c = s === "Completed" ? "is-ok" : s === "Partially Received" ? "is-below" : s === "To Receive" ? "is-out" : "";
+    return '<span class="pir-st ' + c + '">' + esc(s || "\u2013") + "</span>";
+  }
+  function poCard(p) {
+    var lt = (p.lead_time_days === null || p.lead_time_days === undefined) ? '<span class="pir-dash">Pending</span>' : p.lead_time_days + " day" + (p.lead_time_days === 1 ? "" : "s");
+    var grn = (p.grn_list && p.grn_list.length) ? p.grn_list.map(function (g) { return docLink("Purchase Receipt", g.name) + ' <small>' + dmy(g.date) + "</small>"; }).join("<br>") : '<span class="pir-dash">Not yet received</span>';
+    var rq = +p.received_qty || 0, oq = +p.qty || 0, pct = oq > 0 ? Math.min(100, rq / oq * 100) : 0;
+    return '<div class="pir-po"><div class="pir-po-t"><div>' + docLink("Purchase Order", p.po_name) + "<small>" + dmy(p.po_date) + (p.item_code ? " \u00b7 " + esc(p.item_code) : "") + "</small></div>" + poStatus(p.item_status) + "</div>" +
+      '<div class="pir-po-bar"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="pir-po-g">' +
+        "<div><em>Supplier</em><b>" + (p.supplier_id ? '<a href="/app/supplier/' + encodeURIComponent(p.supplier_id) + '" target="_blank" rel="noopener">' + esc(p.supplier_name || p.supplier_id) + "</a>" : "\u2013") + "</b></div>" +
+        "<div><em>Rate</em><b>" + inr(p.rate) + "</b></div>" +
+        "<div><em>Ordered</em><b>" + num(p.qty) + "</b></div>" +
+        "<div><em>Received</em><b>" + num(p.received_qty) + "</b></div>" +
+        "<div><em>GRN</em><b>" + grn + "</b></div>" +
+        "<div><em>Lead Time</em><b>" + lt + "</b></div>" +
+      "</div></div>";
+  }
+  function usedInHTML(list, label) {
+    if (!list || !list.length) return sec("Used In Products \u2014 " + label, '<div class="pir-none">No Work Order consumption found in ' + esc(label.toLowerCase()) + ".</div>");
+    return sec("Used In Products \u2014 " + label + " (" + list.length + ")", list.map(function (p, i) {
+      var wo = (p.work_orders || []);
+      return '<div class="pir-ui' + (i === 0 ? " open" : "") + '"><button type="button" class="pir-ui-h">' + I.caret + "<span><b>" + esc(p.product_name || p.product_code) + "</b><small>" + esc(p.product_code || "") + " \u00b7 " + wo.length + " work order" + (wo.length === 1 ? "" : "s") + "</small></span><strong>" + num(p.total_qty_consumed) + "</strong></button>" +
+        '<div class="pir-ui-b"><div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Work Order</th><th>Date</th><th class="n">Regular Qty</th><th class="n">This Item Used</th></tr></thead><tbody>' +
+        (wo.length ? wo.map(function (x) { return "<tr><td>" + docLink("Work Order", x.name) + "</td><td>" + dmy(x.date) + '</td><td class="n">' + num(x.planned_qty) + '</td><td class="n"><b>' + num(x.qty) + "</b></td></tr>"; }).join("") : '<tr><td colspan="4" class="pir-none">\u2013</td></tr>') +
+        "</tbody></table></div></div></div>";
+    }).join(""));
+  }
+  function consumptionByProduct(list, label) {
+    if (!list || !list.length) return sec("Consumption By Product \u2014 " + label, '<div class="pir-none">No Work Order consumption in this period.</div>');
+    var g = 0; list.forEach(function (p) { g += +p.total_qty_consumed || 0; });
+    return sec("Consumption By Product \u2014 " + label, '<div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Product</th><th class="n">Qty Used</th><th class="n">Share</th></tr></thead><tbody>' +
+      list.map(function (p) { var q = +p.total_qty_consumed || 0, pc = g > 0 ? q / g * 100 : 0; return "<tr><td>" + docLink("Item", p.product_code, p.product_name) + "<small>" + esc(p.product_code || "") + '</small></td><td class="n"><b>' + num(q) + '</b></td><td class="n"><span class="pir-share"><i style="width:' + Math.max(2, pc / 2).toFixed(1) + 'px"></i>' + num(pc, 1) + "%</span></td></tr>"; }).join("") +
+      '<tr class="tot"><td>Total</td><td class="n">' + num(g) + '</td><td class="n">100%</td></tr></tbody></table></div>');
+  }
+  function renderPanel(pay, isDana) {
+    var body = $("#pir-dr-b"); if (!body) return;
+    var f = fromStr();
+    var tx = (pay.transactions || []).filter(function (t) { var dd = String(t.posting_date || "").split(" ")[0]; return !/^\d{4}-\d{2}-\d{2}$/.test(dd) || dd >= f; });
+    var pos = (pay.purchase_orders || []).filter(function (p) { var dd = String(p.po_date || "").split(" ")[0]; return !/^\d{4}-\d{2}-\d{2}$/.test(dd) || dd >= f; });
+    var lbl = "Last " + S.days + " Days";
+    var html = "";
+    if (isDana) {
+      var b = danaBreak(tx);
+      var sum = $("#pir-sum");
+      if (sum) sum.insertAdjacentHTML("beforeend", "<div><em>Total Inward</em><b>" + num(b.inward) + "</b></div>");
+      html += sec("Stock Movement \u2014 " + lbl, '<div class="pir-mv">' +
+        '<div class="is-in"><em>Total Inward</em><b>' + num(b.inward) + "</b></div>" +
+        "<div><em>Sold (Delivery Note)</em><b>" + num(b.sold) + "</b></div>" +
+        "<div><em>Used In Manufacture</em><b>" + num(b.mfg) + "</b></div>" +
+        "<div><em>Material Issue</em><b>" + num(b.issue) + "</b></div></div>");
+      html += consumptionByProduct(pay.used_in_products, lbl);
+    } else {
+      html += usedInHTML(pay.used_in_products, "Last 6 Months");
+    }
+    /* transactions */
+    var tin = 0, tout = 0; tx.forEach(function (t) { var q = +t.actual_qty || 0; if (q > 0) tin += q; else tout -= q; });
+    html += sec("Transactions \u2014 " + lbl + ' <span class="pir-h-note">' + tx.length + " entr" + (tx.length === 1 ? "y" : "ies") + ' \u00b7 <i class="in">+' + num(tin) + '</i> \u00b7 <i class="out">\u2212' + num(tout) + "</i></span>",
+      tx.length ? '<div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Date</th><th>Voucher</th><th class="n">Qty</th><th class="n">Balance</th></tr></thead><tbody>' +
+        tx.map(function (t) {
+          var q = +t.actual_qty || 0;
+          return "<tr><td>" + dmy(t.posting_date) + "</td><td>" + docLink(t.voucher_type, t.voucher_no) + ' <span class="pir-vt">' + esc(t.stock_entry_type || t.voucher_type || "") + "</span>" +
+            (isDana && (t.item_name || t.item_code) ? "<small>" + esc(t.item_name || t.item_code) + "</small>" : "") +
+            '</td><td class="n ' + (q < 0 ? "out" : "in") + '">' + (q > 0 ? "+" : "") + num(q) + '</td><td class="n">' + num(t.qty_after_transaction) + "</td></tr>";
+        }).join("") + "</tbody></table></div>"
+        : '<div class="pir-none">No stock movement in the last ' + S.days + " days.</div>");
+    /* purchase orders */
+    html += sec("Purchase Orders \u2014 " + lbl + (pos.length ? ' <span class="pir-h-note">' + pos.length + "</span>" : ""),
+      pos.length ? pos.map(poCard).join("") : '<div class="pir-none">No purchase orders in the last ' + S.days + " days.</div>");
+    var ld = $("#pir-dr-load"); if (ld) ld.outerHTML = html; else body.insertAdjacentHTML("beforeend", html);
+  }
+  $("#pir-drawer").addEventListener("click", function (e) {
+    var h = e.target.closest(".pir-ui-h"); if (h) h.parentNode.classList.toggle("open");
+  });
+
+  /* ================= PURCHASE part ("UCM Purchase History" jaisa) ================= */
+  var PGROUPS = [["Packaging Materials", "Packaging Materials"], ["Master Batch", "Master Batch"], ["Granuals", "Granuals"]];
+  var MCOL = ["#169c8a", "#0284c7", "#d97706", "#64748b", "#e05d44"];          /* month 0..4 (newest -> oldest) */
+  var CCOL = ["#169c8a", "#0284c7", "#d97706", "#e05d44", "#64748b", "#84a83a"]; /* top 6 categories */
+  var MTINT = ["#eef8f6", "#eef6fc", "#fdf6ea", "#f3f5f8", "#fdf1ee"];
+  var P = { data: null, seq: 0, q: "", sort: null };
+
+  function inr0(v) { return "\u20b9" + nf0.format(Math.round(+v || 0)); }
+  function lakh(v) {
+    var a = Math.abs(+v || 0), s = (+v || 0) < 0 ? "-" : "";
+    if (a >= 1e7) return s + "\u20b9" + (a / 1e7).toFixed(1) + " Cr";
+    if (a >= 1e5) return s + "\u20b9" + (a / 1e5).toFixed(1) + " L";
+    if (a >= 1e3) return s + "\u20b9" + (a / 1e3).toFixed(1) + " K";
+    return s + "\u20b9" + nf0.format(a);
+  }
+  function kShort(v) {
+    var a = Math.abs(+v || 0);
+    if (a >= 1e7) return (a / 1e7).toFixed(1) + "Cr";
+    if (a >= 1e5) return (a / 1e5).toFixed(1) + "L";
+    if (a >= 1e3) return Math.round(a / 1e3) + "K";
+    return nf0.format(a);
+  }
+  function sentence(t) { t = String(t || ""); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); }
+
+  async function loadPurchase() {
+    var my = ++P.seq;
+    root.classList.add("is-busy"); d.body.classList.add("pir-busy");
+    $("#pir-pmain").classList.add("is-loading");
+    try {
+      var m = await api({ action: "purchase", item_group: S.pg });
+      if (!m || my !== P.seq) return;
+      P.data = m; renderPurchase();
+    } catch (e) {
+      if (my !== P.seq) return;
+      P.data = null;
+      $("#pir-pmain").innerHTML = '<div class="pir-reg"><div class="pir-error"><b>Could not load purchase history.</b> ' + esc(e.message) + "</div></div>";
+    } finally {
+      if (my === P.seq) { root.classList.remove("is-busy"); d.body.classList.remove("pir-busy"); $("#pir-pmain").classList.remove("is-loading"); }
+    }
+  }
+  function syncPurchaseBand() {
+    $$("#pir-pgroups [data-pg]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-pg") === S.pg); });
+    var m = P.data && P.data.months;
+    $("#pir-prange").textContent = m ? m[m.length - 1].label + " \u2013 " + m[0].label : "Last 5 months";
+  }
+  $("#pir-pgroups").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-pg]"); if (!b) return;
+    var g = b.getAttribute("data-pg"); if (g === S.pg) return;
+    S.pg = g; store("pgroup", g); P.q = ""; syncPurchaseBand(); loadPurchase();
+  });
+
+  function renderPurchase() {
+    var D = P.data, M = D.months, T = D.totals, C = D.categories;
+    syncPurchaseBand(); syncSub();
+    /* --- 5 month cards --- */
+    var cards = M.map(function (m, i) {
+      var amt = T[i].amount, prev = i < M.length - 1 ? T[i + 1].amount : null;
+      var ch = "";
+      if (prev !== null) {
+        if (prev > 0) { var pc = (amt - prev) / prev * 100; ch = '<span class="pir-pch ' + (pc >= 0 ? "up" : "dn") + '">' + (pc >= 0 ? "\u25b2 " : "\u25bc ") + Math.abs(pc).toFixed(0) + "% vs " + esc(M[i + 1].label.split(" ")[0]) + "</span>"; }
+        else ch = '<span class="pir-pch">\u2013</span>';
+      }
+      var tag = i === 0 ? "This Month" : i === 1 ? "Last Month" : (i + " Months Ago");
+      return '<div class="pir-pcard" style="--mc:' + MCOL[i] + '"><div class="t"><b>' + esc(m.label) + "</b><em>" + tag + "</em></div>" +
+        '<div class="v">' + inr0(amt) + "</div><div class=\"s\">" + lakh(amt) + " \u00b7 " + num(T[i].qty, 0) + " qty</div>" + ch + "</div>";
+    }).join("");
+
+    /* --- charts (oldest -> newest, left to right) --- */
+    var order = [4, 3, 2, 1, 0].filter(function (i) { return i < M.length; });
+    var top = C.slice(0, 6);
+    var cMax = 0; top.forEach(function (c) { order.forEach(function (i) { cMax = Math.max(cMax, c.months[i].amount); }); });
+    var tMax = 0; order.forEach(function (i) { tMax = Math.max(tMax, T[i].amount); });
+    function niceMax(v) {
+      if (v <= 0) return 100000;
+      var p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p, steps = [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10];
+      for (var k = 0; k < steps.length; k++) if (n <= steps[k]) return steps[k] * p;
+      return 10 * p;
+    }
+    function svgChart(groups, maxV, bars) {
+      var narrow = root.clientWidth < 700, W = narrow ? 440 : 760, H = narrow ? 300 : 330, L = narrow ? 44 : 62, R = 14, Tp = 24, B = 34, pw = W - L - R, ph = H - Tp - B;
+      var mx = niceMax(maxV * 1.08), out = [];
+      for (var t = 0; t <= 4; t++) {
+        var val = mx * t / 4, y = Tp + ph - ph * t / 4;
+        out.push('<line x1="' + L + '" y1="' + y.toFixed(1) + '" x2="' + (W - R) + '" y2="' + y.toFixed(1) + '" class="g"/>');
+        out.push('<text x="' + (L - 8) + '" y="' + (y + 4).toFixed(1) + '" class="ax" text-anchor="end">' + (val ? lakh(val).replace("\u20b9", "") : "0") + "</text>");
+      }
+      var gw = pw / groups.length;
+      groups.forEach(function (g, gi) {
+        var gx = L + gi * gw;
+        out.push(bars(g, gx, gw, Tp, ph, mx));
+        out.push('<text x="' + (gx + gw / 2).toFixed(1) + '" y="' + (H - 10) + '" class="lb" text-anchor="middle">' + esc(M[g].label) + "</text>");
+      });
+      return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="xMidYMid meet">' + out.join("") + "</svg>";
+    }
+    var catSvg = top.length ? svgChart(order, cMax, function (g, gx, gw, Tp, ph, mx) {
+      var area = gw * 0.82, bw = area / top.length, sx = gx + (gw - area) / 2, s = "";
+      top.forEach(function (c, ci) {
+        var v = c.months[g].amount, h = ph * v / mx, x = sx + ci * bw, y = Tp + ph - h;
+        s += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + Math.max(bw - 3, 1).toFixed(1) + '" height="' + Math.max(h, 0).toFixed(1) + '" rx="2" fill="' + CCOL[ci] + '"><title>' + esc(sentence(c.category)) + " \u00b7 " + esc(M[g].label) + ": " + inr0(v) + "</title></rect>";
+      });
+      return s;
+    }) : '<div class="pir-none">No purchases in these 5 months.</div>';
+    var legend = top.map(function (c, ci) { return '<span><i style="background:' + CCOL[ci] + '"></i>' + esc(sentence(c.category)) + "</span>"; }).join("");
+    var totSvg = svgChart(order, tMax, function (g, gx, gw, Tp, ph, mx) {
+      var bw = gw * 0.46, x = gx + (gw - bw) / 2, v = T[g].amount, h = ph * v / mx, y = Tp + ph - h;
+      return '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(h, 0).toFixed(1) + '" rx="4" fill="' + MCOL[g] + '"><title>' + esc(M[g].label) + ": " + inr0(v) + "</title></rect>" +
+        '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 7).toFixed(1) + '" class="vl" text-anchor="middle">' + lakh(v) + "</text>";
+    });
+
+    $("#pir-pmain").innerHTML =
+      '<div class="pir-pcards">' + cards + "</div>" +
+      '<div class="pir-charts">' +
+        '<section class="pir-chart"><h3>Category-wise Purchase Trend <small>Last 5 months \u00b7 top ' + top.length + "</small></h3>" + catSvg + '<div class="pir-legend">' + legend + "</div></section>" +
+        '<section class="pir-chart"><h3>Total Purchase Trend <small>Last 5 months</small></h3>' + totSvg + "</section>" +
+      "</div>" +
+      '<section class="pir-reg">' +
+        '<div class="pir-reg-h"><div class="pir-reg-t"><h2>Category-wise Purchase</h2><p>' + esc(D.item_group) + " \u00b7 Purchase Receipts (without tax) \u00b7 click a category to see the receipts</p></div>" +
+          '<div class="pir-reg-tools"><label class="pir-search">' + I.search + '<input type="search" id="pir-pq" placeholder="Search category\u2026"></label>' +
+          '<button type="button" class="pir-ibtn" id="pir-pcsv" title="Download CSV">' + I.down + "</button></div></div>" +
+        '<div class="pir-tw" id="pir-ptw"></div><div class="pir-mlist" id="pir-pmlist"></div>' +
+      "</section>";
+    $("#pir-pq").value = P.q;
+    $("#pir-pq").addEventListener("input", function () { P.q = this.value.trim().toLowerCase(); renderPurchaseTable(); });
+    $("#pir-pcsv").addEventListener("click", purchaseCSV);
+    renderPurchaseTable();
+  }
+
+  function purchaseRows() {
+    var list = P.data.categories.filter(function (c) { return !P.q || c.category.toLowerCase().indexOf(P.q) >= 0; });
+    if (P.sort) {
+      var k = P.sort.k, dir = P.sort.dir;
+      list = list.slice().sort(function (a, b) {
+        if (k === "cat") return a.category.localeCompare(b.category) * dir;
+        var m = +k.slice(1, 2), f = k.slice(3);
+        return (a.months[m][f] - b.months[m][f]) * dir;
+      });
+    }
+    return list;
+  }
+  function renderPurchaseTable() {
+    var D = P.data, M = D.months, T = D.totals, list = purchaseRows();
+    function sh(k, label, n) {
+      var s = P.sort && P.sort.k === k ? (P.sort.dir > 0 ? " asc" : " desc") : "";
+      return '<th class="' + (n ? "n" : "c-item") + s + '"><button type="button" data-psort="' + k + '">' + label + I.sort + "</button></th>";
+    }
+    var h1 = '<tr class="mh"><th rowspan="2" class="c-item' + (P.sort && P.sort.k === "cat" ? (P.sort.dir > 0 ? " asc" : " desc") : "") + '"><button type="button" data-psort="cat">Category' + I.sort + "</button></th>" +
+      M.map(function (m, i) { return '<th colspan="2" class="mg" style="--mt:' + MTINT[i] + ";--mc:" + MCOL[i] + '"><span>' + esc(m.label) + (i === 0 ? " <em>this month</em>" : "") + "</span></th>"; }).join("") + "</tr>";
+    var h2 = "<tr>" + M.map(function (m, i) { return sh("m" + i + "_qty", "Qty", 1).replace('<th class="n', '<th style="--mt:' + MTINT[i] + '" class="n tint') + sh("m" + i + "_amount", "Amount", 1).replace('<th class="n', '<th style="--mt:' + MTINT[i] + '" class="n tint'); }).join("") + "</tr>";
+    var body = list.length ? list.map(function (c) {
+      return '<tr data-pc="' + esc(c.category) + '"><td class="c-item"><button type="button" class="pir-open"><b>' + esc(sentence(c.category)) + "</b></button></td>" +
+        c.months.map(function (x, i) {
+          return '<td class="n tint" style="--mt:' + MTINT[i] + '">' + (x.qty ? num(x.qty, 0) : '<span class="pir-dash">\u2013</span>') + '</td><td class="n tint amt" style="--mt:' + MTINT[i] + '">' + (x.amount ? inr0(x.amount) : '<span class="pir-dash">\u2013</span>') + "</td>";
+        }).join("") + "</tr>";
+    }).join("") : '<tr><td colspan="' + (1 + M.length * 2) + '" class="pir-none">' + (D.categories.length ? "No category matches the search." : "No purchase records found for this period.") + "</td></tr>";
+    var tot = '<tr class="tot"><td class="c-item">Total</td>' + T.map(function (x, i) { return '<td class="n tint" style="--mt:' + MTINT[i] + '">' + num(x.qty, 0) + '</td><td class="n tint amt" style="--mt:' + MTINT[i] + '">' + inr0(x.amount) + "</td>"; }).join("") + "</tr>";
+    $("#pir-ptw").innerHTML = '<table class="pir-t pir-pt5"><thead>' + h1 + h2 + "</thead><tbody>" + body + (D.categories.length ? tot : "") + "</tbody></table>";
+
+    /* mobile cards */
+    $("#pir-pmlist").innerHTML = list.map(function (c) {
+      return '<button type="button" class="pir-mc pir-pmc" data-pc="' + esc(c.category) + '"><div class="t"><b>' + esc(sentence(c.category)) + "</b><strong>" + inr0(c.months[0].amount) + "</strong></div>" +
+        '<div class="pm">' + c.months.map(function (x, i) { return '<span style="--mc:' + MCOL[i] + '"><em>' + esc(M[i].short) + "</em><b>" + (x.amount ? kShort(x.amount) : "\u2013") + "</b><small>" + (x.qty ? num(x.qty, 0) : "") + "</small></span>"; }).join("") + "</div></button>";
+    }).join("") + (D.categories.length ? '<div class="pir-pmc-tot"><span>Total \u00b7 ' + esc(M[0].label) + "</span><b>" + inr0(T[0].amount) + "</b></div>" : "");
+  }
+  $("#pir-pmain").addEventListener("click", function (e) {
+    var s = e.target.closest("[data-psort]");
+    if (s) {
+      var k = s.getAttribute("data-psort");
+      if (P.sort && P.sort.k === k) { if (P.sort.dir === (k === "cat" ? 1 : -1)) P.sort.dir = -P.sort.dir; else P.sort = null; }
+      else P.sort = { k: k, dir: k === "cat" ? 1 : -1 };
+      renderPurchaseTable(); return;
+    }
+    var r = e.target.closest("[data-pc]");
+    if (r) openPurchaseCat(r.getAttribute("data-pc"));
+  });
+  function purchaseCSV() {
+    var D = P.data; if (!D) return;
+    var qq = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var head = ["Category"]; D.months.forEach(function (m) { head.push(m.label + " Qty", m.label + " Amount"); });
+    var out = [head.map(qq).join(",")];
+    purchaseRows().forEach(function (c) { var r = [c.category]; c.months.forEach(function (x) { r.push(x.qty, Math.round(x.amount * 100) / 100); }); out.push(r.map(qq).join(",")); });
+    var t = ["Total"]; D.totals.forEach(function (x) { t.push(x.qty, Math.round(x.amount * 100) / 100); }); out.push(t.map(qq).join(","));
+    saveCSV(out, "purchase-history-" + D.item_group.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + iso(new Date()) + ".csv");
+  }
+  function saveCSV(lines, name) {
+    var blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+
+  /* --- category slider: Purchase Receipt lines --- */
+  var PS = { cat: "", rows: [], month: "", q: "", desc: "", sup: "" };
+  function openPurchaseCat(cat) {
+    var D = P.data; if (!D) return;
+    DR.seq++;
+    PS.cat = cat; PS.rows = D.detail.filter(function (r) { return r.category === cat; });
+    PS.q = PS.desc = PS.sup = "";
+    PS.month = PS.rows.some(function (r) { return r.month_bucket === 0; }) ? "0" : "";
+    var present = D.months.filter(function (m) { return PS.rows.some(function (r) { return r.month_bucket === m.idx; }); });
+    var dr = $("#pir-drawer");
+    dr.classList.add("is-wide");
+    dr.innerHTML =
+      '<header class="pir-dr-h"><div class="tx"><h3>' + esc(sentence(cat)) + '</h3><div class="s">Purchase Receipts \u00b7 ' + esc(D.item_group) + '</div><div class="k"><span>' + esc(D.months[D.months.length - 1].label) + " \u2013 " + esc(D.months[0].label) + "</span></div></div>" +
+        '<div class="pir-dr-act"><button type="button" class="pir-ibtn is-dark" id="pir-ps-csv" title="Download CSV">' + I.down + '</button><button type="button" class="pir-ibtn is-dark" id="pir-dr-x" title="Close">' + I.x + "</button></div></header>" +
+      '<div class="pir-pfl">' +
+        '<label><span>Month</span><select id="pir-ps-m"><option value="">All Months</option>' + present.map(function (m) { return '<option value="' + m.idx + '"' + (String(m.idx) === PS.month ? " selected" : "") + ">" + esc(m.label) + "</option>"; }).join("") + "</select></label>" +
+        '<label><span>Item</span><input type="search" id="pir-ps-q" placeholder="Item code\u2026"></label>' +
+        '<label><span>Description</span><input type="search" id="pir-ps-d" placeholder="Common name\u2026"></label>' +
+        '<label><span>Supplier</span><input type="search" id="pir-ps-s" placeholder="Supplier name\u2026"></label>' +
+      "</div>" +
+      '<div class="pir-dr-b" id="pir-ps-b"></div>' +
+      '<footer class="pir-dr-f" id="pir-ps-f"></footer>';
+    dr.classList.add("on"); dr.setAttribute("aria-hidden", "false"); $("#pir-scrim").classList.add("on");
+    lock(true);
+    $("#pir-dr-x").addEventListener("click", closeItem);
+    $("#pir-ps-csv").addEventListener("click", purchaseSliderCSV);
+    $("#pir-ps-m").addEventListener("change", function () { PS.month = this.value; renderPurchaseSlider(); });
+    [["#pir-ps-q", "q"], ["#pir-ps-d", "desc"], ["#pir-ps-s", "sup"]].forEach(function (p) {
+      $(p[0]).addEventListener("input", function () { PS[p[1]] = this.value.trim().toLowerCase(); renderPurchaseSlider(); });
+    });
+    renderPurchaseSlider();
+  }
+  function psVisible() {
+    return PS.rows.filter(function (r) {
+      return (!PS.month || String(r.month_bucket) === PS.month) &&
+        (!PS.q || (r.item_code || "").toLowerCase().indexOf(PS.q) >= 0) &&
+        (!PS.desc || ((r.description || "") + " " + (r.item_name || "")).toLowerCase().indexOf(PS.desc) >= 0) &&
+        (!PS.sup || (r.supplier || "").toLowerCase().indexOf(PS.sup) >= 0);
+    });
+  }
+  function renderPurchaseSlider() {
+    var rows = psVisible(), it = {}, order = [], tq = 0, ta = 0;
+    rows.forEach(function (r) {
+      var k = r.item_code || "\u2013";
+      if (!it[k]) { it[k] = { q: 0, a: 0, n: r.description || r.item_name || "", u: r.uom || "", c: 0 }; order.push(k); }
+      it[k].q += +r.qty || 0; it[k].a += +r.amount || 0; it[k].c++; tq += +r.qty || 0; ta += +r.amount || 0;
+    });
+    order.sort(function (a, b) { return it[b].a - it[a].a; });
+    var lines = rows.length ? '<div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Date</th><th>Month</th><th>Voucher</th><th>Supplier</th><th>Item</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>' +
+      rows.slice().reverse().map(function (r) {
+        return "<tr><td>" + dmy(r.posting_date) + "</td><td>" + esc(r.month_label) + "</td><td>" + docLink("Purchase Receipt", r.voucher) + "</td><td>" + esc(r.supplier) + "</td><td>" + docLink("Item", r.item_code) + (r.description ? "<small>" + esc(r.description) + "</small>" : "") +
+          '</td><td class="n">' + inr(r.rate) + '</td><td class="n">' + num(r.qty) + (r.uom ? " <small class=\"u\">" + esc(r.uom) + "</small>" : "") + '</td><td class="n"><b>' + inr(r.amount) + "</b></td></tr>";
+      }).join("") + "</tbody></table></div>" : '<div class="pir-none">No receipts for this filter.</div>';
+    var items = order.length ? '<div class="pir-ptw"><table class="pir-pt"><thead><tr><th>Item</th><th class="n">Receipts</th><th class="n">Qty</th><th class="n">Amount</th><th class="n">Avg Rate</th></tr></thead><tbody>' +
+      order.map(function (k) { var x = it[k]; return "<tr><td>" + docLink("Item", k) + (x.n ? "<small>" + esc(x.n) + "</small>" : "") + '</td><td class="n">' + x.c + '</td><td class="n">' + num(x.q) + (x.u ? ' <small class="u">' + esc(x.u) + "</small>" : "") + '</td><td class="n"><b>' + inr(x.a) + '</b></td><td class="n">' + (x.q ? inr(x.a / x.q) : "\u2013") + "</td></tr>"; }).join("") +
+      '<tr class="tot"><td>Category Total</td><td class="n">' + rows.length + '</td><td class="n">' + num(tq) + '</td><td class="n">' + inr(ta) + '</td><td class="n"></td></tr></tbody></table></div>' : "";
+    $("#pir-ps-b").innerHTML = (items ? sec("Item-wise Total", items) : "") + sec("Purchase Receipt Lines <span class=\"pir-h-note\">" + rows.length + " line" + (rows.length === 1 ? "" : "s") + "</span>", lines);
+    $("#pir-ps-f").innerHTML = "<span>" + (PS.month ? esc(P.data.months[+PS.month].label) : "All 5 months") + " \u00b7 " + rows.length + " line" + (rows.length === 1 ? "" : "s") + "</span><b>Qty " + num(tq) + " \u00b7 " + inr(ta) + "</b>";
+  }
+  function purchaseSliderCSV() {
+    var rows = psVisible(); if (!rows.length) return;
+    var C = [["posting_date", "Date"], ["month_label", "Month"], ["voucher", "Voucher"], ["supplier", "Supplier"], ["item_code", "Item"], ["description", "Description"], ["rate", "Rate"], ["qty", "Qty"], ["uom", "UOM"], ["amount", "Amount"]];
+    var qq = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var out = [C.map(function (c) { return qq(c[1]); }).join(",")];
+    rows.forEach(function (r) { out.push(C.map(function (c) { return qq(r[c[0]]); }).join(",")); });
+    saveCSV(out, "purchase-receipts-" + PS.cat.toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".csv");
+  }
+
+  /* --- Stock / Purchase switch --- */
+  function syncSub() {
+    var sub;
+    if (S.sec === "purchase") {
+      var m = P.data && P.data.months;
+      sub = "Purchase \u00b7 " + S.pg + (m ? " \u00b7 " + m[m.length - 1].label + " \u2013 " + m[0].label : "");
+    } else sub = WAREHOUSE + " \u00b7 Consumption " + rangeLabel();
+    $$(".pir-sub").forEach(function (p) { p.textContent = sub; });
+  }
+  function setSection(sec, first) {
+    if (sec !== "stock" && sec !== "purchase") sec = "stock";
+    var changed = S.sec !== sec; S.sec = sec; store("sec", sec);
+    $$(".pir-sec [data-sec]").forEach(function (b) { var on = b.getAttribute("data-sec") === sec; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    var st = sec === "stock";
+    $("#pir-band").hidden = !st; $("#pir-main").hidden = !st;
+    $("#pir-pband").hidden = st; $("#pir-pmain").hidden = st;
+    root.classList.toggle("is-purchase", !st);
+    syncSub();
+    if (!changed && !first) return;
+    if (st) { if (first || !S.loadedOnce) { S.loadedOnce = true; syncFilters(); load(); } }
+    else { syncPurchaseBand(); if (!P.data || P.data.item_group !== S.pg) loadPurchase(); }
+  }
+  d.addEventListener("click", function (e) {
+    var b = e.target.closest(".pir-sec [data-sec]"); if (!b) return;
+    closeItem(); setSection(b.getAttribute("data-sec"));
+  });
+
+  /* ============ settings (System Manager) ============ */
+  var SV = { users: [], cand: [], pick: null };
+  function openSettings() {
+    var m = $("#pir-set");
+    $(".pir-modal", m).innerHTML =
+      '<div class="pir-mh"><div><h3>Report access</h3><p>Only <b>View</b> access \u2014 this page cannot change any data. System Managers always have full access.</p></div>' +
+        '<button type="button" class="pir-ibtn" id="pir-set-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="pir-mb"><div class="pir-msg" id="pir-set-msg"></div>' +
+        '<div class="pir-add"><div class="pir-pick"><input type="text" id="pir-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="pir-pick-l" id="pir-set-l" hidden></div></div>' +
+        '<button type="button" class="pir-btn" id="pir-set-go">Give view access</button></div>' +
+        '<div class="pir-ulist" id="pir-set-list"><div class="pir-none">Loading\u2026</div></div></div>';
+    m.hidden = false; lock(true);
+    $("#pir-set-x").addEventListener("click", closeSettings);
+    var inp = $("#pir-set-u"), lst = $("#pir-set-l");
+    function pick() {
+      var qs = inp.value.trim().toLowerCase(), have = {};
+      SV.users.forEach(function (u) { have[u.user] = 1; });
+      var list = SV.cand.filter(function (c) { return !have[c.user] && (!qs || (c.full_name + " " + c.user).toLowerCase().indexOf(qs) >= 0); }).slice(0, 8);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-u="' + esc(c.user) + '"><b>' + esc(c.full_name) + "</b><small>" + esc(c.user) + "</small></button>"; }).join("") : '<div class="pir-none">No user found</div>';
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", pick);
+    inp.addEventListener("input", function () { SV.pick = null; pick(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; }, 120); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b) return; e.preventDefault();
+      var c = SV.cand.filter(function (x) { return x.user === b.getAttribute("data-u"); })[0];
+      SV.pick = c ? c.user : null; inp.value = c ? c.full_name + " (" + c.user + ")" : ""; lst.hidden = true;
+    });
+    $("#pir-set-go").addEventListener("click", async function () {
+      if (!SV.pick) { setMsg("Pick a user from the list first."); return; }
+      this.disabled = true; var who = SV.pick;
+      if (await settingsCall({ action: "set", user: who, level: "view" })) { SV.pick = null; inp.value = ""; setMsg("View access given to " + who + ".", true); }
+      this.disabled = false;
+    });
+    $("#pir-set-list").addEventListener("click", async function (e) {
+      var b = e.target.closest("button[data-rm]"); if (!b) return;
+      if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(function () { b.classList.remove("arm"); b.innerHTML = I.x; }, 3000); return; }
+      b.disabled = true;
+      if (await settingsCall({ action: "set", user: b.getAttribute("data-rm"), level: "none" })) setMsg("Access removed for " + b.getAttribute("data-rm") + ".", true);
+    });
+    settingsCall({ action: "list" });
+  }
+  function setMsg(t, ok) { var el = $("#pir-set-msg"); if (!el) return; el.className = "pir-msg" + (t ? " show" + (ok ? " ok" : "") : ""); el.textContent = t || ""; }
+  async function settingsCall(body) {
+    try {
+      var m = await api(body, "POST"); if (!m) return false;
+      SV.users = m.users || []; SV.cand = m.candidates || [];
+      $("#pir-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
+        return '<div class="pir-urow' + (u.enabled ? "" : " off") + '"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + (u.enabled ? "" : " \u00b7 disabled") + "</small></div>" +
+          (u.level === "admin" ? '<span class="tag admin">System Manager</span><span class="rm"></span>' : '<span class="tag">View</span><button type="button" class="rm" data-rm="' + esc(u.user) + '" title="Remove access">' + I.x + "</button>") + "</div>";
+      }).join("") : '<div class="pir-none">No users yet</div>';
+      return true;
+    } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
+  }
+  function closeSettings() { var m = $("#pir-set"); if (m.hidden) return; m.hidden = true; lock(false); }
+  $("#pir-gear").addEventListener("click", openSettings);
+  $("#pir-set").addEventListener("mousedown", function (e) { if (e.target === this) closeSettings(); });
+
+  /* ============ UCM standard header: title + buttons ERP navbar mein ============ */
+  function mergeNav() {
+    var nav = d.querySelector("nav.navbar"), brand = nav && nav.querySelector(".navbar-brand");
+    if (!nav || !brand) return;
+    var t = d.createElement("div"); t.className = "pir-nav-title";
+    t.innerHTML = '<h1>Purchase Intelligence</h1><p class="pir-sub"></p>';
+    brand.insertAdjacentElement("afterend", t);
+    var sw = $("#pir-head .pir-sec"); if (sw) { sw.classList.add("in-nav"); t.insertAdjacentElement("afterend", sw); }
+    var act = $("#pir-act"); act.classList.add("pir-nav-act");
+    var login = nav.querySelector("#website-post-login");
+    if (login && login.parentNode) {
+      var li = d.createElement("li"); li.className = "nav-item pir-nav-li"; li.appendChild(act);
+      login.parentNode.insertBefore(li, login);
+    } else {
+      (brand.parentElement || nav).appendChild(act);
+      act.classList.add("is-end");
+    }
+    $("#pir-head").hidden = true;
+    d.body.classList.add("pir-nav-merged");
+    alignToLogo();
+    w.addEventListener("resize", alignToLogo);
+    w.addEventListener("load", alignToLogo);
+  }
+  /* page ka left margin = logo ka left margin */
+  function alignToLogo() {
+    var brand = d.querySelector("nav.navbar .navbar-brand"); if (!brand) return;
+    var img = brand.querySelector("img, svg") || brand;
+    var left = Math.round(img.getBoundingClientRect().left - root.getBoundingClientRect().left);
+    if (left >= 8 && left <= 120) root.style.setProperty("--pir-pad", left + "px");
+    /* table heading navbar ke neeche chipke (navbar sticky ho to) */
+    var nav = d.querySelector("nav.navbar"), pos = nav ? getComputedStyle(nav).position : "";
+    var stick = nav && (pos === "sticky" || pos === "fixed") ? Math.round(nav.getBoundingClientRect().height) : 0;
+    if (!stick && nav && nav.parentElement && /sticky|fixed/.test(getComputedStyle(nav.parentElement).position)) stick = Math.round(nav.parentElement.getBoundingClientRect().height);
+    root.style.setProperty("--pir-nav-h", stick + "px");
+  }
+
+  /* ============ start ============ */
+  async function boot() {
+    if (!cookie("user_id") || cookie("user_id") === "Guest") { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return; }
+    try { S.acc = await api({ action: "me" }); }
+    catch (e) {
+      $("#pir-gate").innerHTML = '<div class="pir-gate-card"><div class="ico warn">!</div><h3>Could not check access</h3><p>' + esc(e.message) + '</p><p class="s">Check that the <b>ucm_pir</b> Server Script is saved and enabled.</p></div>';
+      return;
+    }
+    if (!S.acc || !S.acc.can_view) {
+      $("#pir-gate").innerHTML = '<div class="pir-gate-card"><div class="ico">' + I.lock + '</div><h3>You do not have access</h3><p>This report is open only to System Managers and users given access by them.</p><p class="s">Signed in as <b>' + esc((S.acc && (S.acc.full_name || S.acc.user)) || "") + "</b></p></div>";
+      return;
+    }
+    if (S.acc.warehouse) WAREHOUSE = S.acc.warehouse;
+    $("#pir-gate").hidden = true; $("#pir-app").hidden = false;
+    $("#pir-gear").hidden = !S.acc.is_admin;
+    mergeNav();
+    setSection(S.sec, true);
+  }
+  boot();
+})();
