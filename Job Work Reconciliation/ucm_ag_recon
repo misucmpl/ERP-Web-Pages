@@ -1,0 +1,925 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_ag_recon
+#   Allow Guest : NO (untick)
+#
+# "UCM AG Job Work Reconciliation" web page ka poora backend (sirf VIEW):
+#   action = "me"         → mera access              (koi bhi logged-in user)
+#   action = "repack"     → Dispatch Entry: 2 Repack Stock Entries + 1 Delivery Note, sab submit (Dispatch Entry access)
+#                           product, qty, vehicle_no, distance
+#   action = "stock"      → Dispatch Entry popup ke liye WH2 - UCM stock (View access)
+#   action = "data"       → report data              (View access)  · customer, from_date, to_date
+#   action = "customers"  → customer search          (View access)  · q
+#   action = "list"       → access wale users        (sirf System Manager)
+#   action = "set"        → access do / hatao        (sirf System Manager) · user, level = view / none
+#
+# Access: System Manager hamesha. Baaki users ko ⚙️ Settings se "UCM AG Recon Viewer" role.
+# Report ki calculation BILKUL wahi hai jo Script Report "UCM AG Job Work Reconciliation" mein hai
+# (neeche "REPORT LOGIC" wala hissa). Report mein logic badle to yahan bhi wahi badlaav karein.
+# ═══════════════════════════════════════════════════════════════════════════
+
+AGR_ROLE = "UCM AG Recon Viewer"
+AGR_ENTRY_ROLE = "UCM AG Dispatch Entry"   # View + Dispatch Entry (Repack submit)
+
+agr_user = frappe.session.user
+if agr_user == "Guest":
+    frappe.throw("Please log in.")
+
+agr_my_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": agr_user, "parenttype": "User", "role": ["in", [AGR_ROLE, AGR_ENTRY_ROLE, "System Manager"]]},
+    pluck="role"
+)
+agr_is_admin = agr_user == "Administrator" or "System Manager" in agr_my_roles
+agr_can_entry = agr_is_admin or AGR_ENTRY_ROLE in agr_my_roles
+agr_can_view = agr_can_entry or AGR_ROLE in agr_my_roles
+
+agr_action = frappe.form_dict.get("action") or "me"
+
+if agr_action == "me":
+    frappe.response["message"] = {
+        "user": agr_user,
+        "full_name": frappe.db.get_value("User", agr_user, "full_name") or agr_user,
+        "can_view": agr_can_view,
+        "can_entry": agr_can_entry,
+        "is_admin": agr_is_admin,
+    }
+
+elif agr_action == "customers":
+    if not agr_can_view:
+        frappe.throw("You do not have access to this report.")
+    q = (frappe.form_dict.get("q") or "").strip()
+    flt = {"disabled": 0}
+    if q:
+        or_flt = [["name", "like", "%" + q + "%"], ["customer_name", "like", "%" + q + "%"]]
+    else:
+        or_flt = None
+    frappe.response["message"] = frappe.get_all(
+        "Customer", filters=flt, or_filters=or_flt, fields=["name", "customer_name"],
+        order_by="customer_name asc", limit_page_length=30
+    )
+
+elif agr_action == "list" or agr_action == "set":
+    if not agr_is_admin:
+        frappe.throw("Only a System Manager can change access to this report.")
+    for rname in [AGR_ROLE, AGR_ENTRY_ROLE]:
+        if not frappe.db.exists("Role", rname):
+            frappe.get_doc({"doctype": "Role", "role_name": rname, "desk_access": 1}).insert(ignore_permissions=True)
+
+    if agr_action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        level = frappe.form_dict.get("level") or "none"
+        if level not in ["view", "entry", "none"]:
+            frappe.throw("Invalid access level.")
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have access.")
+        user_doc = frappe.get_doc("User", target)
+        keep = []
+        for r in user_doc.roles:
+            if r.role != AGR_ROLE and r.role != AGR_ENTRY_ROLE:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        if level == "view" or level == "entry":
+            user_doc.append("roles", {"role": AGR_ROLE})
+        if level == "entry":
+            user_doc.append("roles", {"role": AGR_ENTRY_ROLE})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+        if level == "view" or level == "entry":
+            saved = frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": AGR_ROLE}, pluck="role")
+            if not saved:
+                frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the role "
+                             + AGR_ROLE + " to that Role Profile.")
+
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", [AGR_ROLE, AGR_ENTRY_ROLE, "System Manager"]]},
+                               fields=["parent", "role"])
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+    users = []
+    if user_roles:
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+                                   fields=["name", "full_name", "enabled"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "enabled": info.get("enabled"),
+                          "level": "admin" if "System Manager" in r else ("entry" if AGR_ENTRY_ROLE in r else "view")})
+    users = sorted(users, key=lambda x: (0 if x["level"] == "admin" else (1 if x["level"] == "entry" else 2), (x["full_name"] or "").lower()))
+    candidates = []
+    for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1, "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+elif agr_action == "repack":
+    # ═════ Dispatch Entry → 2 Stock Entries (type Repack), turant Submit ═════
+    # Entry 1: WH2 - UCM se Fender / Chain Set (REPOL ke pcs) → WH1 - UCM mein REPOL (kg)
+    # Entry 2: WH2 - UCM se Fender / Chain Set (MB ke pcs)    → WH1 - UCM mein Master Batch (kg)
+    # Calculation server par dobara hoti hai (AG_JOB_WORK_CALCULATION.xlsx jaisa).
+    if not agr_can_entry:
+        frappe.throw("You do not have access to submit Dispatch Entry. Ask a System Manager for Dispatch Entry access.")
+    rp_product = frappe.form_dict.get("product") or ""
+    rp_qty = frappe.utils.cint(frappe.form_dict.get("qty") or 0)
+    if rp_qty <= 0:
+        frappe.throw("Enter a quantity greater than 0.")
+    rp_vehicle = (frappe.form_dict.get("vehicle_no") or "").strip().upper().replace(" ", "")
+    rp_distance = frappe.utils.cint(frappe.form_dict.get("distance") or 0)
+    if not rp_vehicle:
+        frappe.throw("Enter the vehicle number for the Delivery Note.")
+    if rp_distance <= 0:
+        frappe.throw("Enter the distance (km) for the Delivery Note.")
+    RP_CUSTOMER = "C00001"
+    RP_RATES = {"RM-GR-PP-REPOL-BLACK-AG": 85.13, "RM-MB-PP-BLACK-AG": 77.0}
+    RP_SRC_WH = "WH2 - UCM"
+    RP_TGT_WH = "WH1 - UCM"
+    RP_REPOL = "RM-GR-PP-REPOL-BLACK-AG"
+    RP_MB = "RM-MB-PP-BLACK-AG"
+    if rp_product == "fender":
+        rp_fg = "CUST-FG-REAR FENDER-AG"
+        rp_label = "Fender"
+        rp_parts = [[577.0, 23.0]]
+    elif rp_product == "chain":
+        rp_fg = "CUST-FG-CHAIN SET-AG"
+        rp_label = "Chain Set"
+        rp_parts = [[225.6, 9.4], [236.16, 9.84]]   # Upper, Lower (1 set = 1 Upper + 1 Lower)
+    else:
+        frappe.throw("Select Fender or Chain Set.")
+
+    rp_repol_kg = 0
+    rp_mb_kg = 0
+    rp_repol_pcs = 0
+    rp_mb_pcs = 0
+    rp_total_pcs = 0
+    for pt in rp_parts:
+        wt = pt[0] + pt[1]
+        rk = rp_qty * pt[0] / 1000.0
+        mk = rp_qty * pt[1] / 1000.0
+        rp_repol_kg = rp_repol_kg + rk
+        rp_mb_kg = rp_mb_kg + mk
+        rp_repol_pcs = rp_repol_pcs + int(round(rk * 1000 / wt))
+        rp_mb_pcs = rp_mb_pcs + int(round(mk * 1000 / wt))
+        rp_total_pcs = rp_total_pcs + rp_qty
+    rp_repol_kg_r = int(round(rp_repol_kg))
+    rp_mb_kg_r = int(round(rp_mb_kg))
+
+    rp_avail = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": rp_fg, "warehouse": RP_SRC_WH}, "actual_qty"))
+    if rp_total_pcs > rp_avail:
+        frappe.throw("Not enough stock of " + rp_fg + " in " + RP_SRC_WH + ": need " + str(rp_total_pcs)
+                     + " pcs, available " + str(int(rp_avail)) + " pcs.")
+
+    rp_company = frappe.db.get_single_value("Global Defaults", "default_company") \
+        or frappe.db.get_value("Warehouse", RP_SRC_WH, "company")
+    # Difference Account (Repack ke har row par): Cost of Goods Sold type account allowed nahi hai.
+    # Pehle "Stock Adjustment" type ka account dhoondo; na mile to company ka stock_adjustment_account
+    # (agar wo COGS type ka na ho). Zarurat ho to RP_DIFF_ACCOUNT mein seedha account ka naam likh dein.
+    RP_DIFF_ACCOUNT = "Jobwork Customer Stock - UCM"   # manual Repack entries mein yahi Difference Account
+    RP_COST_CENTER = "Main - UCM"
+    rp_diff_acc = RP_DIFF_ACCOUNT
+    if not rp_diff_acc:
+        rp_accs = frappe.get_all("Account", filters={"company": rp_company, "account_type": "Stock Adjustment",
+                                                     "is_group": 0, "disabled": 0},
+                                 fields=["name"], order_by="name asc", limit_page_length=5)
+        for acc in rp_accs:
+            if not rp_diff_acc or acc.name.lower().startswith("stock adjustment"):
+                rp_diff_acc = acc.name
+    if not rp_diff_acc:
+        comp_acc = frappe.db.get_value("Company", rp_company, "stock_adjustment_account")
+        if comp_acc and frappe.db.get_value("Account", comp_acc, "account_type") != "Cost of Goods Sold":
+            rp_diff_acc = comp_acc
+    if not rp_diff_acc:
+        frappe.throw("No Stock Adjustment account found for " + rp_company
+                     + ". Create / tag an account with Account Type 'Stock Adjustment' (e.g. Stock Adjustment - UCM).")
+    rp_uom = {}
+    for it in frappe.get_all("Item", filters={"name": ["in", [rp_fg, RP_REPOL, RP_MB]]}, fields=["name", "stock_uom"]):
+        rp_uom[it.name] = it.stock_uom
+    rp_remark = ("AG Dispatch Entry (web page) - Vehicle " + rp_vehicle + ", " + str(rp_distance) + " km - " + rp_label + " " + str(rp_qty)
+                 + (" sets" if rp_product == "chain" else " pcs") + " = " + str(rp_total_pcs) + " pcs. By " + agr_user)
+
+    rp_plan = [
+        [rp_repol_pcs, RP_REPOL, rp_repol_kg_r],
+        [rp_mb_pcs, RP_MB, rp_mb_kg_r],
+    ]
+    rp_docs = []
+    for pl in rp_plan:
+        if pl[0] <= 0 or pl[2] <= 0:
+            continue
+        se = frappe.get_doc({
+            "doctype": "Stock Entry",
+            "stock_entry_type": "Repack",
+            "purpose": "Repack",
+            "company": rp_company,
+            "posting_date": frappe.utils.nowdate(),
+            "remarks": rp_remark,
+            "items": [
+                {"s_warehouse": RP_SRC_WH, "item_code": rp_fg, "qty": pl[0],
+                 "uom": rp_uom.get(rp_fg), "stock_uom": rp_uom.get(rp_fg), "conversion_factor": 1,
+                 "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
+                {"t_warehouse": RP_TGT_WH, "item_code": pl[1], "qty": pl[2],
+                 "uom": rp_uom.get(pl[1]), "stock_uom": rp_uom.get(pl[1]), "conversion_factor": 1,
+                 "is_finished_item": 1, "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
+            ],
+        })
+        se.flags.ignore_permissions = True
+        se.insert()
+        rp_docs.append(se)
+    # Dono Repack submit. Koi bhi step fail ho to poori request rollback ho jaati hai (kuch nahi banta).
+    rp_out = []
+    for se in rp_docs:
+        se.flags.ignore_permissions = True
+        se.submit()
+        rp_out.append({"name": se.name, "fg_pcs": se.items[0].qty, "rm_item": se.items[1].item_code, "rm_qty": se.items[1].qty})
+
+    # ── Delivery Note (AG ko challan): REPOL + MB poore kg, fixed rate, WH1 - UCM se ──
+    dn_meta = frappe.get_meta("Delivery Note")
+    dn_items = []
+    for pl in rp_plan:
+        if pl[2] > 0:
+            dn_items.append({"item_code": pl[1], "qty": pl[2], "rate": RP_RATES.get(pl[1]),
+                             "uom": rp_uom.get(pl[1]), "stock_uom": rp_uom.get(pl[1]), "conversion_factor": 1,
+                             "warehouse": RP_TGT_WH})
+    dn_dict = {
+        "doctype": "Delivery Note",
+        "customer": RP_CUSTOMER,
+        "company": rp_company,
+        "posting_date": frappe.utils.nowdate(),
+        "set_warehouse": RP_TGT_WH,
+        "items": dn_items,
+    }
+    # More Info / Transporter: vehicle number aur distance (jo field site par ho, usme)
+    for fname in ["vehicle_no", "custom_vehicle_no"]:
+        if dn_meta.has_field(fname):
+            dn_dict[fname] = rp_vehicle
+            break
+    for fname in ["distance", "custom_distance"]:
+        if dn_meta.has_field(fname):
+            dn_dict[fname] = rp_distance
+            break
+    rp_se_names = []
+    for x in rp_out:
+        rp_se_names.append(x["name"])
+    # Site ke mandatory custom fields (label se dhoondte hain, naam kuch bhi ho):
+    #   Order By = "Others", Sales Order Type = "Job Work"
+    RP_DN_FIXED = {"order by": "Others", "orderby": "Others", "sales order type": "Job Work"}
+    for df in dn_meta.fields:
+        lbl = (df.label or "").strip().lower()
+        if lbl in RP_DN_FIXED and df.fieldname not in dn_dict:
+            dn_dict[df.fieldname] = RP_DN_FIXED[lbl]
+    for fname in ["custom_order_by", "order_by"]:
+        if dn_meta.has_field(fname) and fname not in dn_dict:
+            dn_dict[fname] = "Others"
+            break
+    for fname in ["custom_sales_order_type", "sales_order_type"]:
+        if dn_meta.has_field(fname) and fname not in dn_dict:
+            dn_dict[fname] = "Job Work"
+            break
+    if dn_meta.has_field("remarks"):
+        dn_dict["remarks"] = rp_remark + " | Repack: " + ", ".join(rp_se_names)
+    dn = frappe.get_doc(dn_dict)
+    dn.flags.ignore_permissions = True
+    dn.insert()
+    dn.flags.ignore_permissions = True
+    dn.submit()
+    dn_lines = []
+    for it in dn.items:
+        dn_lines.append({"item_code": it.item_code, "item_name": it.item_name, "qty": it.qty, "uom": it.uom,
+                         "rate": it.rate, "amount": it.amount})
+    rp_dn = {
+        "name": dn.name,
+        "customer": dn.customer,
+        "customer_name": dn.customer_name,
+        "posting_date": str(dn.posting_date),
+        "items": dn_lines,
+        "net_total": dn.net_total,
+        "total_taxes": dn.total_taxes_and_charges,
+        "grand_total": dn.grand_total,
+        "vehicle_no": rp_vehicle,
+        "distance": rp_distance,
+        "status": dn.status,
+    }
+    frappe.response["message"] = {
+        "entries": rp_out,
+        "product": rp_label,
+        "qty": rp_qty,
+        "total_pcs": rp_total_pcs,
+        "available_before": rp_avail,
+        "delivery_note": rp_dn,
+    }
+
+elif agr_action == "stock":
+    # Dispatch Entry popup: Fender / Chain Set ka WH2 - UCM mein abhi ka stock (Bin se)
+    if not agr_can_view:
+        frappe.throw("You do not have access to this report.")
+    stock_wh = "WH2 - UCM"
+    stock_items = ["CUST-FG-REAR FENDER-AG", "CUST-FG-CHAIN SET-AG"]
+    stock_out = {}
+    for it in stock_items:
+        stock_out[it] = 0
+    for b in frappe.get_all("Bin", filters={"item_code": ["in", stock_items], "warehouse": stock_wh},
+                            fields=["item_code", "actual_qty"]):
+        stock_out[b.item_code] = stock_out.get(b.item_code, 0) + frappe.utils.flt(b.actual_qty)
+    frappe.response["message"] = {"warehouse": stock_wh, "stock": stock_out}
+
+elif agr_action == "data":
+    if not agr_can_view:
+        frappe.throw("You do not have access to this report.")
+    filters = {
+        "customer": frappe.form_dict.get("customer") or "C00001",
+        "from_date": frappe.form_dict.get("from_date") or frappe.utils.get_first_day(frappe.utils.nowdate()),
+        "to_date": frappe.form_dict.get("to_date") or frappe.utils.nowdate(),
+    }
+
+    # ═════════════════ REPORT LOGIC (Script Report se, as-is) ═════════════════
+    customer = filters.get("customer")
+    from_date = filters.get("from_date")
+    to_date = filters.get("to_date")
+    company = filters.get("company")
+
+    # Supplier for raw material receipt (A.G. Industries as Supplier)
+    supplier = filters.get("supplier") or "S00173"
+
+    # GR (raw granule) material can be received under any of these item
+    # codes - they represent the same physical material ("REPOL"). Similarly,
+    # the Master Batch material can be received under either of two item codes.
+    # A single receipt always pairs exactly one GR variant with one MB variant.
+    gr_items = ["RM-GR-B120MA-CP-REL", "RM-GR-3120-CP", "RM-GR-4080MA-CP"]
+    mb_items = ["RM-MB-PP-BLACK-AG", "RM-MB-PP-BLACK"]
+    raw_material_items = gr_items + mb_items
+
+    # Item codes tracked on the Delivery Note side (dispatch out of the job-work
+    # warehouse) and used for the running stock-balance calc.
+    dn_items = ["RM-GR-PP-REPOL-BLACK-AG", "RM-MB-PP-BLACK-AG"]
+
+    # The item code(s) used when RECEIVING (Purchase Receipt) can differ from the
+    # item code used for opening balance / dispatch. Both GR receiving codes map
+    # to the single GR balance item, and both MB receiving codes map to the
+    # single MB balance item.
+    receiving_to_balance_item = {
+        "RM-GR-B120MA-CP-REL": "RM-GR-PP-REPOL-BLACK-AG",
+        "RM-GR-3120-CP": "RM-GR-PP-REPOL-BLACK-AG",
+        "RM-GR-4080MA-CP": "RM-GR-PP-REPOL-BLACK-AG",
+        "RM-MB-PP-BLACK-AG": "RM-MB-PP-BLACK-AG",
+        "RM-MB-PP-BLACK": "RM-MB-PP-BLACK-AG",
+    }
+
+    # ---------- FIXED ANCHOR: closing stock as of 31-Jul-2026 ----------
+    # This is the ONLY hardcoded balance in the whole report. It represents the
+    # closing stock as of 31-Jul-2026 (i.e. the opening for Aug-2026 onward).
+    # Every subsequent month's opening/closing is derived automatically from
+    # this single anchor plus actual receipts/dispatches - we never hardcode a
+    # new opening value again.
+    ANCHOR_DATE = "2026-08-01"
+
+    opening_balance = {
+        "RM-GR-PP-REPOL-BLACK-AG": 8476.07,
+        "RM-MB-PP-BLACK-AG": 2029.82,
+    }
+
+    balance_display_names = {
+        "RM-GR-PP-REPOL-BLACK-AG": "REPOL",
+        "RM-MB-PP-BLACK-AG": "Master Batch",
+    }
+
+
+    # Opening balance for the SELECTED report period (CARRY FORWARD):
+    # - from_date on/before ANCHOR_DATE (Aug-2026): use the fixed anchor value.
+    # - Every later month: opening = Anchor
+    #                              + Purchase Receipts  (ANCHOR_DATE .. from_date-1)
+    #                              - Delivery Notes     (ANCHOR_DATE .. from_date-1)
+    #   using EXACTLY the same rules as the report body (same supplier, same
+    #   GR+MB pairing, same warehouse, same customer/company filters, same item
+    #   code mapping). So last month's closing always equals this month's opening.
+    opening_of_month = {}
+    opening_source_label = {}
+    carry_received = {}
+    carry_dispatched = {}
+
+    use_carry_fwd = bool(from_date) and frappe.utils.getdate(from_date) > frappe.utils.getdate(ANCHOR_DATE)
+    carry_to_date = frappe.utils.add_days(from_date, -1) if use_carry_fwd else None
+    carry_to_display = frappe.utils.formatdate(carry_to_date, "dd-mm-yyyy") if use_carry_fwd else ""
+    anchor_closing_date_display = frappe.utils.add_days(ANCHOR_DATE, -1)  # 31-Jul-2026
+
+    if use_carry_fwd:
+        # ---- Received between anchor and the day before from_date ----
+        cf_pr_conditions = (
+            " AND pr.supplier = %(supplier)s"
+            " AND pr.posting_date >= %(cf_from)s"
+            " AND pr.posting_date <= %(cf_to)s"
+            " AND pri.item_code in %(items)s"
+            " AND pri.warehouse = %(warehouse)s"
+        )
+        cf_pr_values = {
+            "supplier": supplier,
+            "cf_from": ANCHOR_DATE,
+            "cf_to": carry_to_date,
+            "items": tuple(raw_material_items),
+            "warehouse": "WH1 - UCM",
+            "mb_items": tuple(mb_items),
+            "gr_items": tuple(gr_items),
+        }
+        if company:
+            cf_pr_conditions += " AND pr.company = %(company)s"
+            cf_pr_values["company"] = company
+
+        cf_qualifying_rows = frappe.db.sql(
+            f"""
+            SELECT pri.parent
+            FROM `tabPurchase Receipt Item` pri
+            INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
+            WHERE pr.docstatus = 1 {cf_pr_conditions}
+            GROUP BY pri.parent
+            HAVING
+                SUM(CASE WHEN pri.item_code IN %(mb_items)s THEN 1 ELSE 0 END) > 0
+                AND SUM(CASE WHEN pri.item_code IN %(gr_items)s THEN 1 ELSE 0 END) > 0
+            """,
+            cf_pr_values,
+            as_dict=1,
+        )
+        cf_names = []
+        for r in cf_qualifying_rows:
+            cf_names.append(r.parent)
+
+        if cf_names:
+            cf_pr_values["names"] = tuple(cf_names)
+            cf_pr_rows = frappe.db.sql(
+                f"""
+                SELECT pri.item_code, SUM(pri.qty) AS qty
+                FROM `tabPurchase Receipt` pr
+                INNER JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name
+                WHERE pr.docstatus = 1 {cf_pr_conditions} AND pr.name in %(names)s
+                GROUP BY pri.item_code
+                """,
+                cf_pr_values,
+                as_dict=1,
+            )
+            for row in cf_pr_rows:
+                mapped_item = receiving_to_balance_item.get(row.item_code)
+                if mapped_item:
+                    carry_received[mapped_item] = carry_received.get(mapped_item, 0) + frappe.utils.flt(row.qty)
+
+        # ---- Dispatched between anchor and the day before from_date ----
+        cf_dn_conditions = (
+            " AND dni.item_code in %(items)s"
+            " AND dn.posting_date >= %(cf_from)s"
+            " AND dn.posting_date <= %(cf_to)s"
+        )
+        cf_dn_values = {
+            "items": tuple(dn_items),
+            "cf_from": ANCHOR_DATE,
+            "cf_to": carry_to_date,
+        }
+        if customer:
+            cf_dn_conditions += " AND dn.customer = %(customer)s"
+            cf_dn_values["customer"] = customer
+        if company:
+            cf_dn_conditions += " AND dn.company = %(company)s"
+            cf_dn_values["company"] = company
+
+        cf_dn_rows = frappe.db.sql(
+            f"""
+            SELECT dni.item_code, SUM(dni.qty) AS qty
+            FROM `tabDelivery Note` dn
+            INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+            WHERE dn.docstatus = 1 {cf_dn_conditions}
+            GROUP BY dni.item_code
+            """,
+            cf_dn_values,
+            as_dict=1,
+        )
+        for row in cf_dn_rows:
+            carry_dispatched[row.item_code] = carry_dispatched.get(row.item_code, 0) + frappe.utils.flt(row.qty)
+
+    for bal_item in opening_balance:
+        if use_carry_fwd:
+            cf_in = carry_received.get(bal_item, 0)
+            cf_out = carry_dispatched.get(bal_item, 0)
+            opening_of_month[bal_item] = opening_balance[bal_item] + cf_in - cf_out
+            opening_source_label[bal_item] = (
+                f"Carry Forward up to {carry_to_display}: "
+                f"Anchor {opening_balance[bal_item]} + Received {cf_in} - Dispatched {cf_out}"
+            )
+        else:
+            opening_of_month[bal_item] = opening_balance[bal_item]
+            opening_source_label[bal_item] = "Anchor Closing Balance (31-07-2026)"
+
+    columns = [
+        {"label": "Section", "fieldname": "section", "fieldtype": "Data", "width": 400},
+        {"label": "Qty", "fieldname": "qty", "fieldtype": "Float", "width": 200},
+    ]
+
+    result = []
+
+    # Collects every voucher-level record (Purchase Receipt / Delivery Note /
+    # Sales Invoice line items). These are NOT added to `result` anymore -
+    # they are only sent to the browser as hidden JSON for the slide-in panel.
+    detail_records = []
+
+
+    def ag_serialize(row, extra=None):
+        d = dict(row)
+        if d.get("posting_date"):
+            d["posting_date"] = str(d["posting_date"])
+        for key in ("qty", "rate", "amount", "opening_qty", "received_qty", "dispatched_qty", "balance_qty"):
+            if d.get(key) is not None:
+                d[key] = frappe.utils.flt(d[key])
+        if extra:
+            d.update(extra)
+        return d
+
+
+    # ---------- BLOCK 0: Opening Balance (start of selected report period) ----------
+    result.append({"section": "OPENING BALANCE (Raw Materials)", "qty": None})  # No qty for header
+
+    grand_opening_qty = 0
+    for bal_item in opening_balance:
+        display_name = balance_display_names.get(bal_item, bal_item)
+        result.append({
+            "section": display_name,
+            "item_code": bal_item,
+            "qty": opening_of_month[bal_item],
+            "category": "opening",
+            "source": "Opening Balance",
+        })
+        grand_opening_qty += opening_of_month[bal_item]
+
+        # Breakdown record for the "OPENING BALANCE" slide-in panel: shows exactly
+        # where this figure came from - either the fixed Aug anchor, or the actual
+        # Stock Ledger closing balance for WH1 - UCM as of the day before from_date.
+        detail_records.append(ag_serialize({
+            "posting_date": carry_to_date or anchor_closing_date_display,
+            "voucher": opening_source_label[bal_item],
+            "item_code": bal_item,
+            "warehouse": "WH1 - UCM" if use_carry_fwd else "",
+            "qty": opening_of_month[bal_item],
+            "amount": None,
+        }, {"category": "opening_breakdown", "source": display_name}))
+
+    result.append({"section": "Total Opening Stock (all items)", "qty": grand_opening_qty})
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- BLOCK 1: Material Received (Purchase Receipt) ----------
+    result.append({"section": "Total In Ward", "qty": None})
+
+    pr_conditions = " AND pr.supplier = %(supplier)s"
+    pr_values = {"supplier": supplier}
+
+    if from_date:
+        pr_conditions += " AND pr.posting_date >= %(from_date)s"
+        pr_values["from_date"] = from_date
+
+    if to_date:
+        pr_conditions += " AND pr.posting_date <= %(to_date)s"
+        pr_values["to_date"] = to_date
+
+    if company:
+        pr_conditions += " AND pr.company = %(company)s"
+        pr_values["company"] = company
+
+    if raw_material_items:
+        pr_conditions += " AND pri.item_code in %(items)s"
+        pr_values["items"] = tuple(raw_material_items)
+
+    pr_conditions += " AND pri.warehouse = %(warehouse)s"
+    pr_values["warehouse"] = "WH1 - UCM"
+
+    # Step 1: find only those Purchase Receipts that pair a Master Batch item
+    # (RM-MB-PP-BLACK-AG or RM-MB-PP-BLACK) with ANY GR variant
+    # (RM-GR-B120MA-CP-REL, RM-GR-3120-CP or RM-GR-4080MA-CP). We no longer require an exact
+    # distinct-item count, since both the GR and MB item codes can vary between
+    # receipts but the pairing rule (one GR variant + one MB variant) still holds.
+    qualify_values = dict(pr_values)
+    qualify_values["mb_items"] = tuple(mb_items)
+    qualify_values["gr_items"] = tuple(gr_items)
+
+    qualifying_query = f"""
+        SELECT pri.parent
+        FROM `tabPurchase Receipt Item` pri
+        INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
+        WHERE pr.docstatus = 1 {pr_conditions}
+        GROUP BY pri.parent
+        HAVING
+            SUM(CASE WHEN pri.item_code IN %(mb_items)s THEN 1 ELSE 0 END) > 0
+            AND SUM(CASE WHEN pri.item_code IN %(gr_items)s THEN 1 ELSE 0 END) > 0
+    """
+
+    qualifying_rows = frappe.db.sql(qualifying_query, qualify_values, as_dict=1)
+    qualifying_names = [r.parent for r in qualifying_rows]
+
+    # Step 2: pull all line items only from those qualifying receipts
+    pr_rows = []
+    if qualifying_names:
+        pr_values["names"] = tuple(qualifying_names)
+        pr_query = f"""
+            SELECT
+                pr.posting_date,
+                pr.name as voucher,
+                pri.item_code,
+                pri.warehouse,
+                pri.uom,
+                pri.qty,
+                pri.rate,
+                pri.amount,
+                pr.status
+            FROM `tabPurchase Receipt` pr
+            INNER JOIN `tabPurchase Receipt Item` pri ON pri.parent = pr.name
+            WHERE pr.docstatus = 1 {pr_conditions} AND pr.name in %(names)s
+            ORDER BY pr.posting_date ASC, pr.name ASC
+        """
+        pr_rows = frappe.db.sql(pr_query, pr_values, as_dict=1)
+
+    for row in pr_rows:
+        detail_records.append(ag_serialize(row, {"category": "received", "source": "Purchase Receipt"}))
+
+    pr_item_totals = {}
+    pr_total_qty = 0
+    for row in pr_rows:
+        pr_item_totals[row.item_code] = pr_item_totals.get(row.item_code, 0) + row.qty
+        pr_total_qty += row.qty
+
+    # All GR variants roll up into a single "REPOL" line, and both MB variants
+    # roll up into a single "Master Batch" line - a given receipt will only ever
+    # contain one GR variant and one MB variant, but we sum defensively either way.
+    pr_display_names = {
+        "RM-GR-B120MA-CP-REL": "REPOL",
+        "RM-GR-3120-CP": "REPOL",
+        "RM-GR-4080MA-CP": "REPOL",
+        "RM-MB-PP-BLACK-AG": "Master Batch",
+        "RM-MB-PP-BLACK": "Master Batch",
+    }
+    pr_combined_totals = {}
+    for item_code, qty in pr_item_totals.items():
+        label = pr_display_names.get(item_code, item_code)
+        pr_combined_totals[label] = pr_combined_totals.get(label, 0) + qty
+
+    for label in ["REPOL", "Master Batch"]:
+        result.append({"section": label, "qty": pr_combined_totals.get(label, 0)})
+
+    result.append({"section": "Total", "qty": pr_total_qty})
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- BLOCK 5: MANUFACTURING (Finished Goods IN qty via Stock Entry - WH2 - UCM) ----------
+    result.append({"section": "MANUFACTURING", "qty": None})  # No qty for header
+
+    MFG_WAREHOUSE = "WH2 - UCM"
+    # (item_code, display label, click_key used by the JS slide-in panel)
+    mfg_items = [
+    ("CUST-FG-CHAIN SET-AG", "Chain Set Total In Ward", "MFG_CHAIN_SET"),
+        ("CUST-FG-REAR FENDER-AG", "Fender Total In Ward", "MFG_FENDER"),
+    
+    ]
+
+    # Only IN movements: Stock Ledger Entries of Stock Entries with a positive
+    # qty into WH2 - UCM (Manufacture, Material Transfer in...).
+    # Stock Entry Types "Material Receipt" and "Material Issue" are excluded.
+    mfg_conditions = (
+        " AND sle.voucher_type = 'Stock Entry' AND sle.actual_qty > 0"
+        " AND sle.is_cancelled = 0"
+        " AND sle.warehouse = %(warehouse)s AND sle.item_code = %(item_code)s"
+        " AND se.stock_entry_type NOT IN ('Material Receipt', 'Material Issue')"
+    )
+    mfg_base_values = {"warehouse": MFG_WAREHOUSE}
+
+    if from_date:
+        mfg_conditions += " AND sle.posting_date >= %(from_date)s"
+        mfg_base_values["from_date"] = from_date
+
+    if to_date:
+        mfg_conditions += " AND sle.posting_date <= %(to_date)s"
+        mfg_base_values["to_date"] = to_date
+
+    if company:
+        mfg_conditions += " AND sle.company = %(company)s"
+        mfg_base_values["company"] = company
+
+    for mfg_item_code, mfg_label, mfg_click_key in mfg_items:
+        mfg_values = dict(mfg_base_values)
+        mfg_values["item_code"] = mfg_item_code
+
+        mfg_rows = frappe.db.sql(f"""
+            SELECT
+                sle.posting_date,
+                sle.voucher_no as voucher,
+                se.stock_entry_type,
+                sle.item_code,
+                sle.warehouse,
+                sle.actual_qty as qty
+            FROM `tabStock Ledger Entry` sle
+            INNER JOIN `tabStock Entry` se ON se.name = sle.voucher_no
+            WHERE 1 = 1 {mfg_conditions}
+            ORDER BY sle.posting_date ASC, sle.posting_time ASC, sle.creation ASC
+        """, mfg_values, as_dict=1)
+
+        mfg_total_qty = 0
+        for row in mfg_rows:
+            mfg_total_qty += frappe.utils.flt(row.qty)
+            detail_records.append(ag_serialize(row, {"category": "mfg_received", "source": "Stock Entry", "mfg_key": mfg_click_key}))
+
+        result.append({
+            "section": mfg_label,
+            "click_key": mfg_click_key,
+            "item_code": mfg_item_code,
+            "qty": mfg_total_qty,
+        })
+
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- BLOCK 2: Material Dispatched (Sales Invoice) - MOVED RIGHT AFTER TOTAL IN WARD ----------
+    result.append({"section": "DISPATCHED In PCS/SET", "qty": None})
+
+    si_conditions = ""
+    si_values = {}
+
+    if customer:
+        si_conditions += " AND si.customer = %(customer)s"
+        si_values["customer"] = customer
+
+    if from_date:
+        si_conditions += " AND si.posting_date >= %(from_date)s"
+        si_values["from_date"] = from_date
+
+    if to_date:
+        si_conditions += " AND si.posting_date <= %(to_date)s"
+        si_values["to_date"] = to_date
+
+    if company:
+        si_conditions += " AND si.company = %(company)s"
+        si_values["company"] = company
+
+    si_query = f"""
+        SELECT
+            si.posting_date,
+            si.name as voucher,
+            sii.item_code,
+            sii.warehouse,
+            sii.uom,
+            sii.qty,
+            sii.rate,
+            sii.amount,
+            si.status
+        FROM `tabSales Invoice` si
+        INNER JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+        WHERE si.docstatus = 1 {si_conditions}
+        ORDER BY si.posting_date ASC, si.name ASC
+    """
+
+    si_rows = frappe.db.sql(si_query, si_values, as_dict=1)
+
+    for row in si_rows:
+        detail_records.append(ag_serialize(row, {"category": "dispatched", "source": "Sales Invoice"}))
+
+    si_item_totals = {}
+    si_total_qty = 0
+    for row in si_rows:
+        si_item_totals[row.item_code] = si_item_totals.get(row.item_code, 0) + row.qty
+        si_total_qty += row.qty
+
+    # Mapping for item display names - ONLY for Sales Invoice
+    item_display_names_si = {
+        "CHAIN CASE LOWER (SF-01-AATA-000006)": "CHAIN SET",
+        "CHAIN CASE UPPER (SF-01-AATA-000005)": "CHAIN SET",  # UPPER + LOWER are summed into CHAIN SET
+        "REAR FENDER -JW-AAEE-00004": "REAR FENDER",  # Changed from full name
+    }
+
+    # Roll items up by display name so CHAIN CASE UPPER + CHAIN CASE LOWER
+    # are shown as one combined CHAIN SET line.
+    si_display_totals = {}
+    for item_code in si_item_totals:
+        display_name = item_display_names_si.get(item_code, item_code)
+        if display_name:  # Skip if None
+            si_display_totals[display_name] = si_display_totals.get(display_name, 0) + si_item_totals[item_code]
+
+    for display_name in si_display_totals:
+        result.append({"section": display_name, "qty": si_display_totals[display_name]})
+
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- PRECOMPUTE: Delivery Note dispatch data (needed for stock balance formula) ----------
+    dn_conditions = " AND dni.item_code in %(items)s"
+    dn_values = {"items": tuple(dn_items)}
+
+    if customer:
+        dn_conditions += " AND dn.customer = %(customer)s"
+        dn_values["customer"] = customer
+
+    if from_date:
+        dn_conditions += " AND dn.posting_date >= %(from_date)s"
+        dn_values["from_date"] = from_date
+
+    if to_date:
+        dn_conditions += " AND dn.posting_date <= %(to_date)s"
+        dn_values["to_date"] = to_date
+
+    if company:
+        dn_conditions += " AND dn.company = %(company)s"
+        dn_values["company"] = company
+
+    dn_query = f"""
+        SELECT
+            dn.posting_date,
+            dn.name as voucher,
+            dni.item_code,
+            dni.warehouse,
+            dni.uom,
+            dni.qty,
+            dni.rate,
+            dni.amount,
+            dn.status
+        FROM `tabDelivery Note` dn
+        INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+        WHERE dn.docstatus = 1 {dn_conditions}
+        ORDER BY dn.posting_date ASC, dn.name ASC
+    """
+
+    dn_rows = frappe.db.sql(dn_query, dn_values, as_dict=1)
+
+    for row in dn_rows:
+        detail_records.append(ag_serialize(row, {"category": "dispatched", "source": "Delivery Note"}))
+
+    dn_item_totals = {}
+    dn_total_qty = 0
+    for row in dn_rows:
+        dn_item_totals[row.item_code] = dn_item_totals.get(row.item_code, 0) + row.qty
+        dn_total_qty += row.qty
+
+    # ---------- PRECOMPUTE: final stock balance per item for the selected period ----------
+    # Starts from opening_of_month (already computed above from the fixed anchor)
+    # and rolls forward by the receipts/dispatches that fall inside from_date..to_date.
+
+    received_mapped = {}
+    for recv_item, bal_item in receiving_to_balance_item.items():
+        received_mapped[bal_item] = received_mapped.get(bal_item, 0) + pr_item_totals.get(recv_item, 0)
+
+    balance_rows = []
+    grand_balance_qty = 0
+
+    for bal_item in opening_balance:
+        opening_qty = opening_of_month[bal_item]
+        received_qty = received_mapped.get(bal_item, 0)
+        dispatched_qty = dn_item_totals.get(bal_item, 0)
+        balance_qty = opening_qty + received_qty - dispatched_qty
+        grand_balance_qty += balance_qty
+
+        balance_rows.append({
+            "section": bal_item,
+            "item_code": bal_item,
+            "opening_qty": opening_qty,
+            "received_qty": received_qty,
+            "dispatched_qty": dispatched_qty,
+            "balance_qty": balance_qty,
+            "qty": balance_qty,
+            "category": "balance",
+            "source": "Stock Reconciliation",
+        })
+
+    # ---------- BLOCK 3: Current Stock Balance (computed, not live Bin qty) ----------
+    result.append({"section": "CURRENT STOCK BALANCE (Raw Materials)", "qty": None})  # No qty for header
+
+    for row in balance_rows:
+        display_name = balance_display_names.get(row["item_code"], row["item_code"])
+        result.append({
+            "section": display_name,
+            "item_code": row["item_code"],
+            "qty": row["balance_qty"],
+            "category": "stock",
+            "source": "Stock Balance",
+        })
+
+    result.append({"section": "Total Current Stock (all items)", "qty": grand_balance_qty})
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- BLOCK 4: Material Dispatched (Delivery Note) ----------
+    result.append({"section": "MATERIAL DISPATCHED (Delivery Challan)", "qty": None})
+
+    for item_code in dn_items:
+        display_name = balance_display_names.get(item_code, item_code)
+        result.append({"section": display_name, "qty": dn_item_totals.get(item_code, 0)})
+
+    result.append({"section": "Total Dispatched Qty (all items)", "qty": dn_total_qty})
+    result.append({"section": ""})  # Empty row - no qty
+
+    # ---------- Embed full detail records on the first result row (read by JS from report data) ----------
+
+    # ═════════════════ REPORT LOGIC END ═════════════════
+    customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
+    frappe.response["message"] = {
+        "rows": result,
+        "detail": detail_records,
+        "customer": customer,
+        "customer_name": customer_name,
+        "from_date": str(from_date),
+        "to_date": str(to_date),
+    }
+
+else:
+    frappe.throw("Unknown action.")
