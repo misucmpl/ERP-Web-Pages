@@ -3110,3 +3110,13 @@ body.ucmw-nav-merged nav.navbar .navbar-brand img, body.ucmw-nav-merged nav.navb
   font-size: 10.5px; color: #94a3b8; letter-spacing: .04em;
 }
 @media (max-width: 480px) { .ucmw-gate-card { padding: 28px 18px 18px; } .ucmw-gate-title { font-size: 18px; } }
+
+/* ═══════════ PART I — Orders row: chhota print icon (Export CSV) ═══════════ */
+#ucm-report .ucmw-src-row .ucmw-icon-btn {
+  flex: 0 0 auto; width: 26px; height: 26px; margin-left: 8px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 7px; border: 1px solid #e4d6f3; background: #fff; color: #6d32a8;
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+#ucm-report .ucmw-src-row .ucmw-icon-btn:hover { background: #f8f3fd; border-color: #cdb3ea; }
+#ucm-report .ucmw-src-row .ucmw-icon-btn:focus-visible { outline: 2px solid #6d32a8; outline-offset: 1px; }
