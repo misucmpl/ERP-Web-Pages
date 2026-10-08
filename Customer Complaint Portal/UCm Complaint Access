@@ -1,0 +1,226 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_complaint_access
+#   Allow Guest : NO (untick)
+#
+# Complaint Dashboard ka access + comments API.
+# Access User par roles ke roop mein save hota hai:
+#   "UCM Complaint Viewer"   → View      : sirf dashboard dekh sakta hai
+#   "UCM Complaint Logger"   → Log       : (Sales) complaint log + comment + close
+#   "UCM Complaint Quality"  → Quality   : quality reply + comment + close
+#   Logger + Quality dono    → Full      : sab kuch
+#   System Manager           → hamesha Full + ⚙️ Settings
+# (Roles na hon to ye script khud bana deta hai.)
+#
+# action = "me"        → mera access          (koi bhi logged-in user)
+# action = "comments"  → complaint ke comments (View ya upar)      · name
+# action = "comment"   → comment add karo      (Log / Quality / Full) · name, text
+# action = "list"      → users + access        (sirf System Manager)
+# action = "set"       → access badlo          (sirf System Manager) · user, level
+#                         level = view / log / quality / full / none
+# ═══════════════════════════════════════════════════════════════════════════
+
+DOCTYPE = "Customer Complaint"
+VIEW_ROLE = "UCM Complaint Viewer"
+LOG_ROLE = "UCM Complaint Logger"
+QUALITY_ROLE = "UCM Complaint Quality"
+PAGE_ROLES = [VIEW_ROLE, LOG_ROLE, QUALITY_ROLE]
+
+session_user = frappe.session.user
+if session_user == "Guest":
+    frappe.throw("Please log in.")
+
+my_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": session_user, "parenttype": "User", "role": ["in", PAGE_ROLES + ["System Manager"]]},
+    pluck="role"
+)
+is_admin = session_user == "Administrator" or "System Manager" in my_roles
+can_log = is_admin or LOG_ROLE in my_roles
+can_reply = is_admin or QUALITY_ROLE in my_roles
+can_view = is_admin or len(my_roles) > 0
+can_close = can_log or can_reply
+can_comment = can_log or can_reply
+
+if is_admin:
+    my_level = "admin"
+elif can_log and can_reply:
+    my_level = "full"
+elif can_log:
+    my_level = "log"
+elif can_reply:
+    my_level = "quality"
+elif can_view:
+    my_level = "view"
+else:
+    my_level = "none"
+
+action = frappe.form_dict.get("action") or "me"
+
+
+if action == "me":
+    full_name = frappe.db.get_value("User", session_user, "full_name") or session_user
+    frappe.response["message"] = {
+        "user": session_user, "full_name": full_name, "level": my_level,
+        "can_view": can_view, "can_log": can_log, "can_reply": can_reply,
+        "can_close": can_close, "can_comment": can_comment, "is_admin": is_admin,
+    }
+
+elif action == "comments" or action == "comment":
+    if not can_view:
+        frappe.throw("You do not have access to complaints.")
+    complaint = (frappe.form_dict.get("name") or "").strip()
+    if not complaint or not frappe.db.exists(DOCTYPE, complaint):
+        frappe.throw("Complaint not found.")
+
+    if action == "comment":
+        if not can_comment:
+            frappe.throw("You can only view complaints. Ask a System Manager for Log or Quality access to comment.")
+        text = (frappe.form_dict.get("text") or "").strip()
+        if len(text) < 2:
+            frappe.throw("Write a comment first.")
+        if len(text) > 2000:
+            text = text[:2000]
+        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        full_name = frappe.db.get_value("User", session_user, "full_name") or session_user
+        frappe.get_doc({
+            "doctype": "Comment",
+            "comment_type": "Comment",
+            "reference_doctype": DOCTYPE,
+            "reference_name": complaint,
+            "content": safe,
+            "comment_email": session_user,
+            "comment_by": full_name,
+        }).insert(ignore_permissions=True)
+
+    # NOTE: Server Script mein function (def) top-level variables nahi dekh paate, isliye sab inline hai
+    c_rows = frappe.get_all(
+        "Comment",
+        filters={"reference_doctype": DOCTYPE, "reference_name": complaint, "comment_type": "Comment"},
+        fields=["name", "content", "comment_email", "comment_by", "owner", "creation"],
+        order_by="creation asc",
+        limit_page_length=500
+    )
+    c_emails = list(set([(r.get("comment_email") or r.get("owner")) for r in c_rows if (r.get("comment_email") or r.get("owner"))]))
+    c_names = {}
+    if c_emails:
+        for u in frappe.get_all("User", filters={"name": ["in", c_emails]}, fields=["name", "full_name"]):
+            c_names[u.get("name")] = u.get("full_name") or u.get("name")
+    comments = []
+    for r in c_rows:
+        who = r.get("comment_email") or r.get("owner") or ""
+        raw = (r.get("content") or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").replace("</p>", "\n")
+        plain = ""
+        inside = False
+        for ch in raw:
+            if ch == "<":
+                inside = True
+            elif ch == ">":
+                inside = False
+            elif not inside:
+                plain = plain + ch
+        plain = plain.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ").replace("&amp;", "&").strip()
+        comments.append({
+            "name": r.get("name"),
+            "text": plain,
+            "by": r.get("comment_by") or c_names.get(who) or who,
+            "user": who,
+            "on": str(r.get("creation") or ""),
+        })
+    frappe.response["message"] = {"comments": comments}
+
+elif action == "list" or action == "set":
+    if not is_admin:
+        frappe.throw("Only a System Manager can change access to the complaint portal.")
+
+    for role_name in PAGE_ROLES:
+        if not frappe.db.exists("Role", role_name):
+            frappe.get_doc({"doctype": "Role", "role_name": role_name, "desk_access": 1}).insert(ignore_permissions=True)
+
+    if action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        level = frappe.form_dict.get("level") or "none"
+        if level not in ["view", "log", "quality", "full", "none"]:
+            frappe.throw("Invalid access level.")
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have full access.")
+
+        want = []
+        if level == "view":
+            want.append(VIEW_ROLE)
+        if level in ["log", "full"]:
+            want.append(LOG_ROLE)
+        if level in ["quality", "full"]:
+            want.append(QUALITY_ROLE)
+
+        user_doc = frappe.get_doc("User", target)
+        # (comprehension ke andar top-level naam Server Script mein nahi dikhte — isliye loop)
+        keep = []
+        for r in user_doc.roles:
+            if r.role not in PAGE_ROLES:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        for role_name in want:
+            user_doc.append("roles", {"role": role_name})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+
+        saved_roles = frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User"}, pluck="role")
+        missing = []
+        for r in want:
+            if r not in saved_roles:
+                missing.append(r)
+        if missing:
+            frappe.throw("Access could not be saved for " + target + " (" + ", ".join(missing) + " missing). "
+                         "If this user has a Role Profile, add the role to that Role Profile.")
+
+    role_rows = frappe.get_all(
+        "Has Role",
+        filters={"parenttype": "User", "role": ["in", PAGE_ROLES + ["System Manager"]]},
+        fields=["parent", "role"]
+    )
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+
+    users = []
+    if user_roles:
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+                                   fields=["name", "full_name", "enabled"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            if "System Manager" in r:
+                lvl = "admin"
+            elif LOG_ROLE in r and QUALITY_ROLE in r:
+                lvl = "full"
+            elif LOG_ROLE in r:
+                lvl = "log"
+            elif QUALITY_ROLE in r:
+                lvl = "quality"
+            else:
+                lvl = "view"
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "enabled": info.get("enabled"), "level": lvl})
+    users = sorted(users, key=lambda x: ({"admin": 0, "full": 1, "quality": 2, "log": 3, "view": 4}.get(x["level"], 5), (x["full_name"] or "").lower()))
+
+    candidates = []
+    for info in frappe.get_all("User",
+                               filters={"user_type": "System User", "enabled": 1, "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+else:
+    frappe.throw("Unknown action.")
