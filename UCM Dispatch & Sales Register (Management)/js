@@ -269,21 +269,22 @@
     refresh: function () { scheduleRefresh(10); return Promise.resolve(); }
   };
 
-  function loadLinkOptions(doctype, datalist) {
-    if (linkCache[doctype]) { fill(linkCache[doctype]); return; }
+  var linkWaiters = {};
+  function loadLinkOptions(doctype, cb) {
+    if (linkCache[doctype]) { cb(linkCache[doctype]); return; }
+    if (linkWaiters[doctype]) { linkWaiters[doctype].push(cb); return; }
+    linkWaiters[doctype] = [cb];
     var fields = doctype === "Customer" ? '["name","customer_name"]' : '["name"]';
     var flt = doctype === "Customer" ? "&filters=" + encodeURIComponent('[["disabled","=",0]]') : "";
     fetch("/api/resource/" + encodeURIComponent(doctype) + "?fields=" + encodeURIComponent(fields) + flt +
       "&limit_page_length=0&order_by=name%20asc", { credentials: "same-origin", headers: { Accept: "application/json" } })
       .then(function (r) { return r.ok ? r.json() : { data: [] }; })
-      .then(function (j) { linkCache[doctype] = j.data || []; fill(linkCache[doctype]); })
-      .catch(function () { /* datalist optional */ });
-    function fill(list) {
-      datalist.innerHTML = list.map(function (x) {
-        var label = x.customer_name && x.customer_name !== x.name ? esc(x.customer_name) : "";
-        return '<option value="' + esc(x.name) + '">' + label + "</option>";
-      }).join("");
-    }
+      .then(function (j) { linkCache[doctype] = j.data || []; })
+      .catch(function () { linkCache[doctype] = []; })
+      .then(function () {
+        var ws = linkWaiters[doctype] || []; delete linkWaiters[doctype];
+        ws.forEach(function (f) { try { f(linkCache[doctype]); } catch (e) { console.error(e); } });
+      });
   }
 
   function resolveLink(doctype, v) {
@@ -295,24 +296,95 @@
     return hit ? hit.name : v;
   }
 
+  /* ───────── Safed dropdown (Link filters ke liye) ───────── */
+  var DD_OPEN = null;
+  function attachWhiteDD($w, $i, df) {
+    var inp = $i[0];
+    var box = document.createElement("div"); box.className = "ucmw-dd";
+    inp.parentNode.insertBefore(box, inp); box.appendChild(inp);
+    box.insertAdjacentHTML("beforeend",
+      '<button type="button" class="ucmw-dd-x" tabindex="-1" aria-label="Clear"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>' +
+      '<span class="ucmw-dd-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>' +
+      '<div class="ucmw-dd-menu" role="listbox"></div>');
+    var menu = box.querySelector(".ucmw-dd-menu"), list = [], items = [], act = -1, dirty = false, loaded = false;
+    var fixed = df.ucmw_static || null;   // [{name, customer_name(label)}] — search nahi, seedhi list
+    if (fixed) { list = fixed; loaded = true; inp.readOnly = true; box.classList.add("is-fixed"); }
+    else loadLinkOptions(df.options, function (l) { list = l || []; loaded = true; if (box.classList.contains("open")) render(); });
+    var me = { el: box, close: close };
+    function syncVal() { box.classList.toggle("has-val", !!inp.value); }
+    if (fixed) inp.addEventListener("mousedown", function (e) { if (box.classList.contains("open")) { e.preventDefault(); close(); inp.blur(); } });
+    function open() {
+      if (DD_OPEN && DD_OPEN !== me) DD_OPEN.close();
+      DD_OPEN = me; dirty = false; act = -1; box.classList.add("open"); render(); place();
+    }
+    function close() { box.classList.remove("open"); if (DD_OPEN === me) DD_OPEN = null; act = -1; }
+    function place() {
+      var r = inp.getBoundingClientRect(), below = w.innerHeight - r.bottom;
+      menu.style.left = Math.max(8, Math.min(r.left, w.innerWidth - Math.max(r.width, 240) - 8)) + "px";
+      menu.style.minWidth = Math.max(r.width, 220) + "px";
+      if (below < 250 && r.top > below) { menu.style.top = "auto"; menu.style.bottom = (w.innerHeight - r.top + 4) + "px"; }
+      else { menu.style.bottom = "auto"; menu.style.top = (r.bottom + 4) + "px"; }
+    }
+    function render() {
+      var q = dirty ? String(inp.value || "").trim().toLowerCase() : "", cur = inp.value;
+      items = list.filter(function (x) {
+        return !q || String(x.name).toLowerCase().indexOf(q) >= 0 || String(x.customer_name || "").toLowerCase().indexOf(q) >= 0;
+      }).slice(0, 300);
+      menu.innerHTML = !loaded ? '<div class="ucmw-dd-none">Loading…</div>' : items.length ? items.map(function (x, i) {
+        var label = x.customer_name || x.name, sub = x.customer_name && x.customer_name !== x.name ? x.name : "";
+        var sel = x.name === cur || (fixed && !x.name && !cur);
+        return '<div class="ucmw-dd-opt' + (sel ? " sel" : "") + (i === act ? " act" : "") + '" data-i="' + i + '"><span class="ucmw-dd-l"><b>' + esc(label) + "</b>" +
+          (sub ? "<small>" + esc(sub) + "</small>" : "") + "</span>" +
+          (sel ? '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' : "") + "</div>";
+      }).join("") : '<div class="ucmw-dd-none">No matches</div>';
+    }
+    function choose(v) { inp.value = v || ""; syncVal(); close(); inp.blur(); $i.trigger("change"); }
+    inp.addEventListener("mousedown", function () { if (!box.classList.contains("open")) setTimeout(open, 0); });
+    inp.addEventListener("focus", function () { if (!box.classList.contains("open")) open(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { if (document.activeElement !== inp) close(); }, 150); });
+    inp.addEventListener("input", function () { dirty = true; act = -1; syncVal(); if (!box.classList.contains("open")) open(); else render(); });
+    inp.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault(); if (!box.classList.contains("open")) open();
+        act = Math.max(0, Math.min(items.length - 1, act + (e.key === "ArrowDown" ? 1 : -1))); render();
+        var a = menu.querySelector(".act"); if (a) a.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter" && act >= 0 && items[act]) { e.preventDefault(); e.stopImmediatePropagation(); choose(items[act].name); }
+      else if (e.key === "Escape") { close(); inp.blur(); }
+      else if (e.key === "Tab") close();
+    });
+    menu.addEventListener("mousedown", function (e) { e.preventDefault(); });
+    menu.addEventListener("click", function (e) { var o = e.target.closest(".ucmw-dd-opt"); if (o) choose(items[+o.getAttribute("data-i")].name); });
+    var x = box.querySelector(".ucmw-dd-x");
+    x.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
+    x.addEventListener("click", function (e) { e.stopPropagation(); choose(""); });
+    $i.on("change ucmw-sync", syncVal);
+    syncVal();
+  }
+  document.addEventListener("mousedown", function (e) { if (DD_OPEN && !DD_OPEN.el.contains(e.target)) DD_OPEN.close(); });
+  w.addEventListener("resize", function () { if (DD_OPEN) DD_OPEN.close(); });
+  document.addEventListener("scroll", function (e) {
+    if (DD_OPEN && !(e.target && e.target.closest && e.target.closest(".ucmw-dd-menu"))) DD_OPEN.close();
+  }, true);
+
   function makeControl(df) {
     var $w = $('<div class="frappe-control form-group" data-fieldname="' + esc(df.fieldname) + '"><label class="control-label"></label></div>');
     $w.find("label").text(df.label || df.fieldname);
     var $i;
     if (df.fieldtype === "Date") {
       $i = $('<input type="date" class="form-control input-xs">');
+    } else if (df.ucmw_static) {
+      $i = $('<input type="text" class="form-control input-xs ucmw-dd-in" autocomplete="off">').attr({ placeholder: "All" });
     } else if (df.fieldtype === "Select") {
       $i = $('<select class="form-control input-xs"></select>');
       String(df.options || "").split("\n").forEach(function (o) { $("<option></option>").val(o).text(o).appendTo($i); });
     } else if (df.fieldtype === "Link") {
-      var dlId = "ucmw-dl-" + df.fieldname;
-      $i = $('<input type="text" class="form-control input-xs" autocomplete="off">').attr({ list: dlId, placeholder: df.label });
-      var dl = document.createElement("datalist"); dl.id = dlId; $w.append(dl);
-      loadLinkOptions(df.options, dl);
+      // Browser ka kaala datalist nahi — apna safed dropdown (search + list)
+      $i = $('<input type="text" class="form-control input-xs ucmw-dd-in" autocomplete="off" spellcheck="false">').attr({ placeholder: "All " + String(df.label || "") + "s" });
     } else {
       $i = $('<input type="text" class="form-control input-xs">').attr("placeholder", df.label);
     }
     $w.append($i);
+    if (df.fieldtype === "Link" || df.ucmw_static) attachWhiteDD($w, $i, df);
     var ctrl = {
       df: df, $wrapper: $w, wrapper: $w[0], $input: $i, input: $i[0],
       get_value: function () {
@@ -320,7 +392,7 @@
         if (df.fieldtype === "Link") v = resolveLink(df.options, v);
         return v == null ? "" : v;
       },
-      set_value: function (v) { $i.val(v == null ? "" : v); return Promise.resolve(); }
+      set_value: function (v) { $i.val(v == null ? "" : v); $i.trigger("ucmw-sync"); return Promise.resolve(); }
     };
     $i.on("change", function () {
       if (df.fieldtype === "Link") $i.val(resolveLink(df.options, $i.val()));
@@ -655,11 +727,31 @@
     Array.prototype.forEach.call(root.querySelectorAll(".ucmw-panel"), function (p) {
       p.hidden = p.getAttribute("data-panel") !== tab;
     });
-    try { history.replaceState(null, "", location.pathname + location.search + (tab === "data" ? "#data" : "")); } catch (e) { /* ignore */ }
+    try { history.replaceState(null, "", location.pathname + location.search + (tab && tab !== "summary" ? "#" + tab : "")); } catch (e) { /* ignore */ }
+    try { document.dispatchEvent(new CustomEvent("ucmw:tab", { detail: { tab: tab } })); } catch (e) { /* ignore */ }
+  }
+  w.__ucmShowTab = showTab;
+  // Naye tabs: Sales Orders · Territories · New Customers (data main page par, details slider mein)
+  function addExtraTabs() {
+    var bar = document.querySelector("#ucm-report .ucmw-tabs"), main = document.querySelector("#ucm-report .ucmw-main");
+    if (!bar || !main || bar.querySelector('[data-tab="so"]')) return;
+    var meta = document.getElementById("ucmw-period");
+    [["so", "Sales Orders"], ["terr", "Territories"], ["newc", "New Customers"]].forEach(function (t) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "ucmw-tab"; b.setAttribute("data-tab", t[0]); b.setAttribute("role", "tab");
+      b.textContent = t[1];
+      bar.insertBefore(b, meta || null);
+      var sec = document.createElement("section");
+      sec.className = "ucmw-panel ucmx-panel"; sec.setAttribute("data-panel", t[0]); sec.hidden = true;
+      sec.innerHTML = '<div id="ucmx-' + t[0] + '"></div>';
+      main.appendChild(sec);
+    });
   }
   function initTabs() {
+    addExtraTabs();
     $("#ucm-report .ucmw-tab").on("click", function () { showTab(this.getAttribute("data-tab")); });
-    showTab(location.hash === "#data" ? "data" : "summary");
+    var h = (location.hash || "").replace("#", "");
+    showTab(["data", "so", "terr", "newc"].indexOf(h) >= 0 ? h : "summary");
   }
 
   function fmtShort(d) {
@@ -904,7 +996,12 @@
   }
 
   /* ───────── refresh = report run ───────── */
+  function updateClear() {
+    var b = document.querySelector("#ucm-report .ucmw-clear"); if (!b) return;
+    b.hidden = !["customer", "sales_order_type"].some(function (k) { return controls[k] && controls[k].get_value(); });
+  }
   function runRefresh() {
+    updateClear();
     var cfg = frappe.query_reports[REPORT_NAME] || {};
     var missing = (cfg.filters || []).filter(function (df) { return df.reqd && !qr.get_filter_value(df.fieldname); });
     var host = document.getElementById("ucmw-table");
@@ -937,6 +1034,7 @@
       if (!hasSummary && !runRefresh._switched) { runRefresh._switched = true; showTab("data"); }
       renderTable(qr.columns, qr.data, true);
       renderMySummary();
+      try { document.dispatchEvent(new CustomEvent("ucmw:data")); } catch (e) { /* ignore */ }
     }).catch(function (err) {
       if (id !== reqId) return;
       if (root) root.classList.remove("ucmw-busy");
@@ -1080,11 +1178,27 @@
     initSearchAndRowClick();
 
     var $filters = $("#ucmw-filters");
-    (cfg.filters || []).forEach(function (df) { $filters.append(makeControl(df).$wrapper); });
+    // Item Group filter hata kar Sales Order Type (All / Ultra / Large Blow)
+    var fl = (cfg.filters || []).filter(function (df) { return df.fieldname !== "item_group"; });
+    var ci = fl.map(function (df) { return df.fieldname; }).indexOf("customer");
+    fl.splice(ci >= 0 ? ci + 1 : fl.length, 0, {
+      fieldname: "sales_order_type", label: "Sales Order Type", fieldtype: "Select", options: "\nUltra\nLarge Blow",
+      ucmw_static: [{ name: "", customer_name: "All" }, { name: "Ultra" }, { name: "Large Blow" }]
+    });
+    cfg.filters = fl;
+    fl.forEach(function (df) { $filters.append(makeControl(df).$wrapper); });
+    // Filter lage ho to "Clear filters"
+    $('<button type="button" class="ucmw-clear" hidden><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>Clear filters</button>')
+      .on("click", function () {
+        ["customer", "sales_order_type"].forEach(function (k) { if (controls[k]) controls[k].set_value(""); });
+        updateClear(); scheduleRefresh(10);
+      }).appendTo($filters);
 
     var $actions = $(actionsEl);
-    $("#ucmw-export").on("click", exportCSV);   // Orders row ka chhota print icon = Export CSV
-    $('<button type="button" class="btn btn-primary btn-sm ucmw-btn-refresh">Refresh</button>').on("click", function () { scheduleRefresh(10); }).appendTo($actions);
+    $("#ucmw-export").on("click", exportCSV);   // Orders row ka chhota download icon = Export CSV
+    $('<button type="button" class="btn btn-primary btn-sm ucmw-btn-refresh ucmw-icon-only" title="Refresh" aria-label="Refresh">' +
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.7-4.3L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.7 4.3L20 16"/><path d="M20 20v-4h-4"/></svg></button>')
+      .on("click", function () { scheduleRefresh(10); }).appendTo($actions);
 
     ensureMoment(function () {
       // Report JS ka "page reload" hack web page par zaroori nahi — skip
@@ -10876,9 +10990,578 @@ try {
   })();
 } catch (e) { /* ignore */ }
 
+// "Print PDF Summary" button → sirf print icon (same height). Report JS button
+// baar-baar bana sakti hai, isliye har thodi der mein check karte hain.
+(function () {
+  var ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/><circle cx="17.5" cy="12" r=".6" fill="currentColor"/></svg>';
+  function iconize() {
+    var bs = document.querySelectorAll(".btn-pdf-summary-custom:not([data-ucmw-icon])");
+    Array.prototype.forEach.call(bs, function (b) {
+      b.setAttribute("data-ucmw-icon", "1");
+      b.classList.add("ucmw-icon-only");
+      b.innerHTML = ICON;
+      b.title = "Print PDF Summary";
+      b.setAttribute("aria-label", "Print PDF Summary");
+    });
+  }
+  setInterval(iconize, 400);
+})();
+
+// Month ▲▼ buttons → naya look: [‹  Oct 2026  ›]  (‹ = pichhla mahina, › = agla)
+(function () {
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var L = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>';
+  var R = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+  function label() {
+    try {
+      var qr = window.frappe && frappe.query_report;
+      var f = qr && qr.get_filter_value("from_date"), t = qr && qr.get_filter_value("to_date");
+      if (!f || !t) return "Month";
+      var fp = f.split("-"), tp = t.split("-");
+      if (fp[2] === "01" && fp[0] === tp[0] && fp[1] === tp[1]) return MON[+fp[1] - 1] + " " + fp[0];
+      return "Custom";
+    } catch (e) { return "Month"; }
+  }
+  function tick() {
+    var navs = document.querySelectorAll("#ucm-report .ucm-ds-month-nav");
+    Array.prototype.forEach.call(navs, function (nav) {
+      if (!nav.getAttribute("data-ucmw")) {
+        nav.setAttribute("data-ucmw", "1");
+        var up = nav.querySelector(".ucm-ds-month-up"), down = nav.querySelector(".ucm-ds-month-down");
+        if (!up || !down) return;
+        down.innerHTML = L; up.innerHTML = R;
+        down.setAttribute("aria-label", "Previous month"); up.setAttribute("aria-label", "Next month");
+        var lbl = document.createElement("span"); lbl.className = "ucmw-month-lbl";
+        nav.insertBefore(down, nav.firstChild);
+        nav.insertBefore(lbl, up);
+      }
+      var l = nav.querySelector(".ucmw-month-lbl"), txt = label();
+      if (l && l.textContent !== txt) l.textContent = txt;
+    });
+  }
+  setInterval(tick, 300);
+})();
+
 (function () {
   function start() { if (typeof window.__ucmWebBoot === "function") window.__ucmWebBoot(); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();
   window.addEventListener("load", start);
 })();
+
+/* ═════════════════════════════ PART 4 — SALES ORDERS · TERRITORIES · NEW CUSTOMERS TABS ═════════════════════════════
+   Pehle ye sab sliders mein the (toolbar buttons). Ab main page par apne tabs hain;
+   kisi card / row par click karne se details slider mein khulti hain.
+   Data wahi purane APIs se: ucm_so_type_summary, ucm_territory_till_date_summary,
+   ucm_customer_acquisition_detail + Sales Invoice rows (ucm_dispatch_sales_register). */
+(function (w) {
+  "use strict";
+  var d = document;
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function $1(sel, el) { return (el || d).querySelector(sel); }
+  function $all(sel, el) { return Array.prototype.slice.call((el || d).querySelectorAll(sel)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function num(v) { return nf0.format(Math.round(v || 0)); }
+  function inr(v) { return "₹" + nf0.format(Math.round(v || 0)); }
+  function inrS(v) {
+    v = v || 0; var a = Math.abs(v);
+    if (a >= 1e7) return "₹" + (v / 1e7).toFixed(2) + " Cr";
+    if (a >= 1e5) return "₹" + (v / 1e5).toFixed(2) + " L";
+    if (a >= 1e3) return "₹" + (v / 1e3).toFixed(1) + "K";
+    return "₹" + nf0.format(Math.round(v));
+  }
+  var nf2 = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function rate(v) { v = +v || 0; return "₹" + (Math.abs(v) < 1000 ? nf2.format(v) : nf0.format(Math.round(v))); }
+  function pct(a, b) { return b ? Math.round((a || 0) / b * 1000) / 10 : 0; }
+  function dt(s) {
+    var m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? Number(m[3]) + " " + MON[+m[2] - 1] + " " + m[1].slice(2) : (s ? esc(s) : "—");
+  }
+  function lc(s) { return String(s || "").toLowerCase(); }
+  function fv(k) { try { return (w.frappe && frappe.query_report && frappe.query_report.get_filter_value(k)) || ""; } catch (e) { return ""; } }
+  function fkey() { return [fv("from_date"), fv("to_date"), fv("customer"), fv("sales_order_type")].join("|"); }
+  function rangeTxt() {
+    var f = fv("from_date"), t = fv("to_date");
+    return dt(f) + " – " + dt(t);
+  }
+  function call(method, args) {
+    return new Promise(function (res, rej) {
+      if (!w.frappe || !frappe.call) { rej(new Error("frappe.call missing")); return; }
+      frappe.call({ method: method, args: args, callback: function (r) { res((r && r.message) || null); }, error: function (e) { rej(e || new Error(method + " failed")); } });
+    });
+  }
+  var ICO = {
+    arrow: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
+    close: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    dl: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/></svg>',
+    search: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>',
+    ext: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>'
+  };
+  function loading(txt) { return '<div class="ucmx-loading"><span class="ucmw-spin"></span>' + esc(txt) + "</div>"; }
+  function errBox(txt) { return '<div class="ucmx-error">' + txt + "</div>"; }
+  function segPills(list, cur, attr) {
+    return '<div class="ucmx-seg">' + list.map(function (s) {
+      return '<button type="button" class="' + (s[0] === cur ? "on" : "") + (s[3] ? " " + s[3] : "") + '" ' + attr + '="' + esc(s[0]) + '">' + esc(s[1]) +
+        (s[2] != null ? "<span>" + esc(s[2]) + "</span>" : "") + "</button>";
+    }).join("") + "</div>";
+  }
+  function defaultSeg(all) {
+    var sot = String(fv("sales_order_type") || "").toUpperCase();
+    return sot === "ULTRA" || sot === "LARGE BLOW" ? sot : all;
+  }
+
+  /* ───────── Slider (drawer) ───────── */
+  var DR = { rows: [], cols: [], q: "", title: "", file: "" };
+  function drawer(kicker, title, sub, bodyHtml, opts) {
+    opts = opts || {};
+    var dr = $1("#ucmx-drawer");
+    if (!dr) {
+      var sc = d.createElement("div"); sc.id = "ucmx-scrim"; sc.className = "ucmx-scrim"; d.body.appendChild(sc);
+      dr = d.createElement("aside"); dr.id = "ucmx-drawer"; dr.className = "ucmx-drawer"; d.body.appendChild(dr);
+      sc.addEventListener("click", closeDrawer);
+      dr.addEventListener("click", function (e) { if (e.target.closest(".ucmx-x")) closeDrawer(); });
+      d.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDrawer(); });
+    }
+    dr.style.width = opts.width || "";
+    dr.innerHTML =
+      '<header class="ucmx-dr-head"><div class="ucmx-dr-t"><div class="ucmx-dr-k">' + kicker + "</div><h3>" + esc(title) + "</h3>" +
+        (sub ? '<div class="ucmx-dr-s">' + sub + "</div>" : "") + "</div>" +
+        '<div class="ucmx-dr-a">' + (opts.download ? '<button type="button" class="ucmx-ibtn ucmx-dl" title="Download (Excel / CSV)">' + ICO.dl + "</button>" : "") +
+        '<button type="button" class="ucmx-ibtn ucmx-x" title="Close">' + ICO.close + "</button></div></header>" +
+      '<div class="ucmx-dr-b">' + bodyHtml + "</div>";
+    var dl = $1(".ucmx-dl", dr); if (dl && opts.download) dl.addEventListener("click", opts.download);
+    d.body.classList.add("ucmx-lock");
+    requestAnimationFrame(function () { dr.classList.add("on"); $1("#ucmx-scrim").classList.add("on"); });
+    return dr;
+  }
+  function closeDrawer() {
+    var dr = $1("#ucmx-drawer"); if (dr) dr.classList.remove("on");
+    var sc = $1("#ucmx-scrim"); if (sc) sc.classList.remove("on");
+    d.body.classList.remove("ucmx-lock");
+  }
+  function csv(name, head, rows) {
+    var q = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var out = [head.map(q).join(",")].concat(rows.map(function (r) { return r.map(q).join(","); }));
+    var blob = new Blob(["﻿" + out.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = name.replace(/[^a-z0-9_\-]+/gi, "_") + "_" + fv("from_date") + "_to_" + fv("to_date") + ".csv";
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+  function searchBox(id, ph) { return '<label class="ucmx-search">' + ICO.search + '<input type="search" id="' + id + '" placeholder="' + esc(ph) + '"></label>'; }
+
+  /* ═════════════════════════ SALES ORDERS ═════════════════════════ */
+  var SO = { key: "", data: null, seg: "OVERALL", req: 0 };
+  var PERF = {
+    overdue: { label: "Overdue", cls: "is-bad", rank: 1 },
+    late: { label: "Delivered late", cls: "is-warn", rank: 2 },
+    on_track: { label: "Pending", cls: "is-info", rank: 3 },
+    closed_short: { label: "Closed (short)", cls: "is-mute", rank: 4 },
+    on_time: { label: "On time", cls: "is-ok", rank: 5 }
+  };
+  var SO_FILTERS = {
+    all: "All sales orders", on_time: "Delivered on time", delayed: "Delayed orders", late: "Delivered late", overdue: "Overdue orders",
+    on_track: "Pending (on track)", closed_short: "Closed before full delivery", completed: "Completed orders", closed: "Closed orders",
+    open: "Open orders", pending_qty: "Orders with pending qty"
+  };
+  function soMatch(o, f) {
+    if (f === "all") return true;
+    if (f === "delayed") return o.perf === "late" || o.perf === "overdue";
+    if (f === "pending_qty") return (o.pending_qty || 0) > 0;
+    if (f === "completed" || f === "closed" || f === "open") return o.status_group === f;
+    return o.perf === f;
+  }
+  function loadSO(force) {
+    var host = $1("#ucmx-so"); if (!host) return;
+    var k = fkey(); if (!force && SO.key === k && SO.data) { renderSO(); return; }
+    SO.key = k; SO.seg = defaultSeg("OVERALL"); var id = ++SO.req;
+    if (!fv("from_date") || !fv("to_date")) { host.innerHTML = errBox("Select a date range first."); return; }
+    host.innerHTML = loading("Loading sales orders…");
+    call("ucm_so_type_summary", { from_date: fv("from_date"), to_date: fv("to_date"), customer: fv("customer") || undefined })
+      .then(function (m) { if (id !== SO.req) return; SO.data = m || {}; renderSO(); })
+      .catch(function () { if (id !== SO.req) return; host.innerHTML = errBox("Could not load sales orders. Check that the <code>ucm_so_type_summary</code> Server Script is enabled."); });
+  }
+  function soOrders(seg) {
+    var o = (SO.data && SO.data.orders) || [];
+    return seg === "OVERALL" ? o : o.filter(function (x) { return x.sot === seg; });
+  }
+  function soDrafts(seg) {
+    var dd = (SO.data && SO.data.drafts) || [];
+    return seg === "OVERALL" ? dd : dd.filter(function (x) { return x.sot === seg; });
+  }
+  function renderSO() {
+    var host = $1("#ucmx-so"); if (!host || !SO.data) return;
+    var B = SO.data.buckets || {}, seg = SO.seg, b = B[seg] || {};
+    var segs = [["OVERALL", "Overall", (B.OVERALL || {}).so_count || 0], ["ULTRA", "Ultra", (B.ULTRA || {}).so_count || 0, "is-ultra"], ["LARGE BLOW", "Large Blow", (B["LARGE BLOW"] || {}).so_count || 0, "is-lb"]];
+    var drafts = soDrafts(seg);
+    var delayed = (b.late || 0) + (b.overdue || 0), finished = (b.on_time || 0) + (b.late || 0);
+    var delPct = pct(b.delivered_qty, b.qty), onTime = pct(b.on_time, finished);
+    var total = b.so_count || 0;
+
+    var head = '<div class="ucmx-bar">' + segPills(segs, seg, "data-so-seg") +
+      '<div class="ucmx-note">SO date in ' + rangeTxt() + " · delivery as per Sales Invoice" + (fv("customer") ? " · " + esc(fv("customer")) : "") + "</div></div>";
+
+    if (!total && !drafts.length) { host.innerHTML = head + '<div class="ucmx-empty">No sales orders in this period.</div>'; bindSO(host); return; }
+
+    var kpis = '<div class="ucmx-kpis">' +
+      kpi("Sales Orders", num(total), inr(b.value), "is-hero", "all") +
+      kpi("Ordered Qty", num(b.qty), "units", "", null) +
+      kpi("Delivered Qty", num(b.delivered_qty), delPct + "% of ordered", "is-ok", null, delPct) +
+      kpi("Pending Qty", num(b.pending_qty), "on open orders", "is-bad", "pending_qty") +
+      kpi("Closed – Undelivered", num(b.short_closed_qty), "qty on closed SOs", "is-mute", "closed") +
+    "</div>";
+
+    var perfRows = [
+      ["on_time", "Delivered on time", b.on_time || 0, "is-ok", "fully invoiced by due date"],
+      ["delayed", "Delayed", delayed, "is-bad", (b.late || 0) + " delivered late · " + (b.overdue || 0) + " overdue"],
+      ["on_track", "Pending (on track)", b.on_track || 0, "is-info", "due date not passed"],
+      ["closed_short", "Closed (short)", b.closed_short || 0, "is-mute", "closed before full delivery"]
+    ];
+    var stack = perfRows.map(function (r) { var p = pct(r[2], total); return p ? '<i class="' + r[3] + '" style="width:' + p + '%" title="' + esc(r[1]) + ": " + r[2] + '"></i>' : ""; }).join("");
+    var perf = '<div class="ucmx-card"><div class="ucmx-card-h"><b>Delivery performance</b><span>' + onTime + "% on time of " + finished + " fully invoiced</span></div>" +
+      '<div class="ucmx-stack">' + stack + "</div>" +
+      perfRows.map(function (r) { return listRow(r[0], r[1], r[2], total, r[3], r[4]); }).join("") + "</div>";
+
+    var sc = b.status_counts || {};
+    var chips = Object.keys(sc).sort(function (x, y) { return sc[y] - sc[x]; }).map(function (s) { return '<span class="ucmx-chip">' + esc(s || "—") + " <b>" + sc[s] + "</b></span>"; }).join("");
+    var status = '<div class="ucmx-card"><div class="ucmx-card-h"><b>Order status</b><span>' + num(total) + " submitted</span></div>" +
+      listRow("completed", "Completed", b.completed || 0, total, "is-ok", "status = Completed") +
+      listRow("open", "Open", b.open || 0, total, "is-info", "To Deliver / To Bill / On Hold") +
+      listRow("closed", "Closed", b.closed || 0, total, "is-mute", "status = Closed") +
+      listRow("draft", "Draft", drafts.length, null, "is-warn", "not submitted yet") +
+      (chips ? '<div class="ucmx-chips">' + chips + "</div>" : "") + "</div>";
+
+    var attention = soOrders(seg).filter(function (o) { return o.perf === "overdue" || o.perf === "late"; })
+      .sort(function (a, c) { return (PERF[a.perf].rank - PERF[c.perf].rank) || ((c.delay_days || 0) - (a.delay_days || 0)); });
+    var top = '<div class="ucmx-card"><div class="ucmx-card-h"><b>Needs attention · delayed orders</b>' +
+      (attention.length > 8 ? '<button type="button" class="ucmx-link" data-so-f="delayed">View all ' + attention.length + " " + ICO.arrow + "</button>" : "<span>" + attention.length + " orders</span>") + "</div>" +
+      (attention.length ? soTable(attention.slice(0, 8), seg === "OVERALL", true) : '<div class="ucmx-empty sm">No delayed orders 🎉</div>') + "</div>";
+
+    host.innerHTML = head + kpis + '<div class="ucmx-grid2">' + perf + status + "</div>" + top;
+    bindSO(host);
+  }
+  function kpi(label, value, sub, cls, filter, bar) {
+    var tag = filter ? "button" : "div";
+    return "<" + tag + (filter ? ' type="button" data-so-f="' + filter + '"' : "") + ' class="ucmx-kpi ' + (cls || "") + (filter ? " is-click" : "") + '">' +
+      '<div class="ucmx-kpi-l">' + label + (filter ? ICO.arrow : "") + '</div><div class="ucmx-kpi-v">' + value + "</div>" +
+      (bar != null ? '<div class="ucmx-meter"><i style="width:' + Math.min(100, bar) + '%"></i></div>' : "") +
+      '<div class="ucmx-kpi-s">' + sub + "</div></" + tag + ">";
+  }
+  function listRow(f, label, count, total, cls, sub) {
+    var p = total ? pct(count, total) : null;
+    return '<button type="button" class="ucmx-row ' + cls + '" data-so-f="' + f + '"><span class="ucmx-dot"></span>' +
+      '<span class="ucmx-row-l"><b>' + esc(label) + "</b><small>" + esc(sub) + "</small></span>" +
+      '<span class="ucmx-row-v"><b>' + num(count) + "</b>" + (p != null ? "<small>" + p + "%</small>" : "") + "</span>" + ICO.arrow + "</button>";
+  }
+  function badge(o) {
+    var p = PERF[o.perf] || { label: o.perf || "—", cls: "is-mute" };
+    var t = p.label;
+    if (o.perf === "late") t = "Late " + (o.delay_days || 0) + "d";
+    if (o.perf === "overdue") t = "Overdue " + (o.delay_days || 0) + "d";
+    return '<span class="ucmx-badge ' + p.cls + '">' + esc(t) + "</span>";
+  }
+  function typeTag(sot) { return sot ? '<span class="ucmx-type ' + (sot === "ULTRA" ? "is-ultra" : "is-lb") + '">' + (sot === "ULTRA" ? "Ultra" : "Large Blow") + "</span>" : ""; }
+  function soTable(list, showType, compact) {
+    return '<div class="ucmx-tw"><table class="ucmx-table"><thead><tr><th>#</th><th>Sales Order</th><th>Customer</th><th>Due Date</th>' +
+      '<th class="r">Ordered</th><th class="r">Delivered</th><th class="r">Pending</th>' + (compact ? "" : "<th>Status</th>") + "<th>Delivery</th></tr></thead><tbody>" +
+      list.map(function (o, i) {
+        return "<tr><td class='mut'>" + (i + 1) + '</td><td><a href="/app/sales-order/' + encodeURIComponent(o.name) + '" target="_blank" rel="noopener">' + esc(o.name) + "</a><small>" + dt(o.transaction_date) + "</small></td>" +
+          "<td><b class='nm'>" + esc(o.customer_name || "") + "</b>" + (showType ? typeTag(o.sot) : "") + "</td>" +
+          "<td>" + dt(o.delivery_date) + "<small>Last invoice: " + dt(o.last_delivery_date) + "</small></td>" +
+          '<td class="r">' + num(o.qty) + '</td><td class="r">' + num(o.delivered_qty) + '</td><td class="r' + ((o.pending_qty || 0) > 0 ? " bad" : "") + '">' + num(o.pending_qty) + "</td>" +
+          (compact ? "" : "<td>" + esc(o.status || "") + "</td>") + "<td>" + badge(o) + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
+  function bindSO(host) {
+    $all("[data-so-seg]", host).forEach(function (b) { b.addEventListener("click", function () { SO.seg = b.getAttribute("data-so-seg"); renderSO(); }); });
+    $all("[data-so-f]", host).forEach(function (b) { b.addEventListener("click", function () { openSOList(b.getAttribute("data-so-f")); }); });
+  }
+  function openSOList(f) {
+    var seg = SO.seg, segLbl = seg === "OVERALL" ? "All types" : (seg === "ULTRA" ? "Ultra" : "Large Blow");
+    if (f === "draft") { openDrafts(seg, segLbl); return; }
+    var list = soOrders(seg).filter(function (o) { return soMatch(o, f); })
+      .sort(function (a, c) { return (((PERF[a.perf] || {}).rank || 9) - ((PERF[c.perf] || {}).rank || 9)) || ((c.delay_days || 0) - (a.delay_days || 0)); });
+    var q = "";
+    var dr = drawer("Sales Orders · " + segLbl, SO_FILTERS[f] || "Sales orders", rangeTxt() + " · " + list.length + " orders",
+      '<div class="ucmx-tools">' + searchBox("ucmx-so-q", "Search sales order or customer…") + '<span class="ucmx-count" id="ucmx-so-c"></span></div><div id="ucmx-so-t"></div>',
+      { width: "min(1060px, 96vw)", download: function () {
+        csv("sales_orders_" + f, ["Sales Order", "SO Date", "Customer", "Type", "Due Date", "Last Invoice", "Ordered", "Delivered", "Pending", "Status", "Delivery", "Delay Days"],
+          shown().map(function (o) { return [o.name, o.transaction_date, o.customer_name, o.sot, o.delivery_date, o.last_delivery_date, o.qty, o.delivered_qty, o.pending_qty, o.status, (PERF[o.perf] || {}).label || o.perf, o.delay_days || ""]; }));
+      } });
+    function shown() { return list.filter(function (o) { return !q || lc(o.name).indexOf(q) >= 0 || lc(o.customer_name).indexOf(q) >= 0; }); }
+    function draw() {
+      var s = shown();
+      $1("#ucmx-so-c", dr).textContent = s.length + " of " + list.length;
+      $1("#ucmx-so-t", dr).innerHTML = s.length ? soTable(s, seg === "OVERALL", false) : '<div class="ucmx-empty sm">No orders</div>';
+    }
+    $1("#ucmx-so-q", dr).addEventListener("input", function (e) { q = lc(e.target.value.trim()); draw(); });
+    draw();
+  }
+  function openDrafts(seg, segLbl) {
+    var list = soDrafts(seg), q = "";
+    var tot = list.reduce(function (a, x) { return a + (x.value || 0); }, 0);
+    var dr = drawer("Sales Orders · " + segLbl, "Draft sales orders", rangeTxt() + " · " + list.length + " drafts · " + inr(tot),
+      '<div class="ucmx-tools">' + searchBox("ucmx-dq", "Search sales order or customer…") + '</div><div id="ucmx-dt"></div>',
+      { width: "min(980px, 96vw)", download: function () {
+        csv("draft_sales_orders", ["Sales Order", "Date", "Customer", "Type", "Due Date", "Qty", "Value", "Created By"],
+          list.map(function (x) { return [x.name, x.transaction_date, x.customer_name, x.sot, x.delivery_date, x.qty, x.value, x.created_by]; }));
+      } });
+    function draw() {
+      var s = list.filter(function (x) { return !q || lc(x.name).indexOf(q) >= 0 || lc(x.customer_name).indexOf(q) >= 0; });
+      $1("#ucmx-dt", dr).innerHTML = s.length ? '<div class="ucmx-tw"><table class="ucmx-table"><thead><tr><th>#</th><th>Sales Order</th><th>Customer</th><th>Due Date</th><th class="r">Qty</th><th class="r">Value</th><th>Created By</th></tr></thead><tbody>' +
+        s.map(function (x, i) {
+          return "<tr><td class='mut'>" + (i + 1) + '</td><td><a href="/app/sales-order/' + encodeURIComponent(x.name) + '" target="_blank" rel="noopener">' + esc(x.name) + "</a><small>" + dt(x.transaction_date) + "</small></td>" +
+            "<td><b class='nm'>" + esc(x.customer_name || "") + "</b>" + typeTag(x.sot) + "</td><td>" + dt(x.delivery_date) + '</td><td class="r">' + num(x.qty) + '</td><td class="r"><b>' + inr(x.value) + "</b></td>" +
+            "<td>" + esc(x.created_by || "") + "<small>Updated " + dt(x.modified) + "</small></td></tr>";
+        }).join("") + "</tbody></table></div>" : '<div class="ucmx-empty sm">No draft sales orders</div>';
+    }
+    $1("#ucmx-dq", dr).addEventListener("input", function (e) { q = lc(e.target.value.trim()); draw(); });
+    draw();
+  }
+
+  /* ═════════════════════════ TERRITORIES ═════════════════════════ */
+  var TR = { key: "", rows: null, till: null, seg: "LARGE BLOW", req: 0 };
+  var SEGS = [["LARGE BLOW", "Large Blow", null, "is-lb"], ["ULTRA", "Ultra", null, "is-ultra"]];
+  function loadTerr(force) {
+    var host = $1("#ucmx-terr"); if (!host) return;
+    var k = fkey(); if (!force && TR.key === k && TR.rows) { renderTerr(); return; }
+    TR.key = k; var sot = defaultSeg(""); if (sot) TR.seg = sot; var id = ++TR.req;
+    if (typeof _ucmFetchTerritorySalesInvoiceRows !== "function") { host.innerHTML = errBox("Report JS (PART 2) load nahi hui."); return; }
+    host.innerHTML = loading("Loading territory data…");
+    var got = 0, rows = [], till = null;
+    function done() { if (++got < 2 || id !== TR.req) return; TR.rows = rows || []; TR.till = till; renderTerr(); }
+    _ucmFetchTerritorySalesInvoiceRows(function (r) { rows = r; done(); });
+    _ucmFetchTerritoryTillDateSummary(function (t) { till = t; done(); });
+  }
+  function tillFor(key) {
+    var t = TR.till; if (!t) return null;
+    if (t.by_type) return t.by_type[key] || { states_covered_till_date: [] };
+    return key === "LARGE BLOW" ? t : null;
+  }
+  function terrData(seg) {
+    var terr = _ucmComputeTerritoryData(TR.rows, seg);
+    var periodSet = {};
+    Object.keys(terr.states).forEach(function (s) { var c = _ucmCanonicalState(s); if (c) periodSet[c] = true; });
+    var till = tillFor(seg), tillSet = null;
+    if (till && till.states_covered_till_date) {
+      tillSet = {};
+      till.states_covered_till_date.forEach(function (s) { var c = _ucmCanonicalState(s); if (c) tillSet[c] = true; });
+      Object.keys(periodSet).forEach(function (c) { tillSet[c] = true; });
+    }
+    var ALL = UCM_INDIA_ALL;
+    return {
+      terr: terr, periodSet: periodSet, tillSet: tillSet, till: till,
+      periodCount: ALL.filter(function (s) { return periodSet[s]; }).length,
+      tillCount: tillSet ? ALL.filter(function (s) { return tillSet[s]; }).length : null,
+      missed: tillSet ? ALL.filter(function (s) { return tillSet[s] && !periodSet[s]; }) : [],
+      never: tillSet ? ALL.filter(function (s) { return !tillSet[s]; }) : []
+    };
+  }
+  function renderTerr() {
+    var host = $1("#ucmx-terr"); if (!host || !TR.rows) return;
+    var seg = TR.seg, X = terrData(seg), t = X.terr;
+    var head = '<div class="ucmx-bar">' + segPills(SEGS, seg, "data-tr-seg") + '<div class="ucmx-note">Completed Sales Invoices · ' + rangeTxt() + "</div></div>";
+    var reachPct = X.tillCount != null ? pct(X.tillCount, 36) : 0;
+    var kpis = '<div class="ucmx-kpis">' +
+      '<div class="ucmx-kpi is-hero"><div class="ucmx-kpi-l">Sales covered</div><div class="ucmx-kpi-v">' + inrS(t.totalSales) + '</div><div class="ucmx-kpi-s">' + inr(t.totalSales) + " · excl. GST</div></div>" +
+      '<div class="ucmx-kpi"><div class="ucmx-kpi-l">States this period</div><div class="ucmx-kpi-v">' + X.periodCount + '<small> / 36</small></div><div class="ucmx-meter"><i style="width:' + pct(X.periodCount, 36) + '%"></i></div><div class="ucmx-kpi-s">' + pct(X.periodCount, 36) + "% of India</div></div>" +
+      '<div class="ucmx-kpi"><div class="ucmx-kpi-l">Cities this period</div><div class="ucmx-kpi-v">' + num(t.totalCities) + '</div><div class="ucmx-kpi-s">across ' + t.totalStates + " states</div></div>" +
+      '<div class="ucmx-kpi is-ok"><div class="ucmx-kpi-l">Reach till date</div><div class="ucmx-kpi-v">' + (X.tillCount != null ? X.tillCount + "<small> / 36</small>" : "—") + '</div><div class="ucmx-meter"><i style="width:' + reachPct + '%"></i></div><div class="ucmx-kpi-s">' + (X.tillCount != null ? reachPct + "% states + UTs" : "till-date data not loaded") + "</div></div>" +
+      '<button type="button" class="ucmx-kpi is-warn is-click" data-tr-list="missed"><div class="ucmx-kpi-l">Missed this period' + ICO.arrow + '</div><div class="ucmx-kpi-v">' + X.missed.length + '</div><div class="ucmx-kpi-s">sold earlier, not now</div></button>' +
+    "</div>";
+
+    var names = Object.keys(t.states).sort(function (a, b) { return t.states[b].amount - t.states[a].amount; });
+    var max = names.length ? t.states[names[0]].amount : 0;
+    var stateTbl = names.length ? '<div class="ucmx-tw"><table class="ucmx-table is-click"><thead><tr><th>#</th><th>State</th><th class="r">Cities</th><th class="r">Sales</th><th class="r">Share</th><th></th></tr></thead><tbody>' +
+      names.map(function (s, i) {
+        var st = t.states[s];
+        return '<tr data-tr-state="' + esc(s) + '"><td class="mut">' + (i + 1) + "</td><td><b class='nm'>" + esc(s) + '</b></td><td class="r">' + Object.keys(st.cities).length +
+          '</td><td class="r"><b>' + inr(st.amount) + '</b></td><td class="r share"><span class="ucmx-bar-s"><i style="width:' + (max ? Math.max(2, Math.round(st.amount / max * 100)) : 0) + '%"></i></span>' + pct(st.amount, t.totalSales) + "%</td><td class='go'>" + ICO.arrow + "</td></tr>";
+      }).join("") + "</tbody></table></div>" : '<div class="ucmx-empty sm">No completed ' + (seg === "ULTRA" ? "Ultra" : "Large Blow") + " sales in this period.</div>";
+
+    // India reach: poori width, kam height — legend + buttons header mein, States aur UTs ek-ek line mein
+    var reachHead = '<div class="ucmx-card-h"><b>India reach</b>' +
+      (X.tillSet ? '<div class="ucmx-legend"><span><i class="is-now"></i>This period</span><span><i class="is-earlier"></i>Earlier only</span><span><i class="is-never"></i>Never</span></div>' +
+        '<div class="ucmx-reach-btns"><button type="button" class="ucmx-mbtn is-warn" data-tr-list="missed">Missed this period <b>' + X.missed.length + "</b></button>" +
+        '<button type="button" class="ucmx-mbtn is-bad" data-tr-list="never">Never covered <b>' + X.never.length + "</b></button></div>" : "<span>36 states &amp; UTs</span>") + "</div>";
+    var mapHtml = X.tillSet ? '<div class="ucmx-reach-row"><span class="ucmx-reach-k">States <b>' + UCM_INDIA_STATES.filter(function (s) { return X.tillSet[s]; }).length + "/28</b></span>" + chips(UCM_INDIA_STATES) + "</div>" +
+      '<div class="ucmx-reach-row"><span class="ucmx-reach-k">UTs <b>' + UCM_INDIA_UTS.filter(function (s) { return X.tillSet[s]; }).length + "/8</b></span>" + chips(UCM_INDIA_UTS) + "</div>"
+      : errBox("Till-date data load nahi hua. Check that the <code>ucm_territory_till_date_summary</code> Server Script is enabled.");
+    function chips(list) {
+      return '<div class="ucmx-states">' + list.map(function (s) {
+        var cls = X.periodSet[s] ? "is-now" : (X.tillSet[s] ? "is-earlier" : "is-never");
+        return '<span class="' + cls + '"' + (X.periodSet[s] ? ' data-tr-chip="' + esc(s) + '"' : "") + ">" + esc(s) + "</span>";
+      }).join("") + "</div>";
+    }
+
+    // Category reach
+    var catList = (X.till && X.till.category_reach) || null;
+    if (catList && typeof _ucmIsHiddenUltraCategory === "function") catList = catList.filter(function (c) { return !_ucmIsHiddenUltraCategory(seg, c.category, true); });
+    var cats = (catList || []).map(function (c) {
+      var merged = {}, total = 0;
+      Object.keys(c.states || {}).forEach(function (s) { var a = parseFloat(c.states[s]) || 0; var k = _ucmCanonicalState(s) || (String(s || "").trim() || "Unknown"); merged[k] = (merged[k] || 0) + a; total += a; });
+      return { name: c.category || "Uncategorized", states: merged, total: total, reached: Object.keys(merged).filter(function (k) { return UCM_INDIA_ALL.indexOf(k) >= 0; }).length };
+    }).sort(function (a, b) { return b.total - a.total; });
+    TR.cats = cats;
+    var catHtml = !catList ? errBox("Category reach data load nahi hua (<code>ucm_territory_till_date_summary</code> with <code>category_reach</code>).")
+      : cats.length ? '<div class="ucmx-tw"><table class="ucmx-table is-click"><thead><tr><th>#</th><th>Category</th><th class="r">States reached</th><th class="r">Sales</th><th></th></tr></thead><tbody>' +
+        cats.map(function (c, i) {
+          return '<tr data-tr-cat="' + i + '"><td class="mut">' + (i + 1) + "</td><td><b class='nm'>" + esc(c.name) + '</b></td><td class="r share"><span class="ucmx-bar-s"><i style="width:' + pct(c.reached, 36) + '%"></i></span>' + c.reached + ' / 36</td><td class="r"><b>' + inr(c.total) + "</b></td><td class='go'>" + ICO.arrow + "</td></tr>";
+        }).join("") + "</tbody></table></div>" : '<div class="ucmx-empty sm">No category sales in this period.</div>';
+
+    host.innerHTML = head + kpis +
+      '<div class="ucmx-card is-reach">' + reachHead + mapHtml + "</div>" +
+      '<div class="ucmx-grid2"><div class="ucmx-card"><div class="ucmx-card-h"><b>State wise sales</b><span>click a state for city breakup</span></div>' + stateTbl + "</div>" +
+      '<div class="ucmx-card"><div class="ucmx-card-h"><b>Category wise sales</b><span>click a category for state breakup</span></div>' + catHtml + "</div></div>";
+
+    $all("[data-tr-seg]", host).forEach(function (b) { b.addEventListener("click", function () { TR.seg = b.getAttribute("data-tr-seg"); renderTerr(); }); });
+    $all("[data-tr-state], [data-tr-chip]", host).forEach(function (r) { r.addEventListener("click", function () { openState(r.getAttribute("data-tr-state") || stateKey(t, r.getAttribute("data-tr-chip"))); }); });
+    $all("[data-tr-list]", host).forEach(function (b) { b.addEventListener("click", function () { openStateList(b.getAttribute("data-tr-list"), X); }); });
+    $all("[data-tr-cat]", host).forEach(function (r) { r.addEventListener("click", function () { openCat(TR.cats[+r.getAttribute("data-tr-cat")]); }); });
+  }
+  function stateKey(t, canon) {
+    var k = Object.keys(t.states).filter(function (s) { return _ucmCanonicalState(s) === canon; })[0];
+    return k || canon;
+  }
+  function segLabel() { return TR.seg === "ULTRA" ? "Ultra" : "Large Blow"; }
+  function openState(state) {
+    var t = _ucmComputeTerritoryData(TR.rows, TR.seg), st = t.states[state]; if (!st) return;
+    var cities = Object.keys(st.cities).sort(function (a, b) { return st.cities[b] - st.cities[a]; });
+    // Is state ke invoices (customer-wise)
+    var cust = {};
+    var lastName = "", lastCust = "";
+    (TR.rows || []).forEach(function (r) {
+      if (r.name) { lastName = r.name; }
+      if (!/data-dn-status="Completed"/.test(String(r.status || ""))) return;
+      if (String(r.custom_sales_order_type || "").toUpperCase() !== TR.seg) return;
+      if ((String(r.state || "").trim() || "Unknown") !== state) return;
+      var c = r.customer_name || lastCust; lastCust = c;
+      cust[c] = (cust[c] || 0) + (parseFloat(r.amount) || 0);
+    });
+    var custs = Object.keys(cust).sort(function (a, b) { return cust[b] - cust[a]; });
+    var max = cities.length ? st.cities[cities[0]] : 0;
+    drawer("Territory · " + segLabel(), state, rangeTxt() + " · " + cities.length + " cities · " + inr(st.amount),
+      '<div class="ucmx-dr-kpis"><div><span>Sales</span><b>' + inr(st.amount) + "</b></div><div><span>Cities</span><b>" + cities.length + "</b></div><div><span>Customers</span><b>" + custs.length + "</b></div></div>" +
+      '<div class="ucmx-gt">City wise</div><div class="ucmx-tw"><table class="ucmx-table"><thead><tr><th>#</th><th>City</th><th class="r">Sales</th><th class="r">Share</th></tr></thead><tbody>' +
+        cities.map(function (c, i) { return "<tr><td class='mut'>" + (i + 1) + "</td><td><b class='nm'>" + esc(c) + '</b></td><td class="r"><b>' + inr(st.cities[c]) + '</b></td><td class="r share"><span class="ucmx-bar-s"><i style="width:' + (max ? Math.max(2, Math.round(st.cities[c] / max * 100)) : 0) + '%"></i></span>' + pct(st.cities[c], st.amount) + "%</td></tr>"; }).join("") +
+      "</tbody></table></div>" +
+      (custs.length ? '<div class="ucmx-gt">Customers</div><div class="ucmx-tw"><table class="ucmx-table"><thead><tr><th>#</th><th>Customer</th><th class="r">Sales</th></tr></thead><tbody>' +
+        custs.map(function (c, i) { return "<tr><td class='mut'>" + (i + 1) + "</td><td><b class='nm'>" + esc(c) + '</b></td><td class="r"><b>' + inr(cust[c]) + "</b></td></tr>"; }).join("") + "</tbody></table></div>" : ""),
+      { width: "min(720px, 96vw)", download: function () { csv(state + "_cities", ["City", "Sales"], cities.map(function (c) { return [c, Math.round(st.cities[c])]; })); } });
+  }
+  function openStateList(kind, X) {
+    var list = kind === "missed" ? X.missed : X.never;
+    var title = kind === "missed" ? "Missed this period" : "Never covered till date";
+    var sub = kind === "missed" ? list.length + " states had " + segLabel() + " sales earlier but none in " + rangeTxt() : list.length + " of 36 states / UTs never had a " + segLabel() + " sale";
+    drawer("Territory · " + segLabel(), title, sub,
+      list.length ? '<div class="ucmx-states big ' + (kind === "missed" ? "all-earlier" : "all-never") + '">' + list.map(function (s) { return '<span class="' + (kind === "missed" ? "is-earlier" : "is-never") + '">' + esc(s) + "</span>"; }).join("") + "</div>"
+        : '<div class="ucmx-empty sm">' + (kind === "missed" ? "Every state covered till date also has sales this period." : "All states covered — no gaps.") + "</div>",
+      { width: "min(620px, 96vw)", download: function () { csv(kind + "_states", ["State / UT"], list.map(function (s) { return [s]; })); } });
+  }
+  function openCat(c) {
+    if (!c) return;
+    var names = Object.keys(c.states).sort(function (a, b) { return c.states[b] - c.states[a]; });
+    var max = names.length ? c.states[names[0]] : 0;
+    drawer("Category reach · " + segLabel(), c.name, rangeTxt() + " · " + c.reached + " / 36 states · " + inr(c.total),
+      '<div class="ucmx-tw"><table class="ucmx-table"><thead><tr><th>#</th><th>State</th><th class="r">Sales</th><th class="r">Share</th></tr></thead><tbody>' +
+        names.map(function (s, i) { return "<tr><td class='mut'>" + (i + 1) + "</td><td><b class='nm'>" + esc(s) + '</b></td><td class="r"><b>' + inr(c.states[s]) + '</b></td><td class="r share"><span class="ucmx-bar-s"><i style="width:' + (max ? Math.max(2, Math.round(c.states[s] / max * 100)) : 0) + '%"></i></span>' + pct(c.states[s], c.total) + "%</td></tr>"; }).join("") +
+      "</tbody></table></div>",
+      { width: "min(680px, 96vw)", download: function () { csv(c.name + "_states", ["State", "Sales"], names.map(function (s) { return [s, Math.round(c.states[s])]; })); } });
+  }
+
+  /* ═════════════════════════ NEW CUSTOMERS ═════════════════════════ */
+  var NC = { key: "", data: null, rows: null, req: 0 };
+  function loadNC(force) {
+    var host = $1("#ucmx-newc"); if (!host) return;
+    var k = fkey(); if (!force && NC.key === k && NC.data !== undefined && NC.loaded) { renderNC(); return; }
+    NC.key = k; NC.loaded = false; var id = ++NC.req;
+    if (typeof _ucmFetchNewCustomersDetail !== "function") { host.innerHTML = errBox("Report JS (PART 2) load nahi hui."); return; }
+    host.innerHTML = loading("Loading new customers…");
+    var got = 0;
+    function done() { if (++got < 2 || id !== NC.req) return; NC.loaded = true; renderNC(); }
+    _ucmFetchNewCustomersDetail(function (dd) { NC.data = dd; done(); });
+    // Invoices dikhane ke liye Sales Invoice rows (territory wale hi; cache ho to wahi)
+    if (TR.rows && TR.key === k) { NC.rows = TR.rows; done(); }
+    else _ucmFetchTerritorySalesInvoiceRows(function (r) { NC.rows = r || []; done(); });
+  }
+  function ncList(seg) {
+    var m = (NC.data && NC.data[seg]) || {};
+    return Object.keys(m).map(function (k) { var c = m[k]; return { id: k, name: c.name || k, orders: c.orders || 0, sales: c.sales || 0 }; })
+      .sort(function (a, b) { return b.sales - a.sales; });
+  }
+  function renderNC() {
+    var host = $1("#ucmx-newc"); if (!host) return;
+    if (!NC.data) { host.innerHTML = errBox("New customer data load nahi hua. Check that the <code>ucm_customer_acquisition_detail</code> Server Script is enabled."); return; }
+    var sot = String(fv("sales_order_type") || "").toUpperCase();
+    var U = ncList("ultra"), L = ncList("large_blow");
+    var su = U.reduce(function (a, c) { return a + c.sales; }, 0), sl = L.reduce(function (a, c) { return a + c.sales; }, 0);
+    var showU = sot !== "LARGE BLOW", showL = sot !== "ULTRA";
+    var totN = (showU ? U.length : 0) + (showL ? L.length : 0), totS = (showU ? su : 0) + (showL ? sl : 0);
+    var head = "";
+    var kpis = '<div class="ucmx-kpis is-4">' +
+      '<div class="ucmx-kpi is-hero"><div class="ucmx-kpi-l">New customers</div><div class="ucmx-kpi-v">' + num(totN) + '</div><div class="ucmx-kpi-s">first order in this period</div></div>' +
+      '<div class="ucmx-kpi"><div class="ucmx-kpi-l">Sales from new customers</div><div class="ucmx-kpi-v">' + inrS(totS) + '</div><div class="ucmx-kpi-s">' + inr(totS) + "</div></div>" +
+      (showU ? '<div class="ucmx-kpi is-ultra"><div class="ucmx-kpi-l">Ultra · new</div><div class="ucmx-kpi-v">' + U.length + '</div><div class="ucmx-kpi-s">' + inr(su) + "</div></div>" : "") +
+      (showL ? '<div class="ucmx-kpi is-lb"><div class="ucmx-kpi-l">Large Blow · new</div><div class="ucmx-kpi-v">' + L.length + '</div><div class="ucmx-kpi-s">' + inr(sl) + "</div></div>" : "") +
+    "</div>";
+    function table(list, seg, label, cls, total) {
+      var max = list.length ? list[0].sales : 0;
+      return '<div class="ucmx-card ' + cls + '"><div class="ucmx-card-h"><b>' + label + ' · new customers</b><span class="ucmx-pill">' + list.length + " · " + inr(total) + "</span></div>" +
+        (list.length ? '<div class="ucmx-tw"><table class="ucmx-table is-click"><thead><tr><th>#</th><th>Customer</th><th class="r">Orders</th><th class="r">Sales</th><th class="r">Share</th><th></th></tr></thead><tbody>' +
+          list.map(function (c, i) {
+            return '<tr data-nc="' + seg + "|" + esc(c.id) + '"><td class="mut">' + (i + 1) + "</td><td><b class='nm'>" + esc(c.name) + '</b></td><td class="r">' + c.orders + '</td><td class="r"><b>' + inr(c.sales) +
+              '</b></td><td class="r share"><span class="ucmx-bar-s"><i style="width:' + (max ? Math.max(2, Math.round(c.sales / max * 100)) : 0) + '%"></i></span>' + pct(c.sales, total) + "%</td><td class='go'>" + ICO.arrow + "</td></tr>";
+          }).join("") + "</tbody></table></div>" : '<div class="ucmx-empty sm">No new ' + label + " customers in this period.</div>") + "</div>";
+    }
+    host.innerHTML = head + kpis + '<div class="ucmx-grid2' + (showU && showL ? "" : " is-one") + '">' +
+      (showU ? table(U, "ultra", "Ultra", "is-ultra", su) : "") + (showL ? table(L, "large_blow", "Large Blow", "is-lb", sl) : "") + "</div>";
+    $all("[data-nc]", host).forEach(function (r) {
+      r.addEventListener("click", function () {
+        var p = r.getAttribute("data-nc").split("|"), seg = p[0], id = p.slice(1).join("|");
+        var c = ncList(seg).filter(function (x) { return x.id === id; })[0]; if (c) openCustomer(c, seg);
+      });
+    });
+  }
+  function openCustomer(c, seg) {
+    // Sales Invoice rows se is customer ke invoices (selected period)
+    var inv = {}, order = [], cur = null;
+    (NC.rows || []).forEach(function (r) {
+      if (r.name && (!cur || cur.name !== r.name)) {
+        cur = inv[r.name] || null;
+        var want = seg === "ultra" ? "ULTRA" : "LARGE BLOW";
+        if (!cur && (r.customer_name === c.name || r.customer === c.id) && String(r.custom_sales_order_type || "").toUpperCase() === want) {
+          cur = inv[r.name] = { name: r.name, date: r.posting_date, sot: String(r.custom_sales_order_type || "").toUpperCase(), lines: [], total: 0, draft: !/data-dn-status="Completed"/.test(String(r.status || "")) };
+          order.push(cur);
+        }
+      }
+      if (cur && r.name === cur.name) {
+        var a = parseFloat(r.amount) || 0; cur.total += a;
+        cur.lines.push({ item: r.item_name || r.item_code || "", qty: r.qty, rate: r.rate, amount: a });
+      }
+    });
+    var list = order.sort(function (a, b) { return b.total - a.total; });
+    var tot = list.reduce(function (a, x) { return a + x.total; }, 0);
+    var segL = seg === "ultra" ? "Ultra" : "Large Blow";
+    drawer("New customer · " + segL, c.name, rangeTxt() + " · " + c.orders + " orders · " + inr(c.sales),
+      '<div class="ucmx-dr-kpis"><div><span>Sales (' + segL + ')</span><b>' + inr(c.sales) + "</b></div><div><span>Orders</span><b>" + c.orders + "</b></div><div><span>Invoices found</span><b>" + list.length + "</b></div></div>" +
+      (list.length ? '<div class="ucmx-gt">Invoices · sorted by amount</div>' + list.map(function (x) {
+        return '<div class="ucmx-inv"><div class="ucmx-inv-h"><a href="/app/sales-invoice/' + encodeURIComponent(x.name) + '" target="_blank" rel="noopener">' + esc(x.name) + " " + ICO.ext + "</a><span>" + dt(x.date) + "</span>" + typeTag(x.sot) +
+          (x.draft ? '<span class="ucmx-badge is-warn">Draft</span>' : "") + "<b>" + inr(x.total) + "</b></div>" +
+          '<table class="ucmx-table sm"><tbody>' + x.lines.map(function (l) { return "<tr><td>" + esc(l.item) + '</td><td class="r">' + num(l.qty) + ' × ' + rate(l.rate) + '</td><td class="r"><b>' + inr(l.amount) + "</b></td></tr>"; }).join("") + "</tbody></table></div>";
+      }).join("") + '<div class="ucmx-inv-tot">Total <b>' + inr(tot) + "</b></div>"
+        : '<div class="ucmx-empty sm">No invoice lines found for this customer in the selected filters.</div>'),
+      { width: "min(760px, 96vw)", download: function () {
+        var rows = []; list.forEach(function (x) { x.lines.forEach(function (l) { rows.push([x.name, x.date, l.item, l.qty, l.rate, l.amount]); }); });
+        csv(c.name + "_invoices", ["Invoice", "Date", "Product", "Qty", "Rate", "Amount"], rows);
+      } });
+  }
+
+  /* ═════════════════════════ wiring ═════════════════════════ */
+  var active = "summary";
+  function ensure(tab) {
+    if (tab === "so") loadSO(); else if (tab === "terr") loadTerr(); else if (tab === "newc") loadNC();
+  }
+  d.addEventListener("ucmw:tab", function (e) { active = (e.detail && e.detail.tab) || ""; ensure(active); });
+  d.addEventListener("ucmw:data", function () { if (active === "so" || active === "terr" || active === "newc") ensure(active); });
+})(window);
