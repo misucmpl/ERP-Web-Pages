@@ -1,0 +1,26 @@
+/* ============================================================
+   Log Complaint page (/log-complaint) — access check
+   Is page ke Javascript box mein SABSE UPAR paste karein.
+   Jinke paas "Log" (ya Full) access nahi hai, unhe form nahi dikhega.
+   (Server par bhi rok lagi hai — ucm_complaint_guard — ye sirf saaf message ke liye hai.)
+   ============================================================ */
+(function () {
+  var holder = document.querySelector(".page-content-wrapper") || document.querySelector("main") || document.body;
+  holder.style.visibility = "hidden";
+  fetch("/api/method/ucm_complaint_access?action=me", { credentials: "same-origin", headers: { Accept: "application/json" } })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      var a = (j && j.message) || {};
+      if (!a.can_log) {
+        holder.innerHTML =
+          '<div style="max-width:440px;margin:80px auto;padding:32px 28px;text-align:center;font-family:Inter,system-ui,sans-serif;' +
+          'background:#fff;border:1px solid #e4e9f2;border-radius:14px;box-shadow:0 10px 30px -18px rgba(26,36,51,.35)">' +
+          '<div style="font-size:30px;margin-bottom:8px">&#128274;</div>' +
+          '<h3 style="margin:0 0 6px;font-size:18px;color:#1a2433">You cannot log complaints</h3>' +
+          '<p style="margin:0 0 18px;color:#4a5568;font-size:14px">Only the Sales team can log a complaint. Ask a System Manager to give you <b>Log</b> access.</p>' +
+          '<a href="/complaint-dashboard" style="display:inline-block;padding:9px 18px;border-radius:8px;background:#1f5fbf;color:#fff;font-weight:600;text-decoration:none">Go to dashboard</a></div>';
+      }
+      holder.style.visibility = "";
+    })
+    .catch(function () { holder.style.visibility = ""; });
+})();
