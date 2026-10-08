@@ -1,0 +1,162 @@
+<!-- ============================================================
+     UCMPL · Customer Complaints · Dashboard
+     Web Page → Main Section (HTML): sirf ye HTML
+     Web Page → Style (CSS)        : complaint-dashboard.css
+     Web Page → Javascript         : complaint-dashboard.js
+     Route: complaint-dashboard  |  Full Width: ON  |  Show Title: OFF
+     ============================================================ -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<div class="ucd" id="ucd">
+  <header class="ucd-top">
+    <h2 class="ucd-title">Customer Complaint Portal</h2>
+  </header>
+
+  <div class="ucd-gate" id="dGate">
+    <div class="ucd-gate-card"><span class="ucd-spin"></span><p>Checking access&hellip;</p></div>
+  </div>
+
+  <div class="ucd-wrap" id="dMain" hidden>
+    <div class="ucd-msg" id="dMsg"></div>
+
+    <div class="ucd-bar">
+      <select id="dMonth" aria-label="Month"><option value="">All months</option></select>
+      <div class="ucd-seg" id="dStatus">
+        <button data-s="" class="on">All</button>
+        <button data-s="Open">Open</button>
+        <button data-s="Replied">Replied</button>
+        <button data-s="Closed">Closed</button>
+      </div>
+      <select id="dType" aria-label="Complaint type"><option value="">All types</option></select>
+      <div class="ucd-search"><input type="text" id="dSearch" placeholder="Search ID, invoice, customer, item&hellip;"></div>
+      <div class="ucd-sp"></div>
+      <span class="ucd-role" id="dRole" hidden></span>
+      <button type="button" class="ucd-gear" id="dGear" title="Access settings" aria-label="Access settings" hidden>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <a class="ucd-btn" id="dLog" href="/log-complaint" hidden>+ Log Complaint</a>
+    </div>
+
+    <div class="ucd-split">
+      <!-- LEFT: dashboard -->
+      <section class="ucd-dash">
+        <div class="ucd-kpis">
+          <div class="ucd-kpi" data-s=""><div class="lbl"><span class="dot" style="background:#8a94a6"></span>Total</div><div class="val" id="kTotal">&ndash;</div><div class="sub" id="kTotalSub">&nbsp;</div></div>
+          <div class="ucd-kpi" data-s="Open"><div class="lbl"><span class="dot" style="background:var(--open)"></span>Open</div><div class="val" id="kOpen">&ndash;</div><div class="sub">Awaiting Quality</div></div>
+          <div class="ucd-kpi" data-s="Replied"><div class="lbl"><span class="dot" style="background:var(--replied)"></span>Replied</div><div class="val" id="kReplied">&ndash;</div><div class="sub">Not closed yet</div></div>
+          <div class="ucd-kpi" data-s="Closed"><div class="lbl"><span class="dot" style="background:var(--closed)"></span>Closed</div><div class="val" id="kClosed">&ndash;</div><div class="sub">Resolved</div></div>
+          <div class="ucd-kpi static"><div class="lbl"><span class="dot" style="background:#4a5568"></span>Avg. reply</div><div class="val" id="kAvg">&ndash;</div><div class="sub" id="kAvgSub">Logged &rarr; first reply</div></div>
+        </div>
+
+        <!-- Customer rejection: Credit Notes (Sales Invoice returns) -->
+        <button type="button" class="ucd-cn" id="cnCard" title="View credit notes">
+          <span class="ucd-cn-ico">&#8617;</span>
+          <span class="ucd-cn-t"><b>Customer rejection &middot; Credit notes</b><small id="cnSub">Sales Invoice returns</small></span>
+          <span class="ucd-cn-k"><small>Amount ex-GST</small><b id="cnAmt">&ndash;</b></span>
+          <span class="ucd-cn-k"><small>Credit notes</small><b id="cnCount">&ndash;</b></span>
+          <span class="ucd-cn-k"><small>Invoices</small><b id="cnInv">&ndash;</b></span>
+          <span class="ucd-cn-go">&rsaquo;</span>
+        </button>
+
+        <div class="ucd-card">
+          <h3>Complaints by month</h3>
+          <div class="cap">Click a month to filter</div>
+          <div id="cMonth"></div>
+        </div>
+
+        <div class="ucd-charts">
+          <div class="ucd-card">
+            <h3>By complaint type</h3>
+            <div class="cap" id="cTypeCap">Current filter</div>
+            <div id="cType"></div>
+          </div>
+          <div class="ucd-card">
+            <h3>Top customers</h3>
+            <div class="cap">Current filter</div>
+            <div id="cCust"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT: complaint list -->
+      <section class="ucd-listcard">
+        <div class="ucd-thead"><h3>Complaints</h3><span id="tCount"></span></div>
+        <div class="ucd-list" id="tList"><div class="ucd-none">Loading complaints&hellip;</div></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="ucd-shade" id="dShade"></div>
+  <aside class="ucd-drawer" id="dDrawer" aria-hidden="true">
+    <div class="ucd-dh">
+      <h2 id="dwId"></h2><span id="dwBadge"></span>
+      <button class="ucd-x" id="dwClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="ucd-db">
+      <div class="ucd-msg" id="dwMsg"></div>
+      <div class="ucd-kv" id="dwKv"></div>
+      <p class="ucd-sec">Complaint</p>
+      <div class="ucd-box c" id="dwText"></div>
+      <div id="dwReplyShow"></div>
+      <div id="dwReplyEdit">
+        <p class="ucd-sec" id="dwReplyLbl">Quality reply</p>
+        <textarea id="dwReply" maxlength="2000" placeholder="Root cause, action taken, and what the customer should expect&hellip;"></textarea>
+      </div>
+      <div class="ucd-cm">
+        <p class="ucd-sec">Comments <span id="dwCmN"></span></p>
+        <div class="ucd-cm-list" id="dwCmList"></div>
+        <div class="ucd-cm-add" id="dwCmAdd">
+          <textarea id="dwCmText" maxlength="2000" placeholder="Add a comment for Sales / Quality&hellip;"></textarea>
+          <button class="ucd-btn ghost" id="dwCmSend" type="button">Post comment</button>
+        </div>
+      </div>
+    </div>
+    <div class="ucd-df">
+      <button class="ucd-btn" id="dwSave" type="button">Save Reply</button>
+      <button class="ucd-btn green" id="dwDone" type="button">Mark Closed</button>
+      <div class="ucd-sp"></div>
+      <button class="ucd-btn danger" id="dwDel" type="button" style="display:none">Delete</button>
+    </div>
+  </aside>
+  <aside class="ucd-drawer ucd-cn-drawer" id="cnDrawer" aria-hidden="true">
+    <div class="ucd-dh">
+      <div><h2>Customer rejection &middot; Credit notes</h2><div class="ucd-cn-dsub" id="cnDSub"></div></div>
+      <button class="ucd-x" id="cnClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="ucd-db" id="cnList"></div>
+  </aside>
+  <!-- Access settings (System Manager only) -->
+  <div class="ucd-modal-bg" id="sBg" hidden>
+    <div class="ucd-modal" role="dialog" aria-label="Access settings">
+      <div class="ucd-mh">
+        <div><h2>Complaint portal access</h2><div class="ucd-msub">Who can see the dashboard, log complaints and reply</div></div>
+        <button class="ucd-x" id="sClose" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="ucd-mb">
+        <div class="ucd-levels">
+          <div class="lv view"><b>View</b><span>Sees the dashboard and comments only</span></div>
+          <div class="lv log"><b>Log &middot; Sales</b><span>Logs complaints, comments, closes</span></div>
+          <div class="lv quality"><b>Quality</b><span>Writes quality reply, comments, closes</span></div>
+          <div class="lv full"><b>Full</b><span>Everything of Log + Quality</span></div>
+        </div>
+        <div class="ucd-msg" id="sMsg"></div>
+        <div class="ucd-sadd">
+          <div class="ucd-pick">
+            <input type="text" id="sUser" placeholder="Type user name or email&hellip;" autocomplete="off">
+            <div class="ucd-pick-list" id="sUserList" hidden></div>
+          </div>
+          <select id="sLevel">
+            <option value="view">View</option>
+            <option value="log">Log &middot; Sales</option>
+            <option value="quality">Quality</option>
+            <option value="full">Full</option>
+          </select>
+          <button class="ucd-btn" id="sGrant" type="button">Grant access</button>
+        </div>
+        <div class="ucd-ulist" id="sList"><div class="ucd-none">Loading&hellip;</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="ucd-tip" id="dTip"></div>
+</div>
