@@ -383,7 +383,7 @@
   function openCalc() {
     var m = $("#agr-calcm");
     try { var last = w.localStorage.getItem("agr-calc-p"); if (last && JW.products[last]) CALC.key = last; } catch (e) { }
-    CALC.arm = false; CALC.done = null; CALC.busy = false; CALC.err = ""; CALC.vehicle = ""; CALC.dist = 12;
+    CALC.arm = false; CALC.done = null; CALC.busy = false; CALC.err = ""; CALC.vehicle = ""; CALC.dist = 12; CALC.delArm = false; CALC.delBusy = false; CALC.delErr = ""; CALC.info = "";
     $(".agr-modal", m).innerHTML =
       '<div class="agr-mh"><div><h3>Dispatch Entry</h3><p>Product chunein aur qty daalein. REPOL aur Master Batch ka kg aur repack pcs apne aap aa jaayega.</p></div>' +
         '<button type="button" class="agr-ibtn" id="agr-calc-x" title="Close">' + I.x + "</button></div>" +
@@ -422,7 +422,10 @@
       if (act === "arm") { CALC.arm = true; CALC.err = ""; drawSubmit(); }
       else if (act === "cancel") { CALC.arm = false; drawSubmit(); }
       else if (act === "go") submitRepack();
-      else if (act === "new") { var oe = $("#agr-calc-out"); if (oe) oe.hidden = false; CALC.done = null; CALC.arm = false; q.value = ""; q.disabled = false; vIn.disabled = false; dIn.disabled = false; vIn.value = CALC.vehicle = ""; draw(); q.focus(); }
+      else if (act === "del") { CALC.delArm = true; CALC.delErr = ""; drawSubmit(); }
+      else if (act === "del-no") { CALC.delArm = false; drawSubmit(); }
+      else if (act === "del-go") deleteDone();
+      else if (act === "new") { var oe = $("#agr-calc-out"); if (oe) oe.hidden = false; CALC.done = null; CALC.info = ""; CALC.delArm = false; CALC.arm = false; q.value = ""; q.disabled = false; vIn.disabled = false; dIn.disabled = false; vIn.value = CALC.vehicle = ""; draw(); q.focus(); }
     });
 
     function state() {
@@ -473,11 +476,32 @@
         "</tbody></table></div>";
       drawSubmit();
     }
+    function docNames(d0) {
+      var n = (d0.entries || []).map(function (e) { return e.name; });
+      if (d0.delivery_note) n.unshift(d0.delivery_note.name);
+      return n;
+    }
+    async function deleteDone() {
+      var d0 = CALC.done; if (!d0 || CALC.delBusy) return;
+      CALC.delBusy = true; CALC.delErr = ""; drawSubmit();
+      try {
+        var res = await api({ action: "undo", delivery_note: d0.delivery_note ? d0.delivery_note.name : "", stock_entries: (d0.entries || []).map(function (e) { return e.name; }).join(",") }, "POST");
+        CALC.delBusy = false; CALC.delArm = false; CALC.done = null;
+        CALC.info = "Deleted " + (((res && res.deleted) || []).length) + " entries (" + docNames(d0).join(", ") + "). Correct the details and submit again.";
+        var oe = $("#agr-calc-out"); if (oe) oe.hidden = false;
+        q.disabled = false; vIn.disabled = false; dIn.disabled = false;
+        draw();
+        loadJwStock().then(function () { if (!$("#agr-calcm").hidden && !CALC.done) draw(); });
+        load();
+      } catch (e) {
+        CALC.delBusy = false; CALC.delErr = e.message; drawSubmit();
+      }
+    }
     function dnCard(dn) {
       if (!dn) return "";
       return '<div class="agr-cdn"><div class="t"><a href="/app/delivery-note/' + encodeURIComponent(dn.name) + '" target="_blank" rel="noopener"><b>' + esc(dn.name) + "</b></a>" +
         '<span class="pill">Delivery Note \u00b7 ' + esc(dn.status || "Submitted") + "</span>" +
-        "<em>" + esc(dn.customer_name || dn.customer) + " \u00b7 " + dmy(dn.posting_date) + " \u00b7 " + esc(dn.vehicle_no) + " \u00b7 " + qi(dn.distance) + " km</em></div>" +
+        "<em>" + esc(dn.customer) + (dn.customer_name && dn.customer_name !== dn.customer ? " \u00b7 " + esc(dn.customer_name) : "") + " \u00b7 " + dmy(dn.posting_date) + " \u00b7 " + esc(dn.vehicle_no) + " \u00b7 " + qi(dn.distance) + " km</em></div>" +
         '<table class="agr-t agr-ct"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead><tbody>' +
         (dn.items || []).map(function (it) { return "<tr><td>" + esc(it.item_code) + '</td><td class="n">' + qi(it.qty) + " " + esc(it.uom || "") + '</td><td class="n">' + inr(it.rate) + '</td><td class="n">' + inr(it.amount) + "</td></tr>"; }).join("") +
         '<tr class="tot"><td>Net Total' + (dn.total_taxes ? " + Tax " + inr(dn.total_taxes) : "") + '</td><td></td><td></td><td class="n">' + inr(dn.grand_total) + "</td></tr></tbody></table></div>";
@@ -492,16 +516,22 @@
           '<div class="agr-cents">' + (d0.entries || []).map(function (e) {
             return '<a href="/app/stock-entry/' + encodeURIComponent(e.name) + '" target="_blank" rel="noopener"><b>' + esc(e.name) + "</b><small>Repack \u00b7 " + qi(e.fg_pcs) + " pcs \u2192 " + qi(e.rm_qty) + " kg " + esc(e.rm_item) + "</small></a>";
           }).join("") + "</div>" + dnCard(d0.delivery_note) +
-          '<div class="agr-cact"><button type="button" class="agr-btn" data-act="new">New Dispatch Entry</button></div>';
+          (CALC.delErr ? '<div class="agr-msg show">Delete failed: ' + esc(CALC.delErr) + "</div>" : "") +
+          (CALC.delArm
+            ? '<div class="agr-cconf is-del"><span>Cancel and delete <b>' + esc(docNames(d0).join(", ")) + "</b>? Stock will go back to how it was.</span>" +
+                '<div class="agr-cact"><button type="button" class="agr-btn ghost" data-act="del-no"' + (CALC.delBusy ? " disabled" : "") + ">Keep</button>" +
+                '<button type="button" class="agr-btn danger" data-act="del-go"' + (CALC.delBusy ? " disabled" : "") + ">" + (CALC.delBusy ? '<span class="agr-spin sm"></span> Deleting\u2026' : "Yes, Delete All") + "</button></div></div>"
+            : '<div class="agr-cact"><button type="button" class="agr-btn ghost del" data-act="del">' + I.x + ' Delete Entries</button><span class="why">Something wrong? Delete these entries and create a new one.</span>' +
+                '<button type="button" class="agr-btn" data-act="new">New Dispatch Entry</button></div>');
         return;
       }
       var st = state(), r = st.r, p = st.p;
       var plan = [[r.repolPcs, JW.items.repol, r.repolKgR, "REPOL"], [r.mbPcs, JW.items.mb, r.mbKgR, "Master Batch"]].filter(function (x) { return x[0] > 0 && x[2] > 0; });
       var dnKg = r.repolKgR + r.mbKgR, dnAmt = r.repolAmt + r.mbAmt;
-      var planHtml = '<div class="agr-cplan"><div class="h">ERP mein ye entries banengi <em>(' + (plan.length || 2) + " Stock Entry \u00b7 Repack + 1 Delivery Note \u00b7 sab Submit)</em></div>" +
+      var planHtml = '<div class="agr-cplan"><div class="h">Entries to be created in ERP <em>(' + (plan.length || 2) + " Stock Entries \u00b7 Repack + 1 Delivery Note \u00b7 all submitted)</em></div>" +
         (plan.length ? plan.map(function (x, i) {
-          return '<div class="row"><span class="n">' + (i + 1) + "</span><span class=\"src\"><small>WH2 - UCM se</small><b>" + qi(x[0]) + " pcs</b><em>" + esc(p.item) + '</em></span><span class="arr">\u2192</span><span class="tgt"><small>WH1 - UCM mein</small><b>' + qi(x[2]) + " kg</b><em>" + esc(x[1]) + "</em></span></div>";
-        }).join("") + '<div class="row dn"><span class="n">' + (plan.length + 1) + '</span><span class="src"><small>Delivery Note \u00b7 WH1 - UCM se</small><b>' + qi(dnKg) + " kg</b><em>REPOL " + qi(r.repolKgR) + " + MB " + qi(r.mbKgR) + '</em></span><span class="arr">\u2192</span><span class="tgt"><small>' + esc(DEFAULT_CUSTOMER) + "</small><b>" + inr0(dnAmt) + "</b><em>" + (CALC.vehicle ? esc(CALC.vehicle) : "vehicle ?") + " \u00b7 " + (CALC.dist > 0 ? qi(CALC.dist) + " km" : "km ?") + "</em></span></div>" : '<div class="none">Qty daalte hi entries yahan dikhengi.</div>') + "</div>";
+          return '<div class="row"><span class="n">' + (i + 1) + "</span><span class=\"src\"><small>From WH2 - UCM</small><b>" + qi(x[0]) + " pcs</b><em>" + esc(p.item) + '</em></span><span class="arr">\u2192</span><span class="tgt"><small>To WH1 - UCM</small><b>' + qi(x[2]) + " kg</b><em>" + esc(x[1]) + "</em></span></div>";
+        }).join("") + '<div class="row dn"><span class="n">' + (plan.length + 1) + '</span><span class="src"><small>Delivery Note \u00b7 from WH1 - UCM</small><b>' + qi(dnKg) + " kg</b><em>REPOL " + qi(r.repolKgR) + " + MB " + qi(r.mbKgR) + '</em></span><span class="arr">\u2192</span><span class="tgt"><small>' + esc(DEFAULT_CUSTOMER) + (S.customerName && S.customerName !== DEFAULT_CUSTOMER ? " \u00b7 " + esc(S.customerName) : "") + "</small><b>" + inr0(dnAmt) + "</b><em>" + (CALC.vehicle ? esc(CALC.vehicle) : "vehicle ?") + " \u00b7 " + (CALC.dist > 0 ? qi(CALC.dist) + " km" : "km ?") + "</em></span></div>" : '<div class="none">Entries will appear here once you enter a quantity.</div>') + "</div>";
       var why = "";
       if (!S.acc || !S.acc.can_entry) why = "Aapke paas Dispatch Entry submit karne ka access nahi hai.";
       else if (!st.hasQ) why = "Pehle qty daalein.";
@@ -511,7 +541,7 @@
       else if (!(CALC.dist > 0)) why = "Distance (km) daalein.";
       var ready = st.ok && !why;
       box.className = "agr-csub" + (ready ? " is-ok" : "");
-      var errHtml = CALC.err ? '<div class="agr-msg show">Submit nahi hua: ' + esc(CALC.err) + "</div>" : "";
+      var errHtml = (CALC.info ? '<div class="agr-msg show ok">' + esc(CALC.info) + "</div>" : "") + (CALC.err ? '<div class="agr-msg show">Submit nahi hua: ' + esc(CALC.err) + "</div>" : "");
       if (CALC.arm && ready) {
         box.innerHTML = errHtml + planHtml + '<div class="agr-cconf"><span>' + plan.length + " Repack entries and 1 Delivery Note will be <b>submitted</b>. Stock will update immediately.</span>" +
           '<div class="agr-cact"><button type="button" class="agr-btn ghost" data-act="cancel"' + (CALC.busy ? " disabled" : "") + '>Cancel</button>' +
@@ -527,7 +557,7 @@
       CALC.busy = true; drawSubmit(); q.disabled = true; vIn.disabled = true; dIn.disabled = true;
       try {
         var res = await api({ action: "repack", product: CALC.key, qty: Math.floor(+q.value || 0), vehicle_no: CALC.vehicle, distance: CALC.dist }, "POST");
-        CALC.busy = false; CALC.done = res; CALC.arm = false;
+        CALC.busy = false; CALC.done = res; CALC.arm = false; CALC.delArm = false; CALC.delErr = ""; CALC.info = "";
         drawSubmit();
         loadJwStock().then(function () { if (!$("#agr-calcm").hidden && !CALC.done) draw(); else if (!$("#agr-calcm").hidden) { $$(".agr-cpick [data-st]", m).forEach(function (s) { var it = JW.products[s.getAttribute("data-st")].item; s.textContent = JWS.stock ? "Stock " + qi(+JWS.stock[it] || 0) + " pcs" : ""; }); } });
         load();
