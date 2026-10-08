@@ -8,6 +8,8 @@
 #   action = "me"    → mera access                 (koi bhi logged-in user)
 #   action = "data"  → report data                 (View access)
 #                      days, item_group, mode = below / all / nonmoving / dana
+#   action = "purchase" → Purchase part (UCM Purchase History jaisa) (View access)
+#                      item_group (default Packaging Materials), pichhle 5 mahine
 #   action = "list"  → access wale users           (sirf System Manager)
 #   action = "set"   → access do / hatao           (sirf System Manager) · user, level = view / none
 #
@@ -424,6 +426,116 @@ elif pir_action == "data":
         "warehouse": warehouse,
         "from_date": str(from_date),
         "to_date": str(to_date),
+    }
+
+elif pir_action == "purchase":
+    # ═════ PURCHASE part — Script Report "UCM Purchase History" jaisa hi ═════
+    # Purchase Receipt (submitted) lines, ek Item Group, pichhle 5 calendar mahine
+    # (is mahine + pichhle 4). Amount = base_net_amount (tax ke bina).
+    if not pir_can_view:
+        frappe.throw("You do not have access to this report.")
+    p_group = (frappe.form_dict.get("item_group") or "Packaging Materials").strip()
+    if not frappe.db.exists("Item Group", p_group):
+        frappe.throw("Item Group not found: " + p_group)
+    p_company = frappe.form_dict.get("company") or ""
+
+    p_today = frappe.utils.getdate(frappe.utils.today())
+    P_NUM = 5
+    p_starts = []
+    for i in range(P_NUM):
+        p_starts.append(frappe.utils.getdate(frappe.utils.get_first_day(frappe.utils.add_months(p_today, -i))))
+    p_months = []
+    for i in range(P_NUM):
+        ms = p_starts[i]
+        p_months.append({
+            "idx": i,
+            "start": str(ms),
+            "key": str(ms)[0:7],
+            "label": frappe.utils.formatdate(ms, "MMM yyyy"),
+            "short": frappe.utils.formatdate(ms, "MMM''yy"),
+        })
+
+    p_cond = (" AND pr.docstatus = 1 AND item.item_group = %(item_group)s"
+              " AND pr.posting_date >= %(from_date)s AND pr.posting_date <= %(to_date)s")
+    p_vals = {"item_group": p_group, "from_date": p_starts[P_NUM - 1], "to_date": p_today}
+    if p_company:
+        p_cond += " AND pr.company = %(company)s"
+        p_vals["company"] = p_company
+
+    p_lines = frappe.db.sql("""
+        SELECT
+            pr.posting_date,
+            pr.name AS voucher,
+            pr.supplier_name,
+            pri.item_code,
+            item.item_name,
+            item.description,
+            pri.qty,
+            pri.uom,
+            pri.rate,
+            pri.base_net_amount AS amount,
+            COALESCE(NULLIF(TRIM(item.custom_item_category), ''), 'Uncategorized') AS category
+        FROM `tabPurchase Receipt Item` pri
+        INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
+        INNER JOIN `tabItem` item ON item.name = pri.item_code
+        WHERE 1 = 1 """ + p_cond + """
+        ORDER BY pr.posting_date ASC, pr.name ASC
+    """, p_vals, as_dict=True)
+
+    p_cats = {}
+    p_tot = []
+    for i in range(P_NUM):
+        p_tot.append({"qty": 0, "amount": 0})
+    p_detail = []
+    for r in p_lines:
+        amount = frappe.utils.flt(r.amount)
+        qty = frappe.utils.flt(r.qty)
+        posting = frappe.utils.getdate(r.posting_date)
+        bucket = P_NUM - 1
+        for i in range(P_NUM):
+            if posting >= p_starts[i]:
+                bucket = i
+                break
+        cat = r.category
+        if cat not in p_cats:
+            b = []
+            for i in range(P_NUM):
+                b.append({"qty": 0, "amount": 0})
+            p_cats[cat] = b
+        p_cats[cat][bucket]["qty"] = p_cats[cat][bucket]["qty"] + qty
+        p_cats[cat][bucket]["amount"] = p_cats[cat][bucket]["amount"] + amount
+        p_tot[bucket]["qty"] = p_tot[bucket]["qty"] + qty
+        p_tot[bucket]["amount"] = p_tot[bucket]["amount"] + amount
+        p_detail.append({
+            "posting_date": str(r.posting_date) if r.posting_date else "",
+            "voucher": r.voucher,
+            "supplier": r.supplier_name or "",
+            "item_code": r.item_code,
+            "item_name": r.item_name or "",
+            "description": frappe.utils.strip_html(r.description) if r.description else "",
+            "qty": qty,
+            "rate": frappe.utils.flt(r.rate),
+            "uom": r.uom or "",
+            "amount": amount,
+            "category": cat,
+            "month_bucket": bucket,
+            "month_label": p_months[bucket]["label"],
+        })
+
+    # Is mahine ki kharid ke hisaab se (sabse zyada upar), report jaisa
+    p_rows = []
+    for cat in p_cats:
+        p_rows.append({"category": cat, "months": p_cats[cat], "sort": p_cats[cat][0]["amount"]})
+    p_rows = sorted(p_rows, key=lambda x: x["sort"], reverse=True)
+
+    frappe.response["message"] = {
+        "item_group": p_group,
+        "months": p_months,
+        "categories": p_rows,
+        "totals": p_tot,
+        "detail": p_detail,
+        "from_date": str(p_starts[P_NUM - 1]),
+        "to_date": str(p_today),
     }
 
 else:
