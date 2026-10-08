@@ -784,33 +784,63 @@
         "<div>Check that the Server Script <code>" + API_STOCK + "</code> is saved and enabled.</div></div>";
     });
   }
+  var SLE_ROUTE = { "Delivery Note": "delivery-note", "Sales Invoice": "sales-invoice", "Stock Entry": "stock-entry", "Stock Reconciliation": "stock-reconciliation", "Purchase Receipt": "purchase-receipt", "Purchase Invoice": "purchase-invoice" };
   function renderStock(dr) {
     var m = stock.data;
-    var tabs = [["all", "All"], ["manufactured", "Manufactured"], ["stock_adjustment", "Stock adj."]];
+    var tabs = [["all", "All"], ["dispatched", "Dispatched"], ["manufactured", "Manufactured"], ["stock_adjustment", "Stock adj."]];
+    var period = m.from_date ? shortDate(m.from_date) + " – " + shortDate(m.to_date) : "last 30 days";
     dr.innerHTML = drawerHead("Stock · " + esc(m.warehouse || "WH2 - UCM"), m.item_name || m.item_code,
         '<a href="/app/item/' + encodeURIComponent(m.item_code) + '" target="_blank" rel="noopener">' + esc(m.item_code) + "</a>") +
       '<div class="ucmd-dr-body">' +
         (m.description && m.description !== m.item_name ? '<p class="ucmd-dr-desc">' + esc(String(m.description).replace(/<[^>]*>/g, " ")) + "</p>" : "") +
         '<div class="ucmd-stockcard"><div><div class="ucmd-kpi-label">Current stock</div><div class="ucmd-stock-val">' + qtyFmt(m.current_stock) +
           "<small>" + esc(m.stock_uom || "") + "</small></div></div>" +
-          '<div class="ucmd-stock-note">' + esc(m.warehouse || "WH2 - UCM") + "<br>last 30 days below</div></div>" +
+          '<div class="ucmd-stock-note">' + esc(m.warehouse || "WH2 - UCM") + "<br>Stock ledger · " + esc(period) + "</div></div>" +
+        (m.opening_qty != null ? '<div class="ucmd-sle-sum">' +
+          '<div><span>Opening</span><b>' + qtyFmt(m.opening_qty) + "</b></div>" +
+          '<div class="in"><span>+ In</span><b>' + qtyFmt(m.total_in) + "</b></div>" +
+          '<div class="out"><span>− Out</span><b>' + qtyFmt(m.total_out) + "</b></div>" +
+          '<div class="bal"><span>= Closing</span><b>' + qtyFmt((+m.opening_qty || 0) + (+m.total_in || 0) - (+m.total_out || 0)) + "</b></div></div>" : "") +
+        setBlock(m) +
         '<div class="ucmd-seg">' + tabs.map(function (t) {
           var n = (m[t[0]] || []).length;
           return '<button type="button" class="' + (stock.tab === t[0] ? "on" : "") + '" data-stab="' + t[0] + '">' + t[1] + "<span>" + n + "</span></button>";
         }).join("") + "</div>" +
         '<div class="ucmd-dr-table">' + stockTable(m[stock.tab] || []) + "</div>" +
       "</div>";
+    $$(".ucmd-set-item", dr).forEach(function (el) {
+      el.addEventListener("click", function (e) { e.preventDefault(); openStock(el.getAttribute("data-item"), el.textContent); });
+    });
     $$("[data-stab]", dr).forEach(function (b) {
       b.addEventListener("click", function () { stock.tab = b.getAttribute("data-stab"); renderStock(dr); });
     });
   }
+  /* Item ek SET hai to: uske andar ke items, per set qty, stock aur kitne set ban sakte hain */
+  function setBlock(m) {
+    var comps = m.components || [];
+    if (!comps.length) return "";
+    var wh = esc(m.warehouse || "WH2 - UCM");
+    return '<div class="ucmd-set">' +
+      '<div class="ucmd-set-h"><div><b>Items used in this set</b><small>' + esc(m.set_source || "") + (m.set_name && m.set_source === "BOM" ? " \u00b7 " + esc(m.set_name) : "") + "</small></div>" +
+        (m.sets_possible != null ? '<div class="ucmd-set-can"><span>Sets possible</span><b>' + qtyFmt(m.sets_possible) + "</b></div>" : "") + "</div>" +
+      '<table class="ucmd-mtable"><thead><tr><th>Item</th><th class="c-num">Per set</th><th class="c-num">Stock \u00b7 ' + wh + '</th><th class="c-num">All warehouses</th><th class="c-num">Sets possible</th></tr></thead><tbody>' +
+      comps.map(function (c) {
+        var low = m.sets_possible != null && c.sets === m.sets_possible;
+        return '<tr class="' + (low ? "is-short" : "") + '"><td><a href="#" class="ucmd-set-item" data-item="' + esc(c.item_code) + '"><b>' + esc(c.item_name || c.item_code) + "</b></a><small>" + esc(c.item_code) + "</small></td>" +
+          '<td class="c-num">' + qtyFmt(c.per_set) + " <small>" + esc(c.uom || "") + "</small></td>" +
+          '<td class="c-num"><b>' + qtyFmt(c.stock) + "</b></td>" +
+          '<td class="c-num">' + qtyFmt(c.stock_all) + "</td>" +
+          '<td class="c-num">' + (c.sets == null ? "\u2013" : qtyFmt(c.sets)) + (low ? ' <span class="ucmd-set-tag">limit</span>' : "") + "</td></tr>";
+      }).join("") + "</tbody></table></div>";
+  }
   function stockTable(rows) {
     if (!rows.length) return '<div class="ucmd-mini-empty">No transactions in the last 30 days.</div>';
     var all = stock.tab === "all";
-    return '<table class="ucmd-mtable"><thead><tr><th>Date</th><th>Type</th><th>Document</th><th class="c-num">Qty</th>' + (all ? '<th class="c-num">Balance</th>' : "") + "</tr></thead><tbody>" +
+    return '<table class="ucmd-mtable"><thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Party / Entry</th><th class="c-num">Qty</th>' + (all ? '<th class="c-num">Balance</th>' : "") + "</tr></thead><tbody>" +
       rows.map(function (r) {
-        var q = +r.qty_change || 0;
-        return "<tr><td>" + esc(shortDate(r.posting_date)) + "</td><td>" + esc(r.voucher_type || "") + "</td><td>" + esc(r.voucher_no || "") + "</td>" +
+        var q = +r.qty_change || 0, route = SLE_ROUTE[r.voucher_type];
+        var doc = route && r.voucher_no ? '<a href="/app/' + route + "/" + encodeURIComponent(r.voucher_no) + '" target="_blank" rel="noopener">' + esc(r.voucher_no) + "</a>" : esc(r.voucher_no || "");
+        return "<tr><td>" + esc(shortDate(r.posting_date)) + "</td><td>" + esc(r.voucher_type || "") + "</td><td>" + doc + '</td><td class="c-party">' + esc(r.detail || "") + "</td>" +
           '<td class="c-num ' + (q >= 0 ? "is-in" : "is-out") + '">' + (q > 0 ? "+" : "") + qtyFmt(q) + "</td>" +
           (all ? '<td class="c-num">' + (r.balance_qty == null ? "" : qtyFmt(r.balance_qty)) + "</td>" : "") + "</tr>";
       }).join("") + "</tbody></table>";
