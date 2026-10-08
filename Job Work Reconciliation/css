@@ -509,3 +509,11 @@ body.agr-busy #agr-refresh svg { animation: agrSpin .9s linear infinite; }
 }
 #ucm-agr ~ .agr-modal-bg [hidden], .agr-cm [hidden] { display: none !important; }
 @media (max-height: 720px) { .agr-cm .agr-mh p { display: none; } .agr-cm .agr-mh { padding: 8px 18px; } }
+/* Dispatch Entry: Delete Entries (submit ke baad) */
+.agr-btn.danger { background: var(--out); height: 36px; padding: 0 18px; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
+.agr-btn.danger:hover { background: #8f342c; }
+.agr-btn.ghost.del { color: var(--out); border-color: #f0c4bf; display: inline-flex; align-items: center; gap: 6px; }
+.agr-btn.ghost.del:hover { background: var(--out-l); }
+.agr-btn.ghost.del svg { width: 13px; height: 13px; }
+.agr-cconf.is-del { background: var(--out-l); border-color: #f0c4bf; }
+.agr-csub.is-done .agr-cact .why { margin-right: auto; margin-left: 4px; }
