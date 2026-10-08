@@ -1,0 +1,706 @@
+/* ============================================================
+   UCMPL - Sales Order Analysis - Web Page JS
+   Web Page -> Javascript box mein poora paste karein.
+   API (Server Script) : ucm_so_analysis  (access + data + settings)
+   Pehle se bane APIs (report wale, unchanged):
+     ucm_so_type_summary (Sales Orders button) - ucm_packing_material_summary (Packing Material button)
+     ucm_so_top_customers (Top customers)      - ucm_so_customer_detail (customer slider)
+   ============================================================ */
+(function () {
+  "use strict";
+  var d = document, w = window;
+  var API = "/api/method/ucm_so_analysis";
+  var SOT_API = "/api/method/ucm_so_type_summary";
+  var PM_API = "/api/method/ucm_packing_material_summary";
+  var TOP_API = "/api/method/ucm_so_top_customers";
+  var CUST_API = "/api/method/ucm_so_customer_detail";
+
+  /* Packing Material: naya supplier/customer jodna ho to yahan ek object aur add karein */
+  var PM_CONFIGS = [
+    {
+      title: "Himalayan Packaging Industries Pvt Ltd", supplier: "S00080", customer: "C00090",
+      items: [
+        { label: "CLD", item_codes: ["PM-CB-500X330X270MM-I140-O180-3P", "PM-CB-500X330X270MM-I140-O180-3P-HIMALAYAN"] },
+        { label: "Separator", item_codes: ["PM-CB-490X320MM-I140-O140-3P", "PM-CB-490X320MM-I140-O140-3P-HIMALAYAN"] },
+        { label: "Poly", item_codes: ["PM-Poly-20X6+6X32IN-LD-110-30MIC", "PM-Poly-20X6+6X32IN-LD-110-30MIC-HIMALAYAN"] }
+      ]
+    }
+  ];
+
+  var root = d.getElementById("ucm-soa");
+  if (!root) return;
+
+  /* --------- helpers --------- */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function $(s, el) { return (el || d).querySelector(s); }
+  function $$(s, el) { return Array.prototype.slice.call((el || d).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  var nf2 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
+  function n0(v) { return nf0.format(Math.round(+v || 0)); }
+  function nq(v) { return nf2.format(+v || 0); }
+  function inr(v) { return "\u20b9" + nf0.format(Math.round(+v || 0)); }
+  function lakh(v) {
+    v = +v || 0; var a = Math.abs(v);
+    if (a >= 1e7) return "\u20b9" + (v / 1e7).toFixed(2).replace(/\.?0+$/, "") + " Cr";
+    if (a >= 1e5) return "\u20b9" + (v / 1e5).toFixed(2).replace(/\.?0+$/, "") + " L";
+    return inr(v);
+  }
+  function pct(a, b) { return b ? Math.round((a || 0) / b * 1000) / 10 : 0; }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
+  function parseIso(s) { var p = String(s || "").split(" ")[0].split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+  function nice(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
+  function short(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " '" + String(x.getFullYear()).slice(2); }
+  function initials(s) { var p = String(s || "?").trim().split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+  function slug(dt) { return String(dt || "").toLowerCase().replace(/ /g, "-"); }
+  function docLink(dt, name, label) {
+    if (!name) return "\u2013";
+    return '<a href="/app/' + slug(dt) + "/" + encodeURIComponent(name) + '" target="_blank" rel="noopener">' + esc(label || name) + "</a>";
+  }
+  function cookie(k) { var m = d.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; }
+  function store(k, v) { try { if (v === undefined) return w.localStorage.getItem("ucm-soa-" + k); w.localStorage.setItem("ucm-soa-" + k, v); } catch (e) { return null; } }
+  function lock(on) { d.documentElement.style.overflow = on ? "hidden" : ""; d.body.style.overflow = on ? "hidden" : ""; }
+  function saveFile(text, name, type) {
+    var blob = new Blob([text], { type: type });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+  function csvCell(v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function saveCSV(lines, name) { saveFile("\ufeff" + lines.map(function (r) { return r.map(csvCell).join(","); }).join("\r\n"), name, "text/csv;charset=utf-8"); }
+  function saveXLS(head, rows, name) {
+    var h = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr>' +
+      head.map(function (c) { return "<th>" + esc(c) + "</th>"; }).join("") + "</tr>" +
+      rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + esc(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</table></body></html>";
+    saveFile("\ufeff" + h, name, "application/vnd.ms-excel");
+  }
+
+  var I = {
+    gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+    down: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    left: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+    right: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    caret: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    list: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+    box: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>'
+  };
+
+  async function call(url, params, method) {
+    var token = (w.frappe && w.frappe.csrf_token) || w.csrf_token || "";
+    var opts = { credentials: "same-origin", headers: { Accept: "application/json", "X-Frappe-CSRF-Token": token } };
+    if (method === "POST") { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(params); }
+    else url += "?" + Object.keys(params).filter(function (k) { return params[k] !== undefined; }).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k] == null ? "" : params[k]); }).join("&");
+    var r = await fetch(url, opts);
+    if (r.status === 401 || (r.status === 403 && !cookie("user_id"))) { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      var reason = "";
+      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script not found";
+      throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+    }
+    return j.message;
+  }
+  function api(params, method) { return call(API, params, method); }
+
+  /* --------- state --------- */
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var STATUSES = ["All", "Pending", "Completed", "Overdue", "Draft"];
+  var S = {
+    acc: null, from: iso(new Date(today.getFullYear(), today.getMonth(), 1)), to: iso(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+    customer: "", customerName: "", ig: "", status: "All", rows: null, summary: null, top: null, q: "", seq: 0, lists: null
+  };
+  (function restore() { var st = store("status"); if (STATUSES.indexOf(st) >= 0) S.status = st; })();
+
+  /* --------- shell --------- */
+  root.innerHTML =
+    '<div class="soa-gate" id="soa-gate"><div class="soa-gate-card"><span class="soa-spin"></span><p>Checking access\u2026</p></div></div>' +
+    '<div class="soa-app" id="soa-app" hidden>' +
+      '<header class="soa-head" id="soa-head">' +
+        '<div class="soa-title"><h1>Sales Order Analysis</h1><p class="soa-sub"></p></div>' +
+        '<div class="soa-btns" id="soa-btns">' +
+          '<button type="button" class="soa-tbtn" id="soa-b-so" title="Sales Order status \u2013 Overall / Ultra / Large Blow / Draft">' + I.list + "<span>Sales Orders</span></button>" +
+          '<button type="button" class="soa-tbtn" id="soa-b-pm" title="Packing material balance \u2013 purchased vs sold">' + I.box + "<span>Packing Material</span></button>" +
+        "</div>" +
+        '<div class="soa-head-act" id="soa-act">' +
+          '<button type="button" class="soa-ibtn" id="soa-print" title="Print">' + I.print + "</button>" +
+          '<button type="button" class="soa-ibtn" id="soa-refresh" title="Refresh">' + I.refresh + "</button>" +
+          '<button type="button" class="soa-ibtn is-gear" id="soa-gear" title="Access settings" hidden>' + I.gear + "</button>" +
+        "</div>" +
+      "</header>" +
+      '<div class="soa-btnbar" id="soa-btnbar"></div>' +
+      '<section class="soa-band"><div class="soa-filters">' +
+        '<div class="soa-f"><span>Month</span><div class="soa-nav">' +
+          '<button type="button" class="soa-nbtn" id="soa-prev" title="Previous month">' + I.left + '</button><b id="soa-mon"></b>' +
+          '<button type="button" class="soa-nbtn" id="soa-next" title="Next month">' + I.right + "</button></div></div>" +
+        '<div class="soa-f"><span>Period</span><div class="soa-dates"><input type="date" id="soa-from"><i>to</i><input type="date" id="soa-to"></div></div>' +
+        '<div class="soa-f soa-f-cust"><span>Customer</span><div class="soa-pick"><input type="text" id="soa-cust" placeholder="All customers" autocomplete="off">' +
+          '<button type="button" class="soa-clr" id="soa-cust-x" title="Clear" hidden>' + I.x + '</button><div class="soa-pick-l" id="soa-cust-l" hidden></div></div></div>' +
+        '<div class="soa-f"><span>Item Group</span><select id="soa-ig"><option value="">All Item Groups</option></select></div>' +
+        '<div class="soa-f"><span>Status</span><div class="soa-pills" id="soa-status">' +
+          STATUSES.map(function (s) { return '<button type="button" data-v="' + s + '">' + s + "</button>"; }).join("") + "</div></div>" +
+      "</div></section>" +
+      '<main class="soa-main" id="soa-main"></main>' +
+    "</div>" +
+    '<div class="soa-scrim" id="soa-scrim"></div>' +
+    '<aside class="soa-drawer" id="soa-drawer" aria-hidden="true"></aside>' +
+    '<div class="soa-modal-bg" id="soa-set" hidden><div class="soa-modal" role="dialog" aria-label="Access settings"></div></div>';
+
+  function loadingHTML() { return '<div class="soa-empty"><span class="soa-spin"></span>Loading\u2026</div>'; }
+  function errorHTML(msg) { return '<div class="soa-error"><b>Could not load.</b> ' + esc(msg) + "</div>"; }
+
+  /* ===================================================================
+     filters
+     =================================================================== */
+  function monthLabel() {
+    var f = parseIso(S.from), t = parseIso(S.to);
+    var whole = f.getDate() === 1 && f.getMonth() === t.getMonth() && f.getFullYear() === t.getFullYear() && new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate() === t.getDate();
+    return whole ? MONTH[f.getMonth()] + " " + f.getFullYear() : "Custom";
+  }
+  function syncBand() {
+    $("#soa-mon").textContent = monthLabel();
+    $("#soa-from").value = S.from; $("#soa-to").value = S.to;
+    $("#soa-cust").value = S.customer ? (S.customerName || S.customer) : "";
+    $("#soa-cust-x").hidden = !S.customer;
+    $("#soa-ig").value = S.ig;
+    $$("#soa-status [data-v]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === S.status); });
+    var sub = monthLabel() + (monthLabel() === "Custom" ? " (" + short(S.from) + " \u2013 " + short(S.to) + ")" : "") + " \u00b7 Ultra & Large Blow" + (S.status !== "All" ? " \u00b7 " + S.status : "");
+    $$(".soa-sub").forEach(function (p) { p.textContent = sub; });
+  }
+  function shiftMonth(n) {
+    var f = parseIso(S.from), b = new Date(f.getFullYear(), f.getMonth() + n, 1);
+    S.from = iso(b); S.to = iso(new Date(b.getFullYear(), b.getMonth() + 1, 0)); syncBand(); load();
+  }
+  async function loadLists() {
+    try {
+      var m = await api({ action: "filters" }); S.lists = m || { customers: [], item_groups: [] };
+      $("#soa-ig").innerHTML = '<option value="">All Item Groups</option>' + (S.lists.item_groups || []).map(function (x) { return '<option value="' + esc(x) + '">' + esc(x) + "</option>"; }).join("");
+      $("#soa-ig").value = S.ig;
+    } catch (e) { S.lists = { customers: [], item_groups: [] }; }
+  }
+  (function custPicker() {
+    var inp = $("#soa-cust"), lst = $("#soa-cust-l");
+    function draw() {
+      var qs = inp.value.trim().toLowerCase(), all = (S.lists && S.lists.customers) || [];
+      var list = all.filter(function (c) { return !qs || (c.customer_name + " " + c.customer).toLowerCase().indexOf(qs) >= 0; }).slice(0, 30);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-c="' + esc(c.customer) + '" data-n="' + esc(c.customer_name) + '"><b>' + esc(c.customer_name) + "</b><small>" + esc(c.customer) + "</small></button>"; }).join("")
+        : '<div class="soa-none">' + (S.lists ? "No customer found" : "Loading\u2026") + "</div>";
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", function () { inp.select(); draw(); });
+    inp.addEventListener("input", draw);
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; syncBand(); }, 150); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-c]"); if (!b) return; e.preventDefault();
+      S.customer = b.getAttribute("data-c"); S.customerName = b.getAttribute("data-n"); lst.hidden = true; inp.blur(); syncBand(); load();
+    });
+    $("#soa-cust-x").addEventListener("click", function () { S.customer = ""; S.customerName = ""; syncBand(); load(); });
+  })();
+
+  /* ===================================================================
+     main data
+     =================================================================== */
+  async function load() {
+    var my = ++S.seq, el = $("#soa-main");
+    root.classList.add("is-busy"); if (!S.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    var args = { from_date: S.from, to_date: S.to, customer: S.customer || "", item_group: S.ig || "", status_filter: S.status };
+    var topP = S.acc.show_summary ? call(TOP_API, { from_date: S.from, to_date: S.to, customer: S.customer || undefined, item_group: S.ig || undefined, status_filter: S.status })
+      .then(function (m) { return (m && m.top_customers) || []; }, function () { return null; }) : Promise.resolve(null);
+    try {
+      var m = await api(Object.assign({ action: "data" }, args));
+      var top = await topP;
+      if (!m || my !== S.seq) return;
+      S.rows = m.rows || []; S.summary = m.summary; S.top = top;
+      render();
+    } catch (e) { if (my !== S.seq) return; S.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.seq) { root.classList.remove("is-busy"); el.classList.remove("is-loading"); } }
+  }
+
+  function kpi(label, val, sub, color, click) {
+    return '<button type="button" class="soa-kpi' + (click ? " is-click" : "") + '" style="--c:' + color + '"' + (click ? ' data-kpi="' + click + '"' : " disabled") + ">" +
+      "<span>" + esc(label) + "</span><b>" + val + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</button>";
+  }
+  function delayPill(r) {
+    var cls, label;
+    if (r.per_delivered >= 100) { cls = "ok"; label = "Delivered"; }
+    else if (!r.delay_days) { cls = "ok"; label = "On Time"; }
+    else if (r.delay_days <= 7) { cls = "md"; label = r.delay_days + " Days"; }
+    else { cls = "hi"; label = r.delay_days + " Days"; }
+    return '<button type="button" class="soa-delay ' + cls + '" data-cust="' + esc(r.customer) + '" data-cn="' + esc(r.customer_name) + '" title="Customer orders"><i></i>' + label + "</button>";
+  }
+  function sotTag(s) { var u = String(s || "").toUpperCase(); return u ? '<span class="soa-sot ' + (u === "ULTRA" ? "u" : "l") + '">' + (u === "ULTRA" ? "Ultra" : "Large Blow") + "</span>" : ""; }
+  var TOP_PAL = ["#0d47a1", "#1b7a43", "#b35900", "#6a3fa0", "#ad1457", "#00695c", "#8a6d00", "#303f9f", "#c62828"];
+
+  function render() {
+    var html = "", sm = S.summary;
+    if (sm) {
+      html += '<div class="soa-kpis">' +
+        kpi("Total Sales Orders", n0(sm.total_so), "In selected range", "#0d47a1") +
+        kpi("Overdue Orders", n0(sm.overdue_so), "Past delivery date" + (S.status !== "Overdue" ? " \u00b7 click to filter" : ""), "#c62828", "overdue") +
+        kpi("Avg Delay (Days)", sm.avg_delay, "Across all orders", "#b8560c") +
+        kpi("Total Order Value", lakh(sm.order_value), inr(sm.order_value), "#2c4a75") +
+        kpi("Delivered Value", lakh(sm.delivered_value), "Dispatched so far", "#1e7e3a") +
+        kpi("Pending Value", lakh(sm.pending_value), "Not yet delivered", "#8a4b08") + "</div>";
+    }
+    if (S.top && S.top.length) {
+      html += '<section class="soa-reg soa-tops"><div class="soa-reg-h"><div class="soa-reg-t"><h2>Top customers</h2><p>By order value \u00b7 click for orders and deliveries</p></div></div><div class="soa-topgrid">' +
+        S.top.slice(0, 9).map(function (c, i) {
+          var p = Math.max(0, Math.min(100, c.pct_delivered || 0)), col = TOP_PAL[i % TOP_PAL.length], pend = (c.qty || 0) - (c.delivered_qty || 0);
+          return '<button type="button" class="soa-top" style="--c:' + col + '" data-cust="' + esc(c.customer) + '" data-cn="' + esc(c.customer_name || c.customer) + '">' +
+            '<span class="rk">' + (i + 1) + '</span><span class="mn"><b>' + esc(c.customer_name || c.customer) + "</b>" +
+            "<small>" + inr(c.value) + " \u00b7 " + n0(c.order_count) + " order" + (c.order_count === 1 ? "" : "s") + "</small>" +
+            "<small>Ordered " + nq(c.qty) + " \u00b7 Pending <em>" + nq(pend) + "</em></small>" +
+            '<span class="tr"><i style="width:' + p + '%"></i></span></span><span class="pc">' + (c.pct_delivered || 0) + "%<small>delivered</small></span></button>";
+        }).join("") + "</div></section>";
+    }
+    html += '<section class="soa-reg"><div class="soa-reg-h"><div class="soa-reg-t"><h2 id="soa-t-title"></h2><p id="soa-t-sub"></p></div>' +
+      '<div class="soa-reg-tools"><label class="soa-search">' + I.search + '<input type="search" id="soa-q" placeholder="Search SO, customer, item, PO\u2026" value="' + esc(S.q) + '"></label>' +
+      '<button type="button" class="soa-ibtn" id="soa-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="soa-tw" id="soa-tw"></div><div class="soa-mlist" id="soa-ml"></div></section>';
+    $("#soa-main").innerHTML = html;
+    renderTable();
+  }
+  function visible() {
+    var q = S.q.toLowerCase();
+    return (S.rows || []).filter(function (r) {
+      return !q || [r.so, r.customer, r.customer_name, r.item_name, r.item_code, r.item_group, r.po_no, r.status].join(" ").toLowerCase().indexOf(q) >= 0;
+    });
+  }
+  function renderTable() {
+    var list = visible(), sos = {}, qty = 0, del = 0, pend = 0, amt = 0;
+    list.forEach(function (r) { sos[r.so] = 1; qty += r.qty; del += r.delivered_qty; pend += r.pending_qty; amt += r.amount; });
+    $("#soa-t-title").textContent = "Sales order lines (" + list.length + ")";
+    $("#soa-t-sub").textContent = Object.keys(sos).length + " sales orders \u00b7 " + (S.status === "All" ? "all statuses" : S.status) + (S.customer ? " \u00b7 " + (S.customerName || S.customer) : "") + (S.ig ? " \u00b7 " + S.ig : "") + " \u00b7 click Delay or a customer for order details";
+    if (!list.length) { $("#soa-tw").innerHTML = '<div class="soa-empty">' + ((S.rows || []).length ? "No line matches the search." : "No sales orders for these filters.") + "</div>"; $("#soa-ml").innerHTML = ""; return; }
+    var h = '<table class="soa-t"><thead><tr><th>Delay</th><th>Sales Order</th><th>Customer</th><th>Item</th><th class="n">Rate</th><th class="n">Qty</th><th class="n">Delivered</th><th class="n">Pending</th><th>Delivery Date</th><th>Status</th><th class="n">Amount</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      var p = Math.max(0, Math.min(100, r.pct || 0));
+      h += "<tr><td>" + delayPill(r) + "</td>" +
+        '<td class="nm">' + docLink("Sales Order", r.so) + "<small>" + esc(short(r.date)) + " " + sotTag(r.sot) + "</small></td>" +
+        '<td class="nm"><button type="button" class="soa-lnk" data-cust="' + esc(r.customer) + '" data-cn="' + esc(r.customer_name) + '">' + esc(r.customer_name) + "</button>" +
+          "<small>" + (r.po_no ? "PO " + esc(r.po_no) + (r.po_date ? " \u00b7 " + esc(short(r.po_date)) : "") : esc(r.customer)) + "</small></td>" +
+        '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "<small>" + esc(r.item_group || "\u2013") + "</small></td>" +
+        '<td class="n">' + inr(r.rate) + '</td><td class="n">' + nq(r.qty) + '</td><td class="n">' + nq(r.delivered_qty) + "</td>" +
+        '<td class="n">' + (r.pending_qty > 0 ? '<b class="pend">' + nq(r.pending_qty) + "</b>" : '<span class="mut">0</span>') + "</td>" +
+        "<td>" + esc(short(r.delivery_date)) + "</td>" +
+        '<td><span class="soa-st">' + esc(r.status || "\u2013") + '</span><span class="soa-pbar" title="' + r.pct + '% delivered"><i style="width:' + p + '%"></i></span></td>' +
+        '<td class="n"><b>' + inr(r.amount) + "</b></td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="5">Total \u00b7 ' + Object.keys(sos).length + ' SOs</td><td class="n">' + nq(qty) + '</td><td class="n">' + nq(del) + '</td><td class="n">' + nq(pend) + '</td><td colspan="2"></td><td class="n">' + inr(amt) + "</td></tr></tfoot></table>";
+    $("#soa-tw").innerHTML = h;
+    $("#soa-ml").innerHTML = list.map(function (r) {
+      return '<div class="soa-mcard"><div class="t"><b>' + docLink("Sales Order", r.so) + "</b>" + delayPill(r) + "</div>" +
+        '<div class="c"><button type="button" class="soa-lnk" data-cust="' + esc(r.customer) + '" data-cn="' + esc(r.customer_name) + '">' + esc(r.customer_name) + "</button> " + sotTag(r.sot) + "</div>" +
+        '<div class="m"><span>' + esc(r.item_name) + "</span><span>" + inr(r.amount) + "</span></div>" +
+        '<div class="m"><span>Qty ' + nq(r.qty) + " \u00b7 Del " + nq(r.delivered_qty) + (r.pending_qty > 0 ? ' \u00b7 <b class="pend">Pend ' + nq(r.pending_qty) + "</b>" : "") + "</span><span>Due " + esc(short(r.delivery_date)) + "</span></div></div>";
+    }).join("");
+  }
+  function mainCSV() {
+    var out = [["Sales Order", "Order Date", "Type", "Customer ID", "Customer", "PO No", "PO Date", "Item Code", "Item", "Item Group", "Rate", "Qty", "Delivered Qty", "Pending Qty", "Delivery Date", "Status", "% Delivered", "Delay (Days)", "Amount"]];
+    visible().forEach(function (r) { out.push([r.so, r.date || "", r.sot, r.customer, r.customer_name, r.po_no, r.po_date || "", r.item_code, r.item_name, r.item_group, r.rate, r.qty, r.delivered_qty, r.pending_qty, r.delivery_date || "", r.status, r.pct, r.delay_days, Math.round(r.amount)]); });
+    saveCSV(out, "sales-order-analysis-" + S.from + "-to-" + S.to + ".csv");
+  }
+
+  /* ===================================================================
+     drawer (shared)
+     =================================================================== */
+  var DR = { seq: 0 };
+  function openDrawer(title, sub, cls) {
+    DR.seq++;
+    var dr = $("#soa-drawer");
+    dr.className = "soa-drawer on" + (cls ? " " + cls : "");
+    dr.innerHTML = '<div class="soa-dr-h"><div class="tt"><h3>' + esc(title) + '</h3><p id="soa-dr-sub">' + sub + '</p></div>' +
+      '<button type="button" class="soa-ibtn" id="soa-dr-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="soa-dr-b" id="soa-dr-body">' + loadingHTML() + "</div>";
+    dr.setAttribute("aria-hidden", "false"); dr.scrollTop = 0;
+    $("#soa-scrim").classList.add("on"); lock(true);
+    return DR.seq;
+  }
+  function closeDrawer() { DR.seq++; var dr = $("#soa-drawer"); dr.classList.remove("on"); dr.setAttribute("aria-hidden", "true"); $("#soa-scrim").classList.remove("on"); lock(false); }
+  function rangeSub() { return esc(nice(S.from)) + " \u2013 " + esc(nice(S.to)); }
+
+  /* --- customer slider (ucm_so_customer_detail) --- */
+  async function openCust(id, name) {
+    if (!id) return;
+    var seq = openDrawer(name || id, "Sales orders & delivery references \u00b7 " + rangeSub(), "");
+    try {
+      var m = await call(CUST_API, { customer: id, from_date: S.from, to_date: S.to });
+      if (seq !== DR.seq) return;
+      drawCust((m && m.orders) || [], id);
+    } catch (e) { if (seq !== DR.seq) return; $("#soa-dr-body").innerHTML = errorHTML(e.message + " (ucm_so_customer_detail)"); }
+  }
+  function drawCust(orders, id) {
+    if (!orders.length) { $("#soa-dr-body").innerHTML = '<div class="soa-empty">No orders found for this period.</div>'; return; }
+    var g = {}, order = [], tq = 0, td = 0, ta = 0;
+    orders.forEach(function (o) { if (!g[o.so_name]) { g[o.so_name] = { meta: o, items: [] }; order.push(o.so_name); } g[o.so_name].items.push(o); tq += +o.qty || 0; td += +o.delivered_qty || 0; ta += +o.amount || 0; });
+    var h = '<div class="soa-minis">' + mini("Sales Orders", order.length, "#0d47a1") + mini("Ordered", nq(tq), "#3d5170") + mini("Delivered", nq(td), "#1e7e3a") + mini("Pending", nq(tq - td), "#c62828") + mini("Value", lakh(ta), "#8a5a2b") + "</div>" +
+      '<div class="soa-line"><span>Customer ID</span>' + docLink("Customer", id) + "</div>";
+    order.forEach(function (so) {
+      var gr = g[so], mt = gr.meta;
+      h += '<div class="soa-oc"><div class="soa-oc-h">' + docLink("Sales Order", so) + "<span>" + esc(nice(mt.transaction_date)) + '</span><span class="soa-st">' + esc(mt.status || "") + "</span></div>";
+      gr.items.forEach(function (it) {
+        var done = (it.pending_qty <= 0) && (it.qty > 0);
+        h += '<div class="soa-oi' + (done ? " done" : "") + '"><div class="t"><b>' + esc(it.item_name || it.item_code) + "</b><span>" + inr(it.amount) + "</span></div>" +
+          '<div class="q">Ordered ' + nq(it.qty) + " \u00b7 Delivered " + nq(it.delivered_qty) + " \u00b7 Pending <b class=\"pend\">" + nq(it.pending_qty) + "</b></div>";
+        if (it.deliveries && it.deliveries.length) {
+          h += '<div class="soa-dels">' + it.deliveries.map(function (dv) {
+            return '<div class="soa-del"><span class="ty">' + esc(dv.voucher_type) + "</span>" + docLink(dv.voucher_type, dv.voucher_no) + "<span>" + esc(nice(dv.posting_date)) + '</span><b>' + nq(dv.qty) + "</b></div>";
+          }).join("") + "</div>";
+        } else h += '<div class="soa-nodel">No delivery reference yet</div>';
+        h += "</div>";
+      });
+      h += "</div>";
+    });
+    $("#soa-dr-body").innerHTML = h;
+  }
+  function mini(l, v, c) { return '<div class="soa-mini" style="--c:' + c + '"><span>' + l + "</span><b>" + v + "</b></div>"; }
+
+  /* --- Sales Orders slider (ucm_so_type_summary) --- */
+  var SEGS = [
+    { key: "OVERALL", label: "Overall", color: "#0b1424" },
+    { key: "ULTRA", label: "Ultra", color: "#1a73e8" },
+    { key: "LARGE BLOW", label: "Large Blow", color: "#7b3fa0" },
+    { key: "DRAFT", label: "Draft", color: "#b8560c" }
+  ];
+  var PERF = {
+    overdue: { label: "Overdue", color: "#c62828", bg: "#fdecea", rank: 1 },
+    late: { label: "Delivered Late", color: "#e65100", bg: "#fff3e6", rank: 2 },
+    on_track: { label: "Pending", color: "#1a73e8", bg: "#eaf1fd", rank: 3 },
+    closed_short: { label: "Closed (Short)", color: "#5f6b7a", bg: "#eef1f6", rank: 4 },
+    on_time: { label: "On Time", color: "#1a6e3a", bg: "#e6f4ea", rank: 5 }
+  };
+  var SO = { data: null, seg: 0, filter: {}, store: {} };
+  async function openSO() {
+    SO.data = null; SO.seg = 0; SO.filter = {}; SO.store = {};
+    var seq = openDrawer("Sales Order Status", rangeSub() + " \u00b7 SO date \u00b7 Delivery as per Sales Invoice" + (S.customer ? " \u00b7 " + esc(S.customerName || S.customer) : ""), "is-wide");
+    try {
+      var m = await call(SOT_API, { from_date: S.from, to_date: S.to, customer: S.customer || undefined });
+      if (seq !== DR.seq) return;
+      SO.data = m || {}; drawSO();
+    } catch (e) { if (seq !== DR.seq) return; $("#soa-dr-body").innerHTML = errorHTML(e.message + " (ucm_so_type_summary)"); }
+  }
+  function soTypeLabel(s) { return s === "ULTRA" ? "Ultra" : (s === "LARGE BLOW" ? "Large Blow" : "Not Set"); }
+  function badgeText(o) { var p = PERF[o.perf] || { label: o.perf }; if (o.perf === "late") return "Late " + o.delay_days + "d"; if (o.perf === "overdue") return "Overdue " + o.delay_days + "d"; return p.label; }
+  function card(label, value, sub, color, filter, on) {
+    return '<button type="button" class="soa-scard' + (filter ? " is-click" : "") + (on ? " on" : "") + '" style="--c:' + color + '"' + (filter ? ' data-f="' + filter + '"' : " disabled") + ">" +
+      "<span>" + label + "</span><b>" + value + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</button>";
+  }
+  function match(o, f, isDraft) {
+    if (f.indexOf("sot:") === 0) return (o.sot || "") === f.substr(4);
+    if (isDraft || f === "all") return true;
+    if (f === "delayed") return o.perf === "late" || o.perf === "overdue";
+    if (f === "pending_qty") return (o.pending_qty || 0) > 0;
+    if (f === "completed" || f === "closed" || f === "open") return o.status_group === f;
+    return o.perf === f;
+  }
+  function drawSO() {
+    var p = SO.data, buckets = p.buckets || {}, orders = p.orders || [], drafts = p.drafts || [];
+    var h = '<div class="soa-dtabs">' + SEGS.map(function (sg, i) {
+      var cnt = sg.key === "DRAFT" ? drafts.length : ((buckets[sg.key] || {}).so_count || 0);
+      return '<button type="button" data-seg="' + i + '"' + (SO.seg === i ? ' class="on"' : "") + ' style="--c:' + sg.color + '">' + sg.label + "<em>" + cnt + "</em></button>";
+    }).join("") + "</div>";
+    var sg = SEGS[SO.seg], f = SO.filter[sg.key] || "all";
+    if (sg.key === "DRAFT") h += draftHTML(drafts, f);
+    else h += segHTML(sg, buckets[sg.key] || {}, sg.key === "OVERALL" ? orders : orders.filter(function (o) { return o.sot === sg.key; }), f);
+    $("#soa-dr-body").innerHTML = h;
+  }
+  function chipsHTML(chips, f) {
+    return '<div class="soa-chips">' + chips.map(function (c) { return '<button type="button" class="soa-chip' + (c[0] === f ? " on" : "") + '" data-f="' + esc(c[0]) + '">' + c[1] + " <em>" + c[2] + "</em></button>"; }).join("") + "</div>";
+  }
+  function listBar(n, key, what) {
+    return '<div class="soa-lbar" id="soa-list-anchor"><span>Showing ' + n + " " + what + (n === 1 ? "" : "s") + '</span><button type="button" class="soa-btn is-ghost" data-xls="' + esc(key) + '">' + I.down + "<span>Excel</span></button></div>";
+  }
+  function segHTML(sg, b, orders, f) {
+    if (!b.so_count) return '<div class="soa-empty">No ' + esc(sg.label) + " sales orders in this period.</div>";
+    var delPct = pct(b.delivered_qty, b.qty), fin = (b.on_time || 0) + (b.late || 0), otPct = pct(b.on_time, fin), delayed = (b.late || 0) + (b.overdue || 0);
+    var h = '<h5 class="soa-h5">Orders &amp; Quantity</h5><div class="soa-sgrid k5">' +
+      card("Sales Orders", n0(b.so_count), lakh(b.value), sg.color, "all", f === "all") +
+      card("Ordered Qty", n0(b.qty), "", "#3d5170") +
+      card("Delivered Qty", n0(b.delivered_qty), delPct + "% of ordered", "#1a6e3a") +
+      card("Pending Qty", n0(b.pending_qty), "open orders", "#c62828", "pending_qty", f === "pending_qty") +
+      card("Closed \u2013 Undelivered", n0(b.short_closed_qty), "closed SOs, not in pending", "#5f6b7a", "closed", f === "closed") + "</div>" +
+      '<div class="soa-barw"><span>Delivered ' + delPct + "% of ordered qty (as per Sales Invoice)</span><span class=\"soa-bar\"><i style=\"width:" + Math.min(100, delPct) + '%;background:#1a6e3a"></i></span></div>';
+    h += '<h5 class="soa-h5">Delivery Performance</h5><div class="soa-sgrid k4">' +
+      card("Delivered On Time", n0(b.on_time), "fully invoiced by due date", "#1a6e3a", "on_time", f === "on_time") +
+      card("Delayed", n0(delayed), (b.late || 0) + " late \u00b7 " + (b.overdue || 0) + " still pending", "#c62828", "delayed", f === "delayed") +
+      card("Pending (On Track)", n0(b.on_track), "due date not passed", "#1a73e8", "on_track", f === "on_track") +
+      card("Closed", n0(b.closed_short), "closed before full delivery", "#5f6b7a", "closed_short", f === "closed_short") + "</div>" +
+      '<div class="soa-note">Sales Orders ' + b.so_count + " = On Time " + (b.on_time || 0) + " + Delayed " + delayed + " + Pending " + (b.on_track || 0) + " + Closed " + (b.closed_short || 0) + "</div>" +
+      '<div class="soa-barw"><span>On-time delivery: ' + otPct + "% of " + fin + " fully invoiced orders</span><span class=\"soa-bar\"><i style=\"width:" + otPct + '%;background:#1a6e3a"></i></span></div>';
+    var sc = b.status_counts || {};
+    h += '<h5 class="soa-h5">Sales Order Status</h5><div class="soa-sgrid k3">' +
+      card("Completed", n0(b.completed), "status = Completed", "#1a6e3a", "completed", f === "completed") +
+      card("Closed", n0(b.closed), "status = Closed", "#5f6b7a", "closed", false) +
+      card("Open", n0(b.open), "To Deliver / To Bill / On Hold", "#1a73e8", "open", f === "open") + "</div>" +
+      '<div class="soa-stchips">' + Object.keys(sc).sort(function (x, y) { return sc[y] - sc[x]; }).map(function (s) { return "<span>" + esc(s || "\u2013") + ": <b>" + sc[s] + "</b></span>"; }).join("") + "</div>";
+    var sorted = orders.slice().sort(function (a, c) { return (((PERF[a.perf] || {}).rank || 9) - ((PERF[c.perf] || {}).rank || 9)) || ((c.delay_days || 0) - (a.delay_days || 0)); });
+    SO.store[sg.key] = sorted;
+    var shown = sorted.filter(function (o) { return match(o, f, false); });
+    h += '<h5 class="soa-h5">Sales Orders</h5>' + chipsHTML([["all", "All", b.so_count], ["on_time", "On Time", b.on_time || 0], ["delayed", "Delayed", delayed], ["late", "\u21b3 Late", b.late || 0], ["overdue", "\u21b3 Overdue", b.overdue || 0], ["on_track", "Pending", b.on_track || 0], ["completed", "Completed", b.completed || 0], ["closed", "Closed", b.closed || 0], ["open", "Open", b.open || 0]], f) +
+      listBar(shown.length, sg.key, "sales order");
+    if (!shown.length) return h + '<div class="soa-empty">No sales order in this filter.</div>';
+    h += '<table class="soa-t soa-dt"><thead><tr><th>Sales Order</th><th>Customer</th><th>Due Date</th><th class="n">Ordered</th><th class="n">Delivered</th><th class="n">Pending</th><th>Status</th><th>Delivery</th></tr></thead><tbody>' +
+      shown.map(function (o) {
+        var pf = PERF[o.perf] || { color: "#5f6b7a", bg: "#eef1f6" };
+        return '<tr><td class="nm">' + docLink("Sales Order", o.name) + "<small>" + esc(short(o.transaction_date)) + '</small></td><td class="nm">' + esc(o.customer_name || "") + (sg.key === "OVERALL" ? " " + sotTag(o.sot) : "") + "</td>" +
+          "<td>" + esc(short(o.delivery_date)) + "<small>Last invoice " + esc(short(o.last_delivery_date)) + '</small></td><td class="n">' + n0(o.qty) + '</td><td class="n">' + n0(o.delivered_qty) + '</td><td class="n">' + (o.pending_qty > 0 ? '<b class="pend">' + n0(o.pending_qty) + "</b>" : "0") + "</td>" +
+          '<td><span class="soa-st">' + esc(o.status || "") + '</span></td><td><span class="soa-badge" style="background:' + pf.bg + ";color:" + pf.color + '">' + esc(badgeText(o)) + "</span></td></tr>";
+      }).join("") + "</tbody></table>";
+    return h;
+  }
+  function draftHTML(drafts, f) {
+    if (!drafts.length) return '<div class="soa-empty">No draft sales orders in this period.</div>';
+    var tq = 0, tv = 0, by = { "ULTRA": 0, "LARGE BLOW": 0, "": 0 };
+    drafts.forEach(function (x) { tq += x.qty || 0; tv += x.value || 0; var k = by.hasOwnProperty(x.sot) ? x.sot : ""; by[k]++; });
+    SO.store.DRAFT = drafts;
+    var shown = drafts.filter(function (x) { return match(x, f, true); });
+    var chips = [["all", "All", drafts.length], ["sot:ULTRA", "Ultra", by.ULTRA], ["sot:LARGE BLOW", "Large Blow", by["LARGE BLOW"]]];
+    if (by[""]) chips.push(["sot:", "Not Set", by[""]]);
+    return '<h5 class="soa-h5">Draft Sales Orders</h5><div class="soa-sgrid k4">' +
+      card("Draft SOs", n0(drafts.length), lakh(tv), "#b8560c", "all", f === "all") +
+      card("Draft Qty", n0(tq), "not submitted yet", "#3d5170") +
+      card("Ultra", n0(by.ULTRA), "draft orders", "#1a73e8", "sot:ULTRA", f === "sot:ULTRA") +
+      card("Large Blow", n0(by["LARGE BLOW"]), "draft orders", "#7b3fa0", "sot:LARGE BLOW", f === "sot:LARGE BLOW") + "</div>" +
+      '<div class="soa-note">Draft SOs have no deliveries, so they are not counted in the Overall / Ultra / Large Blow tabs.</div>' +
+      '<h5 class="soa-h5">Draft List</h5>' + chipsHTML(chips, f) + listBar(shown.length, "DRAFT", "draft sales order") +
+      '<table class="soa-t soa-dt"><thead><tr><th>Sales Order</th><th>Customer</th><th>Due Date</th><th class="n">Qty</th><th class="n">Value</th><th>Created By</th></tr></thead><tbody>' +
+      shown.map(function (x) {
+        return '<tr><td class="nm">' + docLink("Sales Order", x.name) + "<small>" + esc(short(x.transaction_date)) + '</small></td><td class="nm">' + esc(x.customer_name || "") + " " + sotTag(x.sot) + "</td><td>" + esc(short(x.delivery_date)) +
+          '</td><td class="n">' + n0(x.qty) + '</td><td class="n">' + inr(x.value) + "</td><td>" + esc(x.created_by || "") + "<small>Updated " + esc(short(x.modified)) + "</small></td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+  function soXLS(key) {
+    var f = SO.filter[key] || "all", isDraft = key === "DRAFT";
+    var rows = (SO.store[key] || []).filter(function (o) { return match(o, f, isDraft); });
+    if (!rows.length) return;
+    var head, body;
+    if (isDraft) {
+      head = ["Sales Order", "SO Date", "Customer", "Type", "Due Date", "Qty", "Value", "Created By", "Last Updated"];
+      body = rows.map(function (x) { return [x.name, x.transaction_date || "", x.customer_name || "", soTypeLabel(x.sot), x.delivery_date || "", x.qty || 0, Math.round(x.value || 0), x.created_by || "", x.modified || ""]; });
+    } else {
+      head = ["Sales Order", "SO Date", "Customer", "Type", "Due Date", "Last Invoice Date", "Ordered Qty", "Delivered Qty", "Pending Qty", "Status", "Delivery"];
+      body = rows.map(function (o) { return [o.name, o.transaction_date || "", o.customer_name || "", soTypeLabel(o.sot), o.delivery_date || "", o.last_delivery_date || "", o.qty || 0, o.delivered_qty || 0, o.pending_qty || 0, o.status || "", badgeText(o)]; });
+    }
+    var seg = SEGS.filter(function (s) { return s.key === key; })[0] || { label: key };
+    saveXLS(head, body, "Sales_Orders_" + seg.label.replace(/\s+/g, "_") + "_" + S.from + "_to_" + S.to + ".xls");
+  }
+
+  /* --- Packing Material slider (ucm_packing_material_summary) --- */
+  var PM = { idx: 0, open: {} };
+  async function openPM(idx) {
+    PM.idx = idx || 0; PM.open = {};
+    var cfg = PM_CONFIGS[PM.idx];
+    var seq = openDrawer("Packing Material", esc(cfg.title) + " \u00b7 till date", "is-wide");
+    try {
+      var m = await call(PM_API, { supplier: cfg.supplier, customer: cfg.customer, items: JSON.stringify(cfg.items) });
+      if (seq !== DR.seq) return;
+      PM.data = m || {}; drawPM();
+    } catch (e) { if (seq !== DR.seq) return; $("#soa-dr-body").innerHTML = errorHTML(e.message + " (ucm_packing_material_summary)"); }
+  }
+  function drawPM() {
+    var p = PM.data, cfg = PM_CONFIGS[PM.idx], items = p.items || [], tot = p.totals || {}, acc = ["#1a73e8", "#7b3fa0", "#00897b", "#b8560c"];
+    $("#soa-dr-sub").innerHTML = esc(p.supplier_name || cfg.title) + " (" + esc(cfg.supplier) + ") \u2192 " + esc(p.customer_name || cfg.customer) + " (" + esc(cfg.customer) + ") \u00b7 till date";
+    var h = "";
+    if (PM_CONFIGS.length > 1) h += '<div class="soa-dtabs">' + PM_CONFIGS.map(function (c, i) { return '<button type="button" data-pm="' + i + '"' + (i === PM.idx ? ' class="on"' : "") + ">" + esc(c.title) + "</button>"; }).join("") + "</div>";
+    h += '<div class="soa-sgrid k4">';
+    items.forEach(function (it, i) {
+      var bal = it.balance_qty || 0;
+      h += '<div class="soa-scard" style="--c:' + (bal < 0 ? "#c62828" : acc[i % acc.length]) + '"><span>' + esc(it.label) + " \u00b7 Balance Qty</span><b>" + nq(bal) + "</b><small>Purchased " + nq(it.purchased_qty) + " \u00b7 Sold " + nq(it.sold_qty) + "</small>" +
+        ((it.missing_codes || []).length ? '<small class="warn">Not in Item master: ' + esc(it.missing_codes.join(", ")) + "</small>" : "") + "</div>";
+    });
+    var bv = tot.balance_value || 0;
+    h += '<div class="soa-scard" style="--c:' + (bv < 0 ? "#c62828" : "#1a6e3a") + '"><span>Total Balance Amount</span><b>' + inr(bv) + "</b><small>Purchased " + inr(tot.purchased_amount) + " \u00b7 Sold " + inr(tot.sold_amount) + "</small></div></div>" +
+      '<div class="soa-note">Balance amount = balance qty \u00d7 average purchase rate of that item.</div>';
+    h += pmSection("Purchased from " + (p.supplier_name || cfg.title), "Purchase Receipts (submitted). Click an item to see each receipt.", items, "pr");
+    h += pmSection("Sold to " + (p.customer_name || cfg.customer), "Sales Invoices (submitted). Click an item to see each invoice.", items, "si");
+    $("#soa-dr-body").innerHTML = h;
+  }
+  function pmSection(title, note, items, kind) {
+    var isPr = kind === "pr", lk = isPr ? "receipts" : "invoices", qk = isPr ? "purchased_qty" : "sold_qty", ak = isPr ? "purchased_amount" : "sold_amount", dt = isPr ? "Purchase Receipt" : "Sales Invoice";
+    var h = '<h5 class="soa-h5">' + esc(title) + '</h5><div class="soa-note">' + esc(note) + '</div><table class="soa-t soa-dt soa-pm"><thead><tr><th>Item</th><th class="n">Total Qty</th><th class="n">Amount</th><th class="n">' + (isPr ? "Receipts" : "Invoices") + "</th></tr></thead><tbody>";
+    var sum = 0;
+    items.forEach(function (it, i) {
+      var docs = it[lk] || [], key = kind + i, op = !!PM.open[key];
+      sum += it[ak] || 0;
+      h += '<tr class="soa-pmrow' + (op ? " open" : "") + '" data-pmk="' + key + '"><td class="nm"><span class="cr">' + I.caret + "</span>" + esc(it.label) + "<small>" + esc((it.item_codes || []).join("  +  ")) + '</small></td><td class="n">' + nq(it[qk]) + '</td><td class="n">' + inr(it[ak]) + '</td><td class="n">' + docs.length + "</td></tr>";
+      if (op) {
+        h += '<tr class="soa-pmdet"><td colspan="4"><table class="soa-t"><thead><tr><th>' + dt + "</th><th>Date</th>" + (isPr ? "<th>PO</th>" : "") + '<th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead><tbody>' +
+          (docs.length ? docs.map(function (x) {
+            return "<tr><td>" + docLink(dt, x.doc_no) + (x.is_return ? '<span class="soa-ret">Return</span>' : "") + "<small>" + esc(x.item_code) + "</small></td><td>" + esc(short(x.posting_date)) + "</td>" +
+              (isPr ? "<td>" + (x.purchase_order ? docLink("Purchase Order", x.purchase_order) : "\u2013") + "</td>" : "") +
+              '<td class="n">' + nq(x.qty) + '</td><td class="n">' + inr(x.rate) + '</td><td class="n">' + inr(x.amount) + "</td></tr>";
+          }).join("") : '<tr><td colspan="' + (isPr ? 6 : 5) + '" class="mut">No ' + (isPr ? "receipts" : "invoices") + " yet.</td></tr>") + "</tbody></table></td></tr>";
+      }
+    });
+    return h + '</tbody><tfoot><tr><td>Total</td><td></td><td class="n">' + inr(sum) + "</td><td></td></tr></tfoot></table>";
+  }
+
+  /* ===================================================================
+     events
+     =================================================================== */
+  $("#soa-scrim").addEventListener("click", closeDrawer);
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (!$("#soa-set").hidden) closeSettings(); else closeDrawer(); } });
+  $("#soa-drawer").addEventListener("click", function (e) {
+    var b;
+    if (e.target.closest("#soa-dr-x")) { closeDrawer(); return; }
+    if ((b = e.target.closest("[data-seg]"))) { SO.seg = +b.getAttribute("data-seg"); drawSO(); return; }
+    if ((b = e.target.closest("[data-xls]"))) { soXLS(b.getAttribute("data-xls")); return; }
+    if ((b = e.target.closest("[data-f]"))) {
+      var key = SEGS[SO.seg].key; SO.filter[key] = b.getAttribute("data-f"); drawSO();
+      if (b.classList.contains("soa-scard")) { var a = $("#soa-list-anchor"); if (a) a.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      return;
+    }
+    if ((b = e.target.closest("[data-pm]"))) { openPM(+b.getAttribute("data-pm")); return; }
+    if ((b = e.target.closest("tr[data-pmk]"))) { if (e.target.closest("a")) return; var k = b.getAttribute("data-pmk"); PM.open[k] = !PM.open[k]; drawPM(); return; }
+  });
+  /* navbar buttons root ke bahar bhi hote hain */
+  d.addEventListener("click", function (e) {
+    if (e.target.closest("#soa-b-so, [data-open='so']")) { openSO(); return; }
+    if (e.target.closest("#soa-b-pm, [data-open='pm']")) { openPM(0); return; }
+  });
+  root.addEventListener("click", function (e) {
+    var b;
+    if (e.target.closest("#soa-prev")) { shiftMonth(-1); return; }
+    if (e.target.closest("#soa-next")) { shiftMonth(1); return; }
+    if ((b = e.target.closest("#soa-status [data-v]"))) { S.status = b.getAttribute("data-v"); store("status", S.status); syncBand(); load(); return; }
+    if ((b = e.target.closest("[data-kpi='overdue']"))) { if (S.status !== "Overdue") { S.status = "Overdue"; syncBand(); load(); } return; }
+    if (e.target.closest("#soa-csv")) { mainCSV(); return; }
+    if ((b = e.target.closest("#soa-main [data-cust]"))) { openCust(b.getAttribute("data-cust"), b.getAttribute("data-cn")); return; }
+  });
+  var qT = null;
+  root.addEventListener("input", function (e) { if (e.target.id === "soa-q") { S.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderTable, 120); } });
+  root.addEventListener("change", function (e) {
+    var id = e.target.id, v = e.target.value;
+    if (id === "soa-ig") { S.ig = v; syncBand(); load(); }
+    else if (id === "soa-from" || id === "soa-to") {
+      if (!v) { syncBand(); return; }
+      if (id === "soa-from") S.from = v; else S.to = v;
+      if (S.from > S.to) { var x = S.from; S.from = S.to; S.to = x; }
+      syncBand(); load();
+    }
+  });
+  $("#soa-refresh").addEventListener("click", load);
+  $("#soa-print").addEventListener("click", function () { w.print(); });
+
+  /* ===================================================================
+     settings (System Manager)
+     =================================================================== */
+  var SV = { users: [], cand: [], pick: null };
+  function openSettings() {
+    var m = $("#soa-set");
+    $(".soa-modal", m).innerHTML =
+      '<div class="soa-mh"><div><h3>Report access</h3><p>Only <b>View</b> access \u2014 this page cannot change any data. System Managers always have access. Disabled users are not listed. Summary cards show only to System Manager / UCM Admin.</p></div>' +
+        '<button type="button" class="soa-ibtn" id="soa-set-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="soa-mb"><div class="soa-msg" id="soa-set-msg"></div>' +
+        '<div class="soa-add"><div class="soa-pick"><input type="text" id="soa-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="soa-pick-l" id="soa-set-l" hidden></div></div>' +
+        '<button type="button" class="soa-btn" id="soa-set-go">Give view access</button></div>' +
+        '<div class="soa-ulist" id="soa-set-list"><div class="soa-none">Loading\u2026</div></div></div>';
+    m.hidden = false; lock(true);
+    $("#soa-set-x").addEventListener("click", closeSettings);
+    var inp = $("#soa-set-u"), lst = $("#soa-set-l");
+    function pick() {
+      var qs = inp.value.trim().toLowerCase(), have = {};
+      SV.users.forEach(function (u) { have[u.user] = 1; });
+      var list = SV.cand.filter(function (c) { return !have[c.user] && (!qs || (c.full_name + " " + c.user).toLowerCase().indexOf(qs) >= 0); }).slice(0, 8);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-u="' + esc(c.user) + '"><b>' + esc(c.full_name) + "</b><small>" + esc(c.user) + "</small></button>"; }).join("") : '<div class="soa-none">No user found</div>';
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", pick);
+    inp.addEventListener("input", function () { SV.pick = null; pick(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; }, 120); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b) return; e.preventDefault();
+      var c = SV.cand.filter(function (x) { return x.user === b.getAttribute("data-u"); })[0];
+      SV.pick = c ? c.user : null; inp.value = c ? c.full_name + " (" + c.user + ")" : ""; lst.hidden = true;
+    });
+    $("#soa-set-go").addEventListener("click", async function () {
+      if (!SV.pick) { setMsg("Pick a user from the list first."); return; }
+      this.disabled = true; var who = SV.pick;
+      if (await settingsCall({ action: "set", user: who, level: "view" })) { SV.pick = null; inp.value = ""; setMsg("View access given to " + who + ".", true); }
+      this.disabled = false;
+    });
+    $("#soa-set-list").addEventListener("click", async function (e) {
+      var b = e.target.closest("button[data-rm]"); if (!b) return;
+      if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(function () { if (b.isConnected) { b.classList.remove("arm"); b.innerHTML = I.x; } }, 3000); return; }
+      b.disabled = true;
+      if (await settingsCall({ action: "set", user: b.getAttribute("data-rm"), level: "none" })) setMsg("Access removed for " + b.getAttribute("data-rm") + ".", true);
+    });
+    settingsCall({ action: "list" });
+  }
+  function setMsg(t, ok) { var el = $("#soa-set-msg"); if (!el) return; el.className = "soa-msg" + (t ? " show" + (ok ? " ok" : "") : ""); el.textContent = t || ""; }
+  async function settingsCall(body) {
+    try {
+      var m = await api(body, "POST"); if (!m) return false;
+      SV.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); SV.cand = m.candidates || [];
+      $("#soa-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
+        return '<div class="soa-urow"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + "</small></div>" +
+          (u.level === "admin" ? '<span class="tag admin">System Manager</span><span class="rm"></span>' : '<span class="tag">View</span><button type="button" class="rm" data-rm="' + esc(u.user) + '" title="Remove access">' + I.x + "</button>") + "</div>";
+      }).join("") : '<div class="soa-none">No users yet</div>';
+      return true;
+    } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
+  }
+  function closeSettings() { var m = $("#soa-set"); if (m.hidden) return; m.hidden = true; lock(false); }
+  $("#soa-gear").addEventListener("click", openSettings);
+  $("#soa-set").addEventListener("mousedown", function (e) { if (e.target === this) closeSettings(); });
+
+  /* ============ UCM standard header: title + buttons ERP navbar mein ============ */
+  function mergeNav() {
+    var nav = d.querySelector("nav.navbar"), brand = nav && nav.querySelector(".navbar-brand");
+    if (!nav || !brand) return;
+    var t = d.createElement("div"); t.className = "soa-nav-title";
+    t.innerHTML = '<h1>Sales Order Analysis</h1><p class="soa-sub"></p>';
+    brand.insertAdjacentElement("afterend", t);
+    var bt = $("#soa-btns"); if (bt) { bt.classList.add("in-nav"); t.insertAdjacentElement("afterend", bt); }
+    /* mobile ke liye wahi buttons page par bhi */
+    $("#soa-btnbar").innerHTML = '<div class="soa-btns is-bar"><button type="button" class="soa-tbtn" data-open="so">' + I.list + '<span>Sales Orders</span></button><button type="button" class="soa-tbtn" data-open="pm">' + I.box + "<span>Packing Material</span></button></div>";
+    var act = $("#soa-act"); act.classList.add("soa-nav-act");
+    var login = nav.querySelector("#website-post-login");
+    if (login && login.parentNode) {
+      var li = d.createElement("li"); li.className = "nav-item soa-nav-li"; li.appendChild(act);
+      login.parentNode.insertBefore(li, login);
+    } else { (brand.parentElement || nav).appendChild(act); act.classList.add("is-end"); }
+    $("#soa-head").hidden = true;
+    d.body.classList.add("soa-nav-merged");
+    alignToLogo();
+    w.addEventListener("resize", alignToLogo);
+    w.addEventListener("load", alignToLogo);
+  }
+  /* page ka left margin = logo ka left margin */
+  function alignToLogo() {
+    var brand = d.querySelector("nav.navbar .navbar-brand"); if (!brand) return;
+    var img = brand.querySelector("img, svg") || brand;
+    var left = Math.round(img.getBoundingClientRect().left - root.getBoundingClientRect().left);
+    if (left >= 8 && left <= 120) root.style.setProperty("--soa-pad", left + "px");
+    var nav = d.querySelector("nav.navbar"), pos = nav ? getComputedStyle(nav).position : "";
+    var stick = nav && (pos === "sticky" || pos === "fixed") ? Math.round(nav.getBoundingClientRect().height) : 0;
+    if (!stick && nav && nav.parentElement && /sticky|fixed/.test(getComputedStyle(nav.parentElement).position)) stick = Math.round(nav.parentElement.getBoundingClientRect().height);
+    root.style.setProperty("--soa-nav-h", stick + "px");
+  }
+
+  /* ============ start ============ */
+  async function boot() {
+    if (!cookie("user_id") || cookie("user_id") === "Guest") { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return; }
+    try { S.acc = await api({ action: "me" }); }
+    catch (e) {
+      $("#soa-gate").innerHTML = '<div class="soa-gate-card"><div class="ico warn">!</div><h3>Could not check access</h3><p>' + esc(e.message) + '</p><p class="s">Check that the <b>ucm_so_analysis</b> Server Script is saved and enabled.</p></div>';
+      return;
+    }
+    if (!S.acc || !S.acc.can_view) {
+      $("#soa-gate").innerHTML = '<div class="soa-gate-card"><div class="ico">' + I.lock + '</div><h3>You do not have access</h3><p>This report is open only to System Managers and users given access by them.</p><p class="s">Signed in as <b>' + esc((S.acc && (S.acc.full_name || S.acc.user)) || "") + "</b></p></div>";
+      return;
+    }
+    $("#soa-gate").hidden = true; $("#soa-app").hidden = false;
+    $("#soa-gear").hidden = !S.acc.is_admin;
+    mergeNav();
+    syncBand();
+    loadLists();
+    load();
+  }
+  boot();
+})();
