@@ -1,1270 +1,659 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   UCM Dispatch & Sales Register — Web Page (fresh UI)
-   Web Page → Javascript box mein poora paste karein.
-   APIs (Server Scripts): ucm_dsr_data, ucm_dsr_access, ucm_item_stock_ledger
+   UCM Dispatch & Sales Register — Web Page CSS
+   Web Page → Style → "CSS" box mein poora paste karein.
+   Palette: teal (Ultra / accent) + terracotta (Large Blow), baaki slate neutral.
+   (Management report ke plum/gold se alag rakha gaya hai.)
    ═══════════════════════════════════════════════════════════════════════════ */
-(function (w) {
-  "use strict";
-  if (w.__ucmDsrLoaded) return;
-  w.__ucmDsrLoaded = true;
 
-  var API_DATA = "ucm_dsr_data";
-  var API_ACCESS = "ucm_dsr_access";
-  var API_STOCK = "ucm_item_stock_ledger";
-  var ROW_LIMIT = 1200;                       // itni lines ke baad "Show all"
-  var d = document;
+#ucm-dsr, .ucmd-nav-title, .ucmd-gear, .ucmd-drawer, .ucmd-modal-scrim, .ucmd-toast {
+  --ink: #0f172a; --ink2: #334155; --mut: #64748b; --mut2: #94a3b8;
+  --line: #e5e7eb; --line2: #f1f5f9; --soft: #f8fafc; --bg: #f6f7f9;
+  --plum: #0f766e; --plum-d: #115e59; --plum-l: #e9f6f4; --plum-b: #c5e6e1;
+  --gold: #c2612c; --gold-l: #fbeee6; --gold-b: #f0cfba;
+  --ok: #15803d; --ok-l: #ecf8f0; --draft: #b45309; --draft-l: #fff5e8;
+  --bad: #dc2626;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+#ucm-dsr *, #ucm-dsr *::before, #ucm-dsr *::after,
+.ucmd-drawer *, .ucmd-modal-scrim * { box-sizing: border-box; }
 
-  var S = {
-    access: "", isAdmin: false, me: "", meName: "",
-    view: "dispatch", period: "today", from: "", to: "",
-    f: { customer: "", item: "", person: "", otype: "", status: "" },
-    q: "", cache: {}, rows: [], req: 0, showAll: false
-  };
+body.ucmd-nav-merged, body.ucmd-nav-merged .page-content-wrapper, body.ucmd-nav-merged main,
+body.ucmd-nav-merged .page_content, body.ucmd-nav-merged .page-content { background: var(--bg, #f6f7f9) !important; }
+body.ucmd-nav-merged .page-header-wrapper, body.ucmd-nav-merged .page-breadcrumbs { display: none !important; }
+body.ucmd-nav-merged main.container, body.ucmd-nav-merged .page-content-wrapper .container { max-width: 100% !important; padding-left: 0 !important; padding-right: 0 !important; }
+/* Header (navbar) aur footer bhi poori screen ki width mein */
+body.ucmd-nav-merged nav.navbar > .container,
+body.ucmd-nav-merged .web-footer .container,
+body.ucmd-nav-merged footer .container,
+body.ucmd-nav-merged .footer-container { box-sizing: border-box !important; max-width: 100% !important; width: 100% !important; padding-left: 24px !important; padding-right: 24px !important; }
+body.ucmd-nav-merged .web-footer, body.ucmd-nav-merged footer { background: #fff; border-top: 1px solid #e5e7eb; }
 
-  var VIEWS = {
-    dispatch: { source: "Delivery Note", label: "Dispatches", slug: "delivery-note", value: "Dispatch Value", doc: "Dispatch" },
-    sales: { source: "Sales Invoice", label: "Sales Invoices", slug: "sales-invoice", value: "Sales Value", doc: "Invoice" },
-    persons: { source: "Sales Person", label: "Sales Person", slug: "sales-invoice", value: "Total Sales", doc: "Invoice" }
-  };
+#ucm-dsr { color: var(--ink); font-size: 12.5px; line-height: 1.45; padding: 0; max-width: none; margin: 0; position: relative; }
+#ucm-dsr button { font-family: inherit; }
+#ucm-dsr a { color: var(--plum); text-decoration: none; }
+#ucm-dsr a:hover { text-decoration: underline; }
 
-  /* ───────── helpers ───────── */
-  function $(sel, el) { return (el || d).querySelector(sel); }
-  function $$(sel, el) { return Array.prototype.slice.call((el || d).querySelectorAll(sel)); }
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
-  var nf2 = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  function num(n) { return nf0.format(Math.round(n || 0)); }
-  function qtyFmt(n) { n = +n || 0; return Math.abs(n - Math.round(n)) < 1e-9 ? nf0.format(n) : nf2.format(n); }
-  function inr(n) { return "₹" + nf0.format(Math.round(n || 0)); }
-  function inr2(n) { return "₹" + nf2.format(n || 0); }
-  function inrShort(n) {
-    n = n || 0; var a = Math.abs(n);
-    if (a >= 1e7) return "₹" + (n / 1e7).toFixed(2) + " Cr";
-    if (a >= 1e5) return "₹" + (n / 1e5).toFixed(2) + " L";
-    if (a >= 1e3) return "₹" + (n / 1e3).toFixed(1) + "K";
-    return "₹" + nf0.format(Math.round(n));
-  }
-  function pad(n) { return (n < 10 ? "0" : "") + n; }
-  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
-  function parseIso(s) { var p = String(s || "").split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
-  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  function shortDate(s) { if (!s) return ""; var x = parseIso(s); return x.getDate() + "-" + MON[x.getMonth()]; }
-  function longDate(s) { var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
-  function lc(s) { return String(s || "").toLowerCase(); }
-  function initials(s) { s = String(s || "?").trim(); var p = s.split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+/* ── progress line ── */
+#ucm-dsr .ucmd-progress { position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 1050; overflow: hidden; pointer-events: none; }
+#ucm-dsr.is-busy .ucmd-progress::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 35%; left: -35%;
+  background: linear-gradient(90deg, var(--plum), var(--gold)); animation: ucmdSlide 1.1s ease-in-out infinite;
+}
+@keyframes ucmdSlide { to { left: 100%; } }
+.ucmd-spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #c5e6e1; border-top-color: #0f766e; border-radius: 50%; animation: ucmdSpin .7s linear infinite; vertical-align: -2px; margin-right: 8px; }
+@keyframes ucmdSpin { to { transform: rotate(360deg); } }
+#ucm-dsr .ucmd-checking { padding: 110px 16px; text-align: center; color: var(--mut2); font-size: 13px; }
 
-  function cookieVal(k) {
-    var m = d.cookie.match(new RegExp("(?:^|;\\s*)" + k + "=([^;]*)"));
-    return m ? decodeURIComponent(m[1]).replace(/^"|"$/g, "") : "";
-  }
-  function isGuest() { var u = cookieVal("user_id"); return !u || u === "Guest"; }
-  function csrf() { return (w.frappe && w.frappe.csrf_token) || w.csrf_token || ""; }
+/* ═════ NAVBAR merge ═════ */
+body.ucmd-nav-merged nav.navbar { background: #fff !important; border-bottom: 1px solid #e5e7eb; }
+body.ucmd-nav-merged nav.navbar .navbar-brand { display: flex; align-items: center; margin-right: 0; }
+body.ucmd-nav-merged nav.navbar .navbar-brand img { max-height: 40px !important; height: 40px; width: auto; }
+.ucmd-nav-title { display: flex; flex-direction: column; justify-content: center; margin: 0 16px 0 14px; padding-left: 14px; border-left: 1px solid #e5e7eb; min-width: 0; }
+.ucmd-nav-title h1, #ucm-dsr .ucmd-title h1 { margin: 0; font-size: 16.5px; font-weight: 700; color: #0f172a; letter-spacing: -.01em; line-height: 1.25; white-space: nowrap; }
+.ucmd-nav-title .ucmd-sub, #ucm-dsr .ucmd-title .ucmd-sub { font-size: 11px; color: #64748b; white-space: nowrap; margin-top: 1px; }
+@media (max-width: 1100px) { .ucmd-nav-title .ucmd-sub { display: none; } }
+@media (max-width: 760px) { .ucmd-nav-title { display: none; } }
 
-  function api(method, args) {
-    return fetch("/api/method/" + method, {
-      method: "POST", credentials: "same-origin",
-      headers: { "Accept": "application/json", "Content-Type": "application/json", "X-Frappe-CSRF-Token": csrf() },
-      body: JSON.stringify(args || {})
-    }).then(function (res) {
-      return res.json().catch(function () { return null; }).then(function (body) {
-        if (!res.ok) {
-          var msg = method + " failed (" + res.status + ")";
-          try {
-            if (body && body._server_messages) {
-              var m0 = JSON.parse(JSON.parse(body._server_messages)[0]);
-              var tmp = d.createElement("div"); tmp.innerHTML = m0.message || ""; msg = tmp.textContent || msg;
-            } else if (body && body.exception) msg = String(body.exception).split("\n")[0];
-          } catch (e) { /* ignore */ }
-          var err = new Error(msg); err.status = res.status; throw err;
-        }
-        return body ? body.message : null;
-      });
-    });
-  }
-  function isNoAccess(err) {
-    var m = String((err && err.message) || "");
-    return /UCM_NO_ACCESS|do not have access|Please log in|not permitted|not allowed/i.test(m) || (err && err.status === 403);
-  }
-  function cleanMsg(err) { return String((err && err.message) || "Something went wrong").replace(/^.*UCM_NO_ACCESS:\s*/, ""); }
+.ucmd-gear-li { display: flex; align-items: center; margin-right: 10px; list-style: none; }
+.ucmd-gear {
+  width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #c5e6e1; background: #f2faf8; color: #0f766e; cursor: pointer; transition: background .15s, transform .3s;
+}
+.ucmd-gear:hover { background: #e2f3f0; }
+.ucmd-gear:hover svg { transform: rotate(45deg); }
+.ucmd-gear svg { transition: transform .35s; }
 
-  var toastTimer = null;
-  function toast(msg, bad) {
-    var t = $(".ucmd-toast");
-    if (!t) { t = d.createElement("div"); t.className = "ucmd-toast"; d.body.appendChild(t); }
-    t.textContent = msg; t.classList.toggle("is-bad", !!bad); t.classList.add("on");
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove("on"); }, 2600);
-  }
+#ucm-dsr .ucmd-head { display: flex; align-items: center; gap: 12px; padding: 14px 24px; background: #fff; border-bottom: 1px solid var(--line); }
+#ucm-dsr .ucmd-head.is-merged { display: none; }
+#ucm-dsr .ucmd-head-actions { margin-left: auto; display: flex; gap: 8px; }
 
-  /* ───────── White dropdown — page ke saare dropdown ek jaise (search + list) ───────── */
-  var DD_OPEN = null;
-  function makeDD(host, cfg) {
-    // cfg: search, placeholder, options(q) → [{v, l, sub}], get() → v, pick(v), type(text), display(v) → text
-    host.classList.add("ucmd-dd");
-    if (cfg.cls) host.classList.add(cfg.cls);
-    host.innerHTML = '<input type="text" class="ucmd-dd-in" autocomplete="off" spellcheck="false" placeholder="' + esc(cfg.placeholder || "") + '"' + (cfg.search ? "" : " readonly") + ">" +
-      '<button type="button" class="ucmd-dd-x" tabindex="-1" aria-label="Clear">' + ico(I.close, 11) + "</button>" +
-      '<span class="ucmd-dd-caret">' + ico(I.chev, 14) + "</span>" +
-      '<div class="ucmd-dd-menu" role="listbox"></div>';
-    var inp = $(".ucmd-dd-in", host), menu = $(".ucmd-dd-menu", host), act = -1, items = [], dirty = false;
-    var me = {
-      el: host,
-      sync: function () {
-        var v = cfg.get();
-        inp.value = cfg.display ? cfg.display(v) : (v || "");
-        host.classList.toggle("has-val", !!v && cfg.clearable !== false);
-      },
-      close: close
-    };
-    function isOpen() { return host.classList.contains("open"); }
-    function open() {
-      if (DD_OPEN && DD_OPEN !== me) DD_OPEN.close();
-      DD_OPEN = me; dirty = false; act = -1;
-      host.classList.add("open"); render(); place();
-    }
-    function close() {
-      host.classList.remove("open"); if (DD_OPEN === me) DD_OPEN = null; act = -1;
-      if (!cfg.search || cfg.display) me.sync();
-    }
-    function place() {
-      var r = inp.getBoundingClientRect(), below = w.innerHeight - r.bottom;
-      menu.style.left = Math.max(8, Math.min(r.left, w.innerWidth - Math.max(r.width, 220) - 8)) + "px";
-      menu.style.minWidth = r.width + "px";
-      if (below < 250 && r.top > below) { menu.style.top = "auto"; menu.style.bottom = (w.innerHeight - r.top + 4) + "px"; }
-      else { menu.style.bottom = "auto"; menu.style.top = (r.bottom + 4) + "px"; }
-    }
-    function render() {
-      var q = cfg.search && dirty ? lc(inp.value.trim()) : "", cur = cfg.get();
-      items = cfg.options(q) || [];
-      menu.innerHTML = items.length ? items.slice(0, 400).map(function (o, i) {
-        var sel = o.v === cur && cur !== "" && cur != null;
-        return '<div class="ucmd-dd-opt' + (sel ? " sel" : "") + (i === act ? " act" : "") + '" data-i="' + i + '" role="option">' +
-          '<span class="ucmd-dd-l"><b>' + esc(o.l == null ? o.v : o.l) + "</b>" + (o.sub ? "<small>" + esc(o.sub) + "</small>" : "") + "</span>" +
-          (sel ? ico(I.check, 13) : "") + "</div>";
-      }).join("") : '<div class="ucmd-dd-none">No matches</div>';
-    }
-    function choose(v) { cfg.pick(v); me.sync(); close(); inp.blur(); }
-    inp.addEventListener("mousedown", function () { if (isOpen() && !cfg.search) { close(); } else if (!isOpen()) { setTimeout(open, 0); } });
-    inp.addEventListener("focus", function () { if (!isOpen()) open(); });
-    inp.addEventListener("blur", function () { setTimeout(function () { if (d.activeElement !== inp && isOpen()) close(); }, 150); });
-    inp.addEventListener("input", function () {
-      dirty = true; act = -1;
-      if (cfg.type) cfg.type(inp.value.trim());
-      host.classList.toggle("has-val", !!inp.value);
-      if (!isOpen()) open(); else render();
-    });
-    inp.addEventListener("keydown", function (e) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault(); if (!isOpen()) open();
-        act = Math.max(0, Math.min(items.length - 1, act + (e.key === "ArrowDown" ? 1 : -1))); render();
-        var a = $(".act", menu); if (a) a.scrollIntoView({ block: "nearest" });
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        if (act >= 0 && items[act]) choose(items[act].v); else { close(); inp.blur(); }
-      } else if (e.key === "Escape") { e.stopPropagation(); close(); inp.blur(); }
-      else if (e.key === "Tab") close();
-    });
-    menu.addEventListener("mousedown", function (e) { e.preventDefault(); });
-    menu.addEventListener("click", function (e) { var o = e.target.closest(".ucmd-dd-opt"); if (o) choose(items[+o.getAttribute("data-i")].v); });
-    var x = $(".ucmd-dd-x", host);
-    x.addEventListener("mousedown", function (e) { e.preventDefault(); e.stopPropagation(); });
-    x.addEventListener("click", function (e) { e.stopPropagation(); choose(""); });
-    me.sync();
-    return me;
-  }
-  d.addEventListener("mousedown", function (e) { if (DD_OPEN && !DD_OPEN.el.contains(e.target)) DD_OPEN.close(); });
-  w.addEventListener("resize", function () { if (DD_OPEN) DD_OPEN.close(); });
-  d.addEventListener("scroll", function (e) {
-    if (DD_OPEN && !(e.target && e.target.closest && e.target.closest(".ucmd-dd-menu"))) DD_OPEN.close();
-  }, true);
-  function uniqueOpts(rows, fn, q, labelFn) {
-    var seen = {}, out = [];
-    rows.forEach(function (r) {
-      var v = fn(r); if (!v || seen[v]) return; seen[v] = 1;
-      var l = labelFn ? labelFn(v) : v;
-      if (q && lc(v).indexOf(q) < 0 && lc(l).indexOf(q) < 0) return;
-      out.push({ v: v, l: l });
-    });
-    return out.sort(function (a, b) { return lc(a.l) < lc(b.l) ? -1 : 1; });
-  }
+/* ═════ FILTER BAND (white, full width) ═════ */
+#ucm-dsr .ucmd-band {
+  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; padding: 12px 24px;
+  background: #fff; border-bottom: 1px solid var(--line);
+}
+#ucm-dsr .ucmd-fgroup { display: flex; flex-direction: column; gap: 4px; }
+#ucm-dsr .ucmd-flabel, #ucm-dsr .ucmd-field > span { font-size: 11.5px; font-weight: 500; color: var(--ink2); }
+#ucm-dsr .ucmd-periods { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+#ucm-dsr .ucmd-chip {
+  height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--ink2);
+  font-size: 12px; font-weight: 500; cursor: pointer; transition: all .15s;
+}
+#ucm-dsr .ucmd-chip:hover { border-color: var(--plum-b); color: var(--plum); background: var(--plum-l); }
+#ucm-dsr .ucmd-chip.on { background: var(--plum); border-color: var(--plum); color: #fff; }
+#ucm-dsr .ucmd-range { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--mut2); }
+#ucm-dsr .ucmd-range.on { border-color: var(--plum); box-shadow: 0 0 0 3px rgba(15,118,110,.1); }
+#ucm-dsr .ucmd-range span { display: inline-flex; }
+#ucm-dsr .ucmd-range input { border: 0; background: transparent; font: inherit; font-size: 12.5px; color: var(--ink); height: 28px; padding: 0 2px; outline: none; width: 116px; }
+#ucm-dsr .ucmd-field { display: flex; flex-direction: column; gap: 4px; flex: 2 1 150px; min-width: 120px; max-width: none; margin: 0; }
+#ucm-dsr .ucmd-field.is-sm { flex: 1 1 110px; min-width: 100px; }
+#ucm-dsr .ucmd-field input, #ucm-dsr .ucmd-field select {
+  height: 32px; width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  font: inherit; font-size: 12.5px; color: var(--ink); outline: none; transition: border-color .15s, box-shadow .15s, background .15s;
+}
+#ucm-dsr .ucmd-field input::placeholder { color: var(--mut2); }
+#ucm-dsr .ucmd-field input:focus, #ucm-dsr .ucmd-field select:focus { border-color: var(--plum); box-shadow: 0 0 0 3px rgba(15,118,110,.1); }
+#ucm-dsr .ucmd-field input:not(:placeholder-shown) { background: var(--plum-l); border-color: var(--plum-b); }
+#ucm-dsr .ucmd-clear { height: 32px; padding: 0 10px; border: 0; background: none; color: var(--plum); font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 8px; }
+#ucm-dsr .ucmd-clear:hover { background: var(--plum-l); }
+#ucm-dsr .ucmd-band-actions { display: flex; gap: 8px; align-self: center; margin-left: 14px; }
+#ucm-dsr .ucmd-pbtn {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--plum-b); background: var(--plum-l); color: var(--plum-d); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s;
+}
+#ucm-dsr .ucmd-pbtn:hover { background: #d9efeb; }
+#ucm-dsr.is-busy #ucmd-refresh svg { animation: ucmdSpin .9s linear infinite; }
 
-  /* ───────── icons ───────── */
-  function ico(path, size) {
-    return '<svg viewBox="0 0 24 24" width="' + (size || 14) + '" height="' + (size || 14) + '" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + path + "</svg>";
-  }
-  var I = {
-    truck: '<path d="M3 6.5h11v9H3z"/><path d="M14 9.5h3.5L21 13v2.5h-7"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/>',
-    invoice: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
-    refresh: '<path d="M20 11a8 8 0 0 0-14.7-4.3L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.7 4.3L20 16"/><path d="M20 20v-4h-4"/>',
-    download: '<path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/>',
-    search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
-    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
-    close: '<path d="M6 6l12 12M18 6L6 18"/>',
-    grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
-    users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.6"/><path d="M15.5 14.2A5 5 0 0 1 21 19"/>',
-    excel: '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9.5 12l5 6M14.5 12l-5 6"/>',
-    chev: '<path d="M6 9l6 6 6-6"/>',
-    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-    print: '<path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>',
-    back: '<path d="M15 6l-6 6 6 6"/>',
-    arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
-    lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
-    user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
-    shield: '<path d="M12 3l7 3v6c0 4.5-3 7.8-7 9-4-1.2-7-4.5-7-9V6z"/>',
-    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'
-  };
+/* ═════ TABS (underline, full width) ═════ */
+#ucm-dsr .ucmd-tabs { display: flex; align-items: flex-end; gap: 22px; padding: 0 24px; background: #fff; border-bottom: 1px solid var(--line); }
+#ucm-dsr .ucmd-view {
+  display: inline-flex; align-items: center; gap: 7px; height: 42px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; color: var(--mut); font-size: 13px; font-weight: 600; cursor: pointer; transition: color .15s, border-color .15s;
+}
+#ucm-dsr .ucmd-view:hover { color: var(--ink); }
+#ucm-dsr .ucmd-view.on { color: var(--plum); border-bottom-color: var(--plum); }
+#ucm-dsr .ucmd-tab-count:empty { display: none; }
+#ucm-dsr .ucmd-tab-count { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 99px; background: var(--plum-l); color: var(--plum); }
+#ucm-dsr .ucmd-tabs-meta { margin-left: auto; align-self: center; font-size: 12px; color: var(--mut); }
 
-  /* ───────── periods ───────── */
-  var PERIODS = [
-    ["today", "Today"], ["yesterday", "Yesterday"], ["week", "This week"],
-    ["month", "This month"], ["lastmonth", "Last month"]
-  ];
-  function periodRange(p) {
-    var t = new Date(); t.setHours(0, 0, 0, 0);
-    var a = new Date(t), b = new Date(t);
-    if (p === "yesterday") { a.setDate(t.getDate() - 1); b = new Date(a); }
-    else if (p === "week") { var dow = (t.getDay() + 6) % 7; a.setDate(t.getDate() - dow); }
-    else if (p === "month") { a = new Date(t.getFullYear(), t.getMonth(), 1); }
-    else if (p === "lastmonth") { a = new Date(t.getFullYear(), t.getMonth() - 1, 1); b = new Date(t.getFullYear(), t.getMonth(), 0); }
-    return [iso(a), iso(b)];
-  }
+#ucm-dsr .ucmd-main { padding: 16px 24px 48px; }
 
-  /* ═════════════════════════ ACCESS GATE ═════════════════════════ */
-  function renderGate(root, kind, msg) {
-    var guest = kind === "guest";
-    var who = cookieVal("full_name") || cookieVal("user_id");
-    var redirect = encodeURIComponent(location.pathname + location.search);
-    root.className = "ucmd-root ucmd-locked";
-    root.innerHTML =
-      '<div class="ucmd-gate" role="alert"><div class="ucmd-gate-card">' +
-        '<div class="ucmd-gate-band"></div>' +
-        '<div class="ucmd-gate-icon">' + ico(I.lock + '<circle cx="12" cy="15.3" r="1.3" fill="currentColor" stroke="none"/>', 30) + "</div>" +
-        '<div class="ucmd-gate-kicker">Restricted area</div>' +
-        '<h2 class="ucmd-gate-title">' + (guest ? "Please sign in to continue" : "You do not have access") + "</h2>" +
-        '<p class="ucmd-gate-text">' + (guest
-          ? "The UCM Dispatch &amp; Sales Register is available only to signed-in users who have been given access."
-          : esc(msg || "") || "Your account has not been given access to the UCM Dispatch &amp; Sales Register. Please ask a <b>System Manager</b> to grant you access.") + "</p>" +
-        (!guest && who ? '<div class="ucmd-gate-user"><span class="ucmd-av">' + esc(initials(who)) + "</span><span>Signed in as <b>" + esc(who) + "</b></span></div>" : "") +
-        '<div class="ucmd-gate-actions">' + (guest
-          ? '<a class="ucmd-btn is-primary" href="/login?redirect-to=' + redirect + '">Sign in</a><a class="ucmd-btn" href="/">Go to home</a>'
-          : '<a class="ucmd-btn is-primary" href="/">Go to home</a><a class="ucmd-btn" href="/?cmd=web_logout">Sign in as another user</a>') +
-        "</div>" +
-        '<div class="ucmd-gate-foot">' + (guest ? "401 · Not signed in" : "403 · Access restricted") + "</div>" +
-      "</div></div>";
-  }
+.ucmd-icon-btn {
+  width: 32px; height: 32px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  border-radius: 9px; border: 1px solid #c5e6e1; background: #fff; color: #0f766e; cursor: pointer; transition: background .15s, border-color .15s;
+}
+.ucmd-icon-btn:hover { background: #eef8f6; border-color: #9fd4cc; }
+.ucmd-icon-btn.is-sm { width: 28px; height: 28px; border-radius: 8px; }
+.ucmd-icon-btn.is-danger { color: #b91c1c; border-color: #f3d4d4; }
+.ucmd-icon-btn.is-danger:hover { background: #fef2f2; border-color: #eab0b0; }
 
-  /* ═════════════════════════ SHELL ═════════════════════════ */
-  function buildShell(root) {
-    root.className = "ucmd-root";
-    root.innerHTML =
-      '<div class="ucmd-progress"></div>' +
-      '<header class="ucmd-head">' +
-        '<div class="ucmd-title"><h1>Dispatch &amp; Sales Register</h1><div class="ucmd-sub">Ultra &amp; Large Blow · credit notes, returns &amp; RM items excluded</div></div>' +
-        '<div class="ucmd-head-actions"></div>' +
-      "</header>" +
+/* ═════ KPIs ═════ */
+#ucm-dsr .ucmd-kpis { display: grid; grid-template-columns: 1.35fr 1fr 1fr 1.1fr 1.1fr; gap: 10px; margin-bottom: 12px; }
+#ucm-dsr .ucmd-kpi {
+  position: relative; text-align: left; font: inherit; color: inherit; padding: 12px 14px; border-radius: 12px;
+  background: #fff; border: 1px solid var(--line); min-width: 0; display: flex; flex-direction: column; gap: 3px;
+}
+#ucm-dsr .ucmd-kpi-label { display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--mut); }
+#ucm-dsr .ucmd-kpi-label em { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--mut2); }
+#ucm-dsr .ucmd-kpi-value { font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ucm-dsr .ucmd-kpi-sub { font-size: 11.5px; color: var(--mut); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+#ucm-dsr .ucmd-kpi-foot { margin-top: auto; padding-top: 6px; font-size: 11px; color: rgba(255,255,255,.75); }
+#ucm-dsr .ucmd-kpi.is-hero { background: linear-gradient(135deg, #0b3f3b 0%, #0f5f58 55%, #12786f 100%); border-color: transparent; color: #fff; box-shadow: 0 10px 24px -14px rgba(11,63,59,.8); }
+#ucm-dsr .ucmd-kpi.is-hero .ucmd-kpi-label, #ucm-dsr .ucmd-kpi.is-hero .ucmd-kpi-label em, #ucm-dsr .ucmd-kpi.is-hero .ucmd-kpi-sub { color: rgba(255,255,255,.82); }
+#ucm-dsr .ucmd-kpi.is-hero .ucmd-kpi-value { color: #fff; font-size: 25px; }
+#ucm-dsr .ucmd-kpi.is-hero::after { content: ""; position: absolute; right: -30px; top: -30px; width: 110px; height: 110px; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.12), transparent 70%); pointer-events: none; }
+#ucm-dsr .ucmd-meter { height: 5px; border-radius: 99px; background: var(--line2); overflow: hidden; margin: 4px 0 2px; }
+#ucm-dsr .ucmd-meter i { display: block; height: 100%; border-radius: 99px; background: var(--ok); }
+#ucm-dsr .ucmd-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+#ucm-dsr .ucmd-dot.is-ok { background: var(--ok); }
+#ucm-dsr .ucmd-dot.is-draft { background: #f59e0b; margin-left: 6px; }
+#ucm-dsr .ucmd-kpi.is-seg { cursor: pointer; transition: border-color .15s, box-shadow .15s; border-top-width: 3px; }
+#ucm-dsr .ucmd-kpi.is-ultra { border-top-color: var(--plum); }
+#ucm-dsr .ucmd-kpi.is-lb { border-top-color: var(--gold); }
+#ucm-dsr .ucmd-kpi.is-done { border-top-color: #475569; }
+#ucm-dsr .ucmd-kpi.is-pending { border-top-color: #f59e0b; }
+#ucm-dsr .ucmd-kpi.is-seg:hover { box-shadow: 0 6px 18px -12px rgba(15,23,42,.4); }
+#ucm-dsr .ucmd-sw { width: 9px; height: 9px; border-radius: 3px; }
+#ucm-dsr .ucmd-share { margin-left: auto; font-size: 11px; letter-spacing: 0; padding: 1px 7px; border-radius: 99px; }
+#ucm-dsr .is-ultra .ucmd-sw, #ucm-dsr .is-ultra .ucmd-meter i { background: var(--plum); }
+#ucm-dsr .is-ultra .ucmd-share { background: var(--plum-l); color: var(--plum); }
+#ucm-dsr .is-ultra.on { border-color: var(--plum); box-shadow: 0 0 0 3px rgba(15,118,110,.12); }
+#ucm-dsr .is-lb .ucmd-sw, #ucm-dsr .is-lb .ucmd-meter i { background: var(--gold); }
+#ucm-dsr .is-lb .ucmd-share { background: var(--gold-l); color: #9a4519; }
+#ucm-dsr .is-done .ucmd-sw, #ucm-dsr .is-done .ucmd-meter i { background: #475569; }
+#ucm-dsr .is-done .ucmd-share { background: #f1f5f9; color: #334155; }
+#ucm-dsr .is-done.on { border-color: #475569; box-shadow: 0 0 0 3px rgba(71,85,105,.14); }
+#ucm-dsr .is-pending .ucmd-sw, #ucm-dsr .is-pending .ucmd-meter i { background: #f59e0b; }
+#ucm-dsr .is-pending .ucmd-share { background: var(--draft-l); color: var(--draft); }
+#ucm-dsr .is-pending.on { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.15); }
+#ucm-dsr .is-lb.on { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(194,97,44,.15); }
 
-      '<section class="ucmd-band">' +
-        '<div class="ucmd-fgroup"><span class="ucmd-flabel">Period</span><div class="ucmd-periods">' +
-          PERIODS.map(function (p) { return '<button type="button" class="ucmd-chip' + (p[0] === S.period ? " on" : "") + '" data-period="' + p[0] + '">' + p[1] + "</button>"; }).join("") +
-        "</div></div>" +
-        '<div class="ucmd-fgroup"><span class="ucmd-flabel">From – To</span><div class="ucmd-range" title="Custom date range">' +
-          '<input type="date" id="ucmd-from" aria-label="From date"><span>' + ico(I.arrow, 12) + '</span><input type="date" id="ucmd-to" aria-label="To date">' +
-        "</div></div>" +
-        field("customer", "Customer") +
-        field("item", "Product") +
-        field("person", "Sales Person") +
-        field("otype", "Order type", true) +
-        field("status", "Status", true) +
-        '<button type="button" class="ucmd-clear" id="ucmd-clear" hidden>Clear</button>' +
-      "</section>" +
+/* ═════ CARDS ═════ */
+#ucm-dsr .ucmd-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+#ucm-dsr .ucmd-mini-empty, .ucmd-drawer .ucmd-mini-empty, .ucmd-modal .ucmd-mini-empty { padding: 22px 8px; text-align: center; color: var(--mut2); font-size: 12px; }
 
-      '<nav class="ucmd-tabs" role="tablist">' +
-        (canView("dispatch") ? '<button type="button" class="ucmd-view" data-view="dispatch" role="tab">' + ico(I.truck, 15) + '<span>Dispatches</span><span class="ucmd-tab-count"></span></button>' : "") +
-        (canView("sales") ? '<button type="button" class="ucmd-view" data-view="sales" role="tab">' + ico(I.invoice, 15) + '<span class="ucmd-vl">Sales Invoices</span><span class="ucmd-vs">Invoices</span><span class="ucmd-tab-count"></span></button>' : "") +
-        (canView("persons") ? '<button type="button" class="ucmd-view" data-view="persons" role="tab">' + ico(I.users, 15) + '<span class="ucmd-vl">Sales Person</span><span class="ucmd-vs">Persons</span><span class="ucmd-tab-count"></span></button>' : "") +
-        '<div class="ucmd-tabs-meta" id="ucmd-range-txt"></div>' +
-        '<div class="ucmd-band-actions">' +
-          '<button type="button" class="ucmd-pbtn is-alt" id="ucmd-cat-btn" title="Category wise summary">' + ico(I.grid, 14) + '<span id="ucmd-cat-lbl">Category Wise</span></button>' +
-          '<button type="button" class="ucmd-pbtn" id="ucmd-refresh" title="Reload data">' + ico(I.refresh, 14) + "Refresh</button>" +
-        "</div>" +
-      "</nav>" +
+/* ═════ TABLE ═════ */
+#ucm-dsr .ucmd-tablecard { overflow: hidden; }
+#ucm-dsr .ucmd-table-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#ucm-dsr .ucmd-th-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.ucmd-search { display: flex; align-items: center; gap: 7px; flex: 0 1 420px; height: 31px; padding: 0 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; color: #94a3b8; margin: 0; }
+.ucmd-search:focus-within { border-color: #0f766e; background: #fff; box-shadow: 0 0 0 3px rgba(15,118,110,.1); }
+.ucmd-search input { border: 0; outline: none; background: transparent; font: inherit; font-size: 12.5px; color: #0f172a; width: 100%; height: 29px; padding: 0; }
+#ucm-dsr .ucmd-info { margin-left: auto; font-size: 11.5px; color: var(--mut); white-space: nowrap; }
 
-      '<div class="ucmd-main">' +
-      '<section class="ucmd-kpis" id="ucmd-kpis"></section>' +
+#ucm-dsr .ucmd-table-wrap { overflow-x: auto; overscroll-behavior: auto; }
+#ucm-dsr .ucmd-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11.5px; }
+#ucm-dsr .ucmd-table th {
+  position: sticky; top: 0; z-index: 1; text-align: left; white-space: nowrap; padding: 8px 6px; background: #f9fafb;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--mut); border-bottom: 1px solid var(--line);
+}
+#ucm-dsr .ucmd-table td { padding: 5px 6px; vertical-align: top; color: var(--ink2); white-space: nowrap; }
+#ucm-dsr .ucmd-table tr.b0 td { background: #fff; }
+#ucm-dsr .ucmd-table tr.b1 td { background: #f7fafb; }
+#ucm-dsr .ucmd-table tr.is-first td { padding-top: 7px; }
+#ucm-dsr .ucmd-table tr.is-last td { padding-bottom: 7px; border-bottom: 1px solid var(--line2); }
+#ucm-dsr .ucmd-table tbody tr:hover td { background: #eaf5f3; }
+#ucm-dsr .ucmd-table .c-num { text-align: right; font-variant-numeric: tabular-nums; }
+#ucm-dsr .ucmd-table .c-sn { width: 34px; color: var(--mut2); text-align: right; }
+#ucm-dsr .ucmd-table .c-date { color: var(--ink); font-weight: 500; }
+#ucm-dsr .ucmd-table .c-doc a { font-weight: 600; }
+#ucm-dsr .ucmd-table .c-cust span { display: inline-block; max-width: 160px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; color: var(--ink); font-weight: 500; }
+#ucm-dsr .ucmd-table .c-item { white-space: normal; min-width: 190px; max-width: 260px; }
+#ucm-dsr .ucmd-table .c-item a { color: var(--ink); }
+#ucm-dsr .ucmd-table .c-item a:hover { color: var(--plum); text-decoration: underline dotted; }
+#ucm-dsr .ucmd-table .c-qty { color: var(--ink); font-weight: 600; }
+#ucm-dsr .ucmd-table .c-amt { color: var(--ink); font-weight: 600; }
+#ucm-dsr .ucmd-table .c-frt span { display: inline-block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+#ucm-dsr .ucmd-table .c-cat { color: var(--mut); max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+#ucm-dsr .ucmd-table .c-loc { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+#ucm-dsr .ucmd-table tfoot td { padding: 9px 8px; background: #eef7f5; border-top: 1px solid var(--plum-b); font-weight: 700; color: var(--ink); white-space: nowrap; }
+#ucm-dsr .ucmd-table tfoot td:first-child { font-weight: 500; color: var(--mut); font-size: 11px; }
 
-      '<section class="ucmd-persons" id="ucmd-persons" hidden></section>' +
-      '<section class="ucmd-card ucmd-tablecard">' +
-        '<div class="ucmd-table-head">' +
-          '<div class="ucmd-th-title" id="ucmd-table-title">Dispatch Register</div>' +
-          '<label class="ucmd-search">' + ico(I.search, 14) + '<input type="search" id="ucmd-q" placeholder="Search document, customer, product, PO, OA, city…"></label>' +
-          '<div class="ucmd-info" id="ucmd-info"></div>' +
-          '<button type="button" class="ucmd-icon-btn is-sm" id="ucmd-csv" title="Download CSV" aria-label="Download CSV">' + ico(I.download, 14) + "</button>" +
-        "</div>" +
-        '<div class="ucmd-table-wrap" id="ucmd-table"></div>' +
-      "</section>" +
-      "</div>";
+.ucmd-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 99px; font-size: 10.5px; font-weight: 600; }
+.ucmd-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ucmd-pill.is-ok { background: #ecf8f0; color: #15803d; }
+.ucmd-pill.is-draft { background: #fff5e8; color: #b45309; }
+.ucmd-type { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 600; }
+.ucmd-type.is-ultra { background: #e9f6f4; color: #0f766e; }
+.ucmd-type.is-lb { background: #fbeee6; color: #9a4519; }
 
-    function field(key, label, small) {
-      return '<div class="ucmd-field' + (small ? " is-sm" : "") + '" data-fk="' + key + '"><span>' + label + '</span><div data-dd="' + key + '"></div></div>';
-    }
+#ucm-dsr .ucmd-more-wrap { padding: 12px; text-align: center; border-top: 1px solid var(--line2); }
+#ucm-dsr .ucmd-more { border: 1px solid var(--plum-b); background: #fff; color: var(--plum); border-radius: 99px; height: 30px; padding: 0 16px; font-size: 12px; font-weight: 600; cursor: pointer; }
+#ucm-dsr .ucmd-more:hover { background: var(--plum-l); }
 
-    var r = periodRange(S.period); S.from = r[0]; S.to = r[1];
-    $("#ucmd-from").value = S.from; $("#ucmd-to").value = S.to;
+.ucmd-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 48px 16px; color: #94a3b8; font-size: 12.5px; text-align: center; }
+.ucmd-empty b { color: #334155; font-size: 13px; }
+.ucmd-empty .ucmd-spin { margin: 0 0 4px; }
+.ucmd-error { margin: 14px; padding: 12px 14px; border-radius: 10px; background: #fef2f2; border: 1px solid #fbd5d5; color: #991b1b; font-size: 12.5px; }
+.ucmd-error div { margin-top: 4px; color: #7f1d1d; }
 
-    // events
-    $$(".ucmd-view", root).forEach(function (b) {
-      b.addEventListener("click", function () { setView(b.getAttribute("data-view")); });
-    });
-    $$(".ucmd-chip", root).forEach(function (b) {
-      b.addEventListener("click", function () {
-        S.period = b.getAttribute("data-period");
-        var rr = periodRange(S.period); S.from = rr[0]; S.to = rr[1];
-        $("#ucmd-from").value = S.from; $("#ucmd-to").value = S.to;
-        markPeriod(); load();
-      });
-    });
-    ["#ucmd-from", "#ucmd-to"].forEach(function (id) {
-      $(id).addEventListener("change", function () {
-        var a = $("#ucmd-from").value, b = $("#ucmd-to").value;
-        if (!a || !b) return;
-        if (a > b) { toast("From date cannot be after To date", true); return; }
-        S.from = a; S.to = b; S.period = "custom"; markPeriod(); load();
-      });
-    });
-    $("#ucmd-refresh").addEventListener("click", function () { delete S.cache[cacheKey()]; load(); });
-    initFilterDDs(root);
-    $("#ucmd-clear").addEventListener("click", clearFilters);
-    $("#ucmd-cat-btn").addEventListener("click", openCategory);
-    $("#ucmd-persons").addEventListener("click", function (e) {
-      var b = e.target.closest(".ucmd-person"); if (b) openPerson(b.getAttribute("data-person"), b.getAttribute("data-type"));
-    });
-    var qt = null;
-    $("#ucmd-q").addEventListener("input", function (e) {
-      clearTimeout(qt); qt = setTimeout(function () { S.q = e.target.value.trim(); S.showAll = false; renderTable(); }, 150);
-    });
-    $("#ucmd-csv").addEventListener("click", downloadCSV);
+/* ═════ BUTTONS (shared) ═════ */
+.ucmd-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 9px;
+  font: inherit; font-size: 12.5px; font-weight: 600; text-decoration: none !important; cursor: pointer;
+  color: #115e59; background: #fff; border: 1px solid #c5e6e1; transition: background .15s, box-shadow .15s; white-space: nowrap;
+}
+.ucmd-btn:hover { background: #eef8f6; }
+.ucmd-btn.is-primary { color: #fff; background: #0f766e; border-color: #0f766e; box-shadow: 0 6px 16px -8px rgba(15,118,110,.7); }
+.ucmd-btn.is-primary:hover { background: #0d5f59; }
+#ucm-dsr a.ucmd-btn { color: #115e59; text-decoration: none; }
+#ucm-dsr a.ucmd-btn.is-primary { color: #fff; }
 
-    // table clicks
-    $("#ucmd-table").addEventListener("click", function (e) {
-      var it = e.target.closest(".ucmd-item");
-      if (it) { e.preventDefault(); openStock(it.getAttribute("data-item"), it.textContent); return; }
-      if (e.target.closest(".ucmd-more")) { S.showAll = true; renderTable(); }
-    });
-  }
+/* ═════ DRAWER (sliders) ═════ */
+.ucmd-scrim { position: fixed; inset: 0; background: rgba(15,23,42,.28); backdrop-filter: blur(1.5px); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 1040; }
+.ucmd-scrim.on { opacity: 1; pointer-events: auto; }
+.ucmd-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 96vw); background: #fff; z-index: 1041;
+  box-shadow: -18px 0 48px -20px rgba(15,23,42,.45); transform: translateX(105%); transition: transform .26s cubic-bezier(.2,.8,.2,1);
+  display: flex; flex-direction: column; color: #0f172a; font-size: 12.5px;
+}
+.ucmd-drawer.on { transform: none; }
+.ucmd-dr-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid #e5e7eb; background: linear-gradient(180deg, #f2faf8, #fff); position: relative; }
+.ucmd-dr-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, #0f766e, #c2612c); }
+.ucmd-dr-titles { flex: 1 1 auto; min-width: 0; }
+.ucmd-dr-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #b45a2a; }
+.ucmd-dr-head h3 { margin: 2px 0 0; font-size: 16px; font-weight: 700; line-height: 1.3; color: #0f172a; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ucmd-dr-sub { font-size: 11.5px; color: #64748b; margin-top: 2px; }
+.ucmd-dr-sub a { color: #0f766e; font-weight: 600; text-decoration: none; }
+.ucmd-dr-actions { display: flex; gap: 6px; }
+.ucmd-dr-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: auto; padding: 14px 18px 24px; }
+.ucmd-dr-desc { margin: 0 0 12px; font-size: 12px; color: #64748b; }
+.ucmd-stockcard { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: linear-gradient(135deg, #e9f6f4, #fbeee6); border: 1px solid #d4ebe7; margin-bottom: 12px; }
+.ucmd-stockcard .ucmd-kpi-label { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #64748b; }
+.ucmd-stock-val { font-size: 24px; font-weight: 700; color: #115e59; letter-spacing: -.02em; }
+.ucmd-stock-val small { font-size: 12px; font-weight: 600; color: #64748b; margin-left: 5px; }
+.ucmd-stock-note { text-align: right; font-size: 11px; color: #64748b; }
+.ucmd-seg { display: inline-flex; padding: 3px; gap: 2px; background: #eef1f4; border-radius: 9px; margin-bottom: 10px; }
+.ucmd-seg button { border: 0; background: none; height: 27px; padding: 0 11px; border-radius: 7px; font: inherit; font-size: 12px; font-weight: 600; color: #64748b; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.ucmd-seg button span { font-size: 10.5px; padding: 0 6px; border-radius: 99px; background: rgba(15,23,42,.06); }
+.ucmd-seg button.on { background: #fff; color: #0f766e; box-shadow: 0 1px 3px rgba(15,23,42,.1); }
+.ucmd-mtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ucmd-mtable th { text-align: left; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #64748b; padding: 7px 8px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; position: sticky; top: -14px; }
+.ucmd-mtable td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; color: #334155; }
+.ucmd-mtable tbody tr:nth-child(even) td { background: #fcfcfd; }
+.ucmd-mtable .c-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ucmd-mtable .is-in { color: #15803d; font-weight: 600; }
+.ucmd-mtable .is-out { color: #dc2626; font-weight: 600; }
+.ucmd-mtable.is-click tbody tr { cursor: pointer; }
+.ucmd-mtable.is-click tbody tr:hover td { background: #e9f6f4; }
+.ucmd-mtable a { color: #115e59; text-decoration: none; font-weight: 500; }
+.ucmd-mtable a:hover { text-decoration: underline; }
+.ucmd-linkish { color: #115e59; font-weight: 600; }
+.ucmd-dr-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.ucmd-dr-stats div { padding: 9px 12px; border-radius: 10px; background: #f9fafb; border: 1px solid #eef1f4; min-width: 0; }
+.ucmd-dr-stats span { display: block; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: #94a3b8; }
+.ucmd-dr-stats b { display: block; font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucmd-dr-stats b.is-text { font-size: 13px; color: #115e59; }
+.ucmd-back { display: inline-flex; align-items: center; gap: 4px; border: 0; background: #e9f6f4; color: #0f766e; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px 5px 7px; border-radius: 8px; cursor: pointer; margin-bottom: 10px; }
 
-  function markPeriod() {
-    $$(".ucmd-chip").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-period") === S.period); });
-    $(".ucmd-range").classList.toggle("on", S.period === "custom");
-  }
-  /* ───────── filter dropdowns ───────── */
-  var FD = {}, typeTimer = null;
-  var FIXED = {
-    otype: [{ v: "", l: "All" }, { v: "Ultra", l: "Ultra" }, { v: "Large Blow", l: "Large Blow" }],
-    status: [{ v: "", l: "All" }, { v: "Completed", l: "Completed" }, { v: "Draft", l: "Draft" }]
-  };
-  function initFilterDDs(root) {
-    var text = {
-      customer: { ph: "All customers", fn: function (r) { return r.customer_name; } },
-      item: { ph: "All products", fn: function (r) { return r.item_name; } },
-      person: { ph: "All Sales Persons", fn: function (r) { return r.order_by; }, label: function (v) { return v === "Others" ? "Others(AG)" : v; } }
-    };
-    Object.keys(text).forEach(function (k) {
-      var t = text[k];
-      FD[k] = makeDD($('[data-dd="' + k + '"]', root), {
-        search: true, placeholder: t.ph,
-        get: function () { return S.f[k]; },
-        options: function (q) { return uniqueOpts(S.rows, t.fn, q, t.label); },
-        display: t.label ? function (v) { return t.label(v || ""); } : null,
-        type: function (txt) {
-          S.f[k] = txt; clearTimeout(typeTimer);
-          typeTimer = setTimeout(function () { S.showAll = false; renderAll(); }, 160);
-        },
-        pick: function (v) { S.f[k] = v || ""; S.showAll = false; renderAll(); }
-      });
-    });
-    Object.keys(FIXED).forEach(function (k) {
-      FD[k] = makeDD($('[data-dd="' + k + '"]', root), {
-        search: false, placeholder: "All", clearable: false,
-        get: function () { return S.f[k]; },
-        options: function () { return FIXED[k]; },
-        display: function (v) { var o = FIXED[k].filter(function (x) { return x.v === (v || ""); })[0]; return o ? o.l : "All"; },
-        pick: function (v) { S.f[k] = v || ""; S.showAll = false; renderAll(); }
-      });
-    });
-  }
-  function setFilter(k, v) {
-    S.f[k] = v || "";
-    if (FD[k]) FD[k].sync();
-    S.showAll = false; renderAll();
-    var tc = $(".ucmd-tablecard"); if (tc && k === "customer") tc.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-  function clearFilters() {
-    Object.keys(S.f).forEach(function (k) { S.f[k] = ""; });
-    Object.keys(FD).forEach(function (k) { FD[k].sync(); });
-    S.q = ""; $("#ucmd-q").value = ""; S.showAll = false; renderAll();
-  }
-  // Access: Sales Invoices + Sales Person ek saath; Dispatches alag
-  function canView(v) { if (v === "persons") v = "sales"; return S.access === "full" || S.access === v; }
-  function setView(v) {
-    if (!canView(v)) return;
-    S.view = v; S.showAll = false;
-    $$(".ucmd-view").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-view") === v); });
-    var root = $("#ucm-dsr"); root.classList.toggle("is-sales", v === "sales");
-    root.classList.toggle("is-persons", v === "persons");
-    $("#ucmd-persons").hidden = v !== "persons";
-    $(".ucmd-tablecard").hidden = v === "persons";
-    try { history.replaceState(null, "", "#" + v); } catch (e) { /* ignore */ }
-    load();
-  }
+/* ═════ SETTINGS MODAL ═════ */
+.ucmd-modal-scrim { position: fixed; inset: 0; z-index: 1060; background: rgba(15,23,42,.35); backdrop-filter: blur(2px); display: flex; align-items: flex-start; justify-content: center; padding: 7vh 16px 16px; opacity: 0; pointer-events: none; transition: opacity .18s; }
+.ucmd-modal-scrim.on { opacity: 1; pointer-events: auto; }
+.ucmd-modal {
+  width: 100%; max-width: 640px; max-height: 84vh; display: flex; flex-direction: column; background: #fff; border-radius: 16px; overflow: hidden;
+  box-shadow: 0 30px 80px -30px rgba(15,23,42,.6); color: #0f172a; font-size: 12.5px; transform: translateY(8px); transition: transform .2s;
+}
+.ucmd-modal-scrim.on .ucmd-modal { transform: none; }
+.ucmd-modal.is-busy { opacity: .7; pointer-events: none; }
+.ucmd-modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 18px 14px; border-bottom: 1px solid #eef1f4; position: relative; }
+.ucmd-modal-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, #0f766e, #c2612c); }
+.ucmd-modal-head > div { flex: 1 1 auto; }
+.ucmd-modal-head h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.ucmd-modal-head p { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+.ucmd-modal-ico { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: #e9f6f4; color: #0f766e; }
+.ucmd-levels { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 12px 18px; background: #fafbfc; border-bottom: 1px solid #eef1f4; }
+.ucmd-level { padding: 9px 10px; border-radius: 10px; background: #fff; border: 1px solid #eef1f4; }
+.ucmd-level b { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 2px; }
+.ucmd-level span { font-size: 11px; color: #64748b; line-height: 1.4; display: block; }
+.ucmd-level.is-dispatch b { color: #9a4519; }
+.ucmd-level.is-sales b { color: #0f766e; }
+.ucmd-level.is-full b { color: #1e293b; }
+.ucmd-level.is-admin b { color: #334155; }
+.ucmd-add { display: flex; gap: 8px; padding: 12px 18px; border-bottom: 1px solid #eef1f4; align-items: center; }
+.ucmd-add .ucmd-search { flex: 1 1 auto; }
+.ucmd-add select, .ucmd-lvl-sel { height: 31px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; font: inherit; font-size: 12px; color: #0f172a; padding: 0 8px; outline: none; cursor: pointer; }
+.ucmd-add select:focus, .ucmd-lvl-sel:focus { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,.1); }
+.ucmd-ulist { overflow-y: auto; overscroll-behavior: auto; padding: 4px 10px 10px; flex: 1 1 auto; }
+.ucmd-ulist-head { padding: 10px 8px 6px; font-size: 12px; font-weight: 650; color: #0f172a; }
+.ucmd-ulist-head span { font-weight: 500; color: #94a3b8; margin-left: 6px; font-size: 11px; }
+.ucmd-urow { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 10px; }
+.ucmd-urow:hover { background: #f9fafb; }
+.ucmd-urow.is-off { opacity: .55; }
+.ucmd-av { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; background: #0f766e; }
+.ucmd-av.is-dispatch { background: #c2612c; }
+.ucmd-av.is-sales { background: #0f766e; }
+.ucmd-av.is-full { background: #1e293b; }
+.ucmd-av.is-admin { background: #334155; }
+.ucmd-uname { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.ucmd-uname b { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucmd-uname b em { font-style: normal; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 99px; background: #eef1f4; color: #64748b; margin-left: 4px; vertical-align: 1px; }
+.ucmd-uname small { font-size: 11px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucmd-lvl { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 8px; font-size: 11.5px; font-weight: 600; background: #f1f5f9; color: #334155; }
+.ucmd-lvl-sel { height: 28px; font-weight: 600; }
+.ucmd-lvl-sel.is-sales { color: #0f766e; background: #eef8f6; border-color: #c5e6e1; }
+.ucmd-lvl-sel.is-full { color: #1e293b; background: #f1f5f9; border-color: #cbd5e1; }
+.ucmd-lvl-sel.is-dispatch { color: #9a4519; background: #fdf3ec; border-color: #f0cfba; }
+.ucmd-rm-ph { width: 28px; flex: 0 0 28px; }
+.ucmd-modal-foot { padding: 10px 18px; border-top: 1px solid #eef1f4; font-size: 11px; color: #94a3b8; background: #fafbfc; }
+.ucmd-modal-foot code, .ucmd-error code { font-size: 10.5px; background: rgba(15,23,42,.06); padding: 1px 5px; border-radius: 4px; color: inherit; }
 
-  /* ───────── navbar: logo → title ……… gear · avatar ───────── */
-  function mergeNavbar() {
-    var nav = $("nav.navbar"), brand = nav && $(".navbar-brand", nav);
-    var title = $("#ucm-dsr .ucmd-title");
-    if (nav && brand && title) {
-      title.classList.add("ucmd-nav-title");
-      brand.insertAdjacentElement("afterend", title);
-      $("#ucm-dsr .ucmd-head").classList.add("is-merged");
-      d.body.classList.add("ucmd-nav-merged");
-    }
-    if (!S.isAdmin) return;
-    var gear = d.createElement("button");
-    gear.type = "button"; gear.className = "ucmd-gear"; gear.title = "Page access settings"; gear.setAttribute("aria-label", "Page access settings");
-    gear.innerHTML = ico(I.gear, 17);
-    gear.addEventListener("click", openSettings);
-    var login = nav && $("#website-post-login", nav);
-    if (login && login.parentNode) {
-      var li = d.createElement("li"); li.className = "nav-item ucmd-gear-li"; li.appendChild(gear);
-      login.parentNode.insertBefore(li, login);
-    } else {
-      $("#ucm-dsr .ucmd-head-actions").appendChild(gear);
-      $("#ucm-dsr .ucmd-head").classList.remove("is-merged");
-    }
-  }
+/* ═════ TOAST ═════ */
+.ucmd-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 16px); z-index: 1100; background: #0f172a; color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 12.5px; font-weight: 500; box-shadow: 0 12px 30px -12px rgba(15,23,42,.6); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+.ucmd-toast.on { opacity: 1; transform: translate(-50%, 0); }
+.ucmd-toast.is-bad { background: #b91c1c; }
 
-  /* ═════════════════════════ DATA ═════════════════════════ */
-  function cacheKey() { return S.view + "|" + S.from + "|" + S.to; }
-  function load() {
-    var key = cacheKey(), id = ++S.req, root = $("#ucm-dsr");
-    var tt = $("#ucmd-table-title"); if (tt) tt.textContent = VIEWS[S.view].doc + " Register";
-    var cl = $("#ucmd-cat-lbl"); if (cl) cl.textContent = S.view === "dispatch" ? "Category Wise Dispatch" : "Category Wise Sales";
-    var cb = $("#ucmd-cat-btn"); if (cb) cb.hidden = S.view === "persons";
-    // Sales Person tab invoice-wise hai: Product aur Status filter wahan nahi
-    ["item", "status"].forEach(function (k) {
-      var fe = $('[data-fk="' + k + '"]'); if (fe) fe.hidden = S.view === "persons";
-    });
-    if (S.cache[key]) { S.rows = S.cache[key]; renderAll(); return; }
-    root.classList.add("is-busy");
-    $("#ucmd-table").innerHTML = '<div class="ucmd-empty"><span class="ucmd-spin"></span>Loading ' + VIEWS[S.view].label.toLowerCase() + "…</div>";
-    api(API_DATA, { source: VIEWS[S.view].source, from_date: S.from, to_date: S.to }).then(function (m) {
-      if (id !== S.req) return;
-      root.classList.remove("is-busy");
-      S.rows = (m && m.rows) || [];
-      S.cache[key] = S.rows;
-      renderAll();
-    }).catch(function (err) {
-      if (id !== S.req) return;
-      root.classList.remove("is-busy");
-      if (isNoAccess(err)) { renderGate(root, isGuest() ? "guest" : "denied"); return; }
-      S.rows = [];
-      renderAll();
-      $("#ucmd-table").innerHTML = '<div class="ucmd-error"><b>Could not load data.</b> ' + esc(cleanMsg(err)) +
-        '<div>Check that the Server Script <code>' + API_DATA + "</code> is saved and enabled.</div></div>";
-    });
-  }
+/* ═════ ACCESS GATE ═════ */
+#ucm-dsr.ucmd-locked { padding: 0; max-width: none; }
+.ucmd-gate {
+  min-height: calc(100vh - 140px); display: flex; align-items: center; justify-content: center; padding: 40px 16px;
+  background: radial-gradient(600px 300px at 50% 0%, rgba(15,118,110,.07), transparent 70%), radial-gradient(400px 220px at 85% 100%, rgba(208,122,69,.07), transparent 70%);
+}
+.ucmd-gate-card { position: relative; overflow: hidden; width: 100%; max-width: 440px; background: #fff; border: 1px solid #d4ebe7; border-radius: 16px; box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 18px 48px -18px rgba(19,78,74,.28); padding: 34px 32px 22px; text-align: center; }
+.ucmd-gate-band { position: absolute; inset: 0 0 auto 0; height: 4px; background: linear-gradient(90deg, #0f766e 0%, #2a9d8f 55%, #d07a45 100%); }
+.ucmd-gate-icon { width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 18px; display: flex; align-items: center; justify-content: center; color: #0f766e; background: linear-gradient(145deg, #ecf7f5, #e0f2ef); box-shadow: inset 0 0 0 1px #cfe8e3; }
+.ucmd-gate-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #b45a2a; }
+.ucmd-gate-title { margin: 6px 0 8px; font-size: 21px; font-weight: 700; color: #0f172a; letter-spacing: -.01em; }
+.ucmd-gate-text { margin: 0 auto; max-width: 350px; font-size: 13px; line-height: 1.6; color: #64748b; }
+.ucmd-gate-text b { color: #134e4a; font-weight: 600; }
+.ucmd-gate-user { display: inline-flex; align-items: center; gap: 8px; margin-top: 16px; padding: 4px 12px 4px 4px; border-radius: 999px; background: #f8fafc; border: 1px solid #eef0f3; font-size: 12px; color: #334155; }
+.ucmd-gate-user .ucmd-av { width: 22px; height: 22px; flex-basis: 22px; font-size: 10px; }
+.ucmd-gate-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+.ucmd-gate-foot { margin-top: 22px; padding-top: 12px; border-top: 1px dashed #eef0f3; font-size: 10.5px; color: #94a3b8; letter-spacing: .04em; }
 
-  // cardFree = true: card wale filters (Order type, Status) chhod do — KPI cards inse nahi badalte
-  function filtered(cardFree) {
-    var f = S.f;
-    var persons = S.view === "persons";
-    var fc = lc(f.customer), fi = persons ? "" : lc(f.item), fp = lc(f.person);
-    return S.rows.filter(function (r) {
-      if (fc && lc(r.customer_name).indexOf(fc) < 0 && lc(r.customer).indexOf(fc) < 0) return false;
-      if (fi && lc(r.item_name).indexOf(fi) < 0 && lc(r.item_code).indexOf(fi) < 0) return false;
-      if (fp && lc(r.order_by).indexOf(fp) < 0 && lc(personLabel(r.order_by, "Ultra")).indexOf(fp) < 0) return false;
-      if (!cardFree && f.otype && r.order_type !== f.otype) return false;
-      if (!cardFree && f.status && !persons && r.status !== f.status) return false;
-      return true;
-    });
-  }
-  // Value / qty summary: sirf Completed documents (drafts alag "pending" mein)
-  function valueRows(rows) { return rows.filter(function (r) { return r.status === "Completed"; }); }
+/* ═════ RESPONSIVE ═════ */
+@media (max-width: 1280px) {
+  #ucm-dsr .ucmd-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #ucm-dsr .ucmd-kpi.is-hero { grid-column: span 3; }
+}
+@media (max-width: 900px) {
+  #ucm-dsr { padding: 12px 12px 40px; }
+  #ucm-dsr .ucmd-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #ucm-dsr .ucmd-kpi.is-hero { grid-column: span 2; }
+  #ucm-dsr .ucmd-periods { margin-left: 0; }
+  .ucmd-levels { grid-template-columns: 1fr; }
+  .ucmd-add { flex-wrap: wrap; }
+}
 
-  function renderAll() {
-    var rows = filtered();
-    renderKpis(filtered(true));
-    if (S.view === "persons") renderPersons(rows); else renderTable(rows);
-    var any = Object.keys(S.f).some(function (k) { return S.f[k]; });
-    $("#ucmd-clear").hidden = !any;
-  }
+/* ═════ Category Wise slider ═════ */
+.ucmd-drawer[data-kind="category"] { width: min(760px, 96vw); }
+#ucm-dsr .ucmd-pbtn.is-alt { background: #fbeee6; border-color: #f0cfba; color: #9a4519; }
+#ucm-dsr .ucmd-pbtn.is-alt:hover { background: #f8e2d4; }
+.ucmd-share-cell { display: inline-block; width: 54px; height: 5px; border-radius: 99px; background: #f1f5f9; overflow: hidden; margin-right: 8px; vertical-align: middle; }
+.ucmd-share-cell i { display: block; height: 100%; background: #0f766e; border-radius: 99px; }
+.ucmd-dr-note { margin: 10px 2px 0; font-size: 11px; color: #94a3b8; }
 
-  /* ───────── KPIs ───────── */
-  // Dispatches: sirf ginti (kitne dispatch, Ultra / Large Blow, Completed / Draft) — value nahi
-  function renderDispatchKpis(rows) {
-    var docs = {}, comp = {}, draft = {}, ult = {}, lbd = {};
-    rows.forEach(function (r) {
-      docs[r.name] = 1;
-      if (r.status === "Completed") comp[r.name] = 1; else draft[r.name] = 1;
-      if (r.order_type === "Ultra") ult[r.name] = 1;
-      else if (r.order_type === "Large Blow") lbd[r.name] = 1;
-    });
-    var n = Object.keys(docs).length, nc = Object.keys(comp).length, nd = Object.keys(draft).length;
-    var nu = Object.keys(ult).length, nl = Object.keys(lbd).length;
-    var pct = function (x) { return n ? Math.round(x / n * 100) : 0; };
-    $("#ucmd-kpis").innerHTML =
-      '<div class="ucmd-kpi is-hero">' +
-        '<div class="ucmd-kpi-label">Total Dispatches</div>' +
-        '<div class="ucmd-kpi-value">' + num(n) + "</div>" +
-        '<div class="ucmd-kpi-sub">Delivery Notes</div>' +
-        '<div class="ucmd-kpi-foot">' + rangeText() + "</div>" +
-      "</div>" +
-      card("otype", "Ultra", "is-ultra", nu, pct(nu), "of all Dispatches") +
-      card("otype", "Large Blow", "is-lb", nl, pct(nl), "of all Dispatches") +
-      card("status", "Completed", "is-done", nc, pct(nc), "submitted") +
-      card("status", "Draft", "is-pending", nd, pct(nd), "not yet submitted");
-    function card(f, name, cls, count, share, sub) {
-      return '<button type="button" class="ucmd-kpi is-seg ' + cls + (S.f[f] === name ? " on" : "") + '" data-kf="' + f + '" data-kv="' + name + '" title="Show only ' + name + '">' +
-        '<div class="ucmd-kpi-label"><span class="ucmd-sw"></span>' + name + '<span class="ucmd-share">' + share + "%</span></div>" +
-        '<div class="ucmd-kpi-value">' + num(count) + "</div>" +
-        '<div class="ucmd-meter"><i style="width:' + share + '%"></i></div>' +
-        '<div class="ucmd-kpi-sub">' + sub + "</div>" +
-      "</button>";
-    }
-    $$("#ucmd-kpis [data-kf]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var f = b.getAttribute("data-kf"), v = b.getAttribute("data-kv");
-        setFilter(f, S.f[f] === v ? "" : v);
-      });
-    });
-  }
+/* ═════ PRINT: category slider ═════ */
+@media print {
+  body.ucmd-print-drawer > *:not(.ucmd-drawer) { display: none !important; }
+  body.ucmd-print-drawer .ucmd-drawer { position: static; transform: none; width: 100% !important; box-shadow: none; }
+  body.ucmd-print-drawer .ucmd-dr-actions, body.ucmd-print-drawer .ucmd-back, body.ucmd-print-drawer .ucmd-dr-note { display: none !important; }
+  body.ucmd-print-drawer .ucmd-dr-body { overflow: visible; }
+}
 
-  function renderKpis(rows) {
-    if (S.view === "dispatch") { renderDispatchKpis(rows); return; }
-    if (S.view === "persons") { renderPersonKpis(rows); return; }
-    var V = VIEWS[S.view];
-    var docs = {}, comp = {}, draft = {}, draftVal = 0;
-    rows.forEach(function (r) {
-      docs[r.name] = 1;
-      if (r.status === "Completed") comp[r.name] = 1; else { draft[r.name] = 1; draftVal += r.amount; }
-    });
-    var vr = valueRows(rows), val = 0, qty = 0, u = { v: 0, q: 0 }, lb = { v: 0, q: 0 };
-    vr.forEach(function (r) {
-      val += r.amount; qty += r.qty;
-      if (r.order_type === "Ultra") { u.v += r.amount; u.q += r.qty; }
-      else if (r.order_type === "Large Blow") { lb.v += r.amount; lb.q += r.qty; }
-    });
-    var nDocs = Object.keys(docs).length, nComp = Object.keys(comp).length, nDraft = Object.keys(draft).length;
-    var pc = nDocs ? Math.round(nComp / nDocs * 100) : 0;
-    var uShare = val ? Math.round(u.v / val * 100) : 0, lbShare = val ? 100 - uShare : 0;
-    if (!val) { uShare = 0; lbShare = 0; }
-    var basis = "Completed documents";
+/* ═════ SALES PERSON tab ═════ */
+#ucm-dsr .ucmd-persons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+#ucm-dsr .ucmd-persons[hidden], #ucm-dsr .ucmd-tablecard[hidden] { display: none; }
+#ucm-dsr .ucmd-ptable { overflow: hidden; border-top-width: 3px; }
+#ucm-dsr .ucmd-ptable.is-ultra { border-top-color: var(--plum); }
+#ucm-dsr .ucmd-ptable.is-lb { border-top-color: var(--gold); }
+#ucm-dsr .ucmd-ptable-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+#ucm-dsr .ucmd-ptable-head b { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+#ucm-dsr .ucmd-ptable.is-ultra .ucmd-sw { background: var(--plum); }
+#ucm-dsr .ucmd-ptable.is-lb .ucmd-sw { background: var(--gold); }
+#ucm-dsr .ucmd-ptable-tot { margin-left: auto; font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 99px; }
+#ucm-dsr .ucmd-ptable.is-ultra .ucmd-ptable-tot { background: var(--plum-l); color: var(--plum-d); }
+#ucm-dsr .ucmd-ptable.is-lb .ucmd-ptable-tot { background: var(--gold-l); color: #9a4519; }
+#ucm-dsr .ucmd-ptbl { font-size: 12.5px; }
+#ucm-dsr .ucmd-ptbl td { padding: 8px 10px; vertical-align: middle; }
+#ucm-dsr .ucmd-ptbl th { padding: 8px 10px; }
+#ucm-dsr .ucmd-ptbl .c-rank { width: 40px; }
+#ucm-dsr .ucmd-ptbl .c-pct { width: 150px; }
+#ucm-dsr .ucmd-ptable.is-lb .ucmd-share-cell i { background: var(--gold); }
+#ucm-dsr .ucmd-person { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--plum-d); cursor: pointer; text-align: left; }
+#ucm-dsr .ucmd-ptable.is-lb .ucmd-person { color: #9a4519; }
+#ucm-dsr .ucmd-person:hover { text-decoration: underline; }
+#ucm-dsr .ucmd-ptbl tbody tr:hover td { background: #f3f8f7; }
 
-    $("#ucmd-kpis").innerHTML =
-      '<div class="ucmd-kpi is-hero">' +
-        '<div class="ucmd-kpi-label">' + V.value + " <em>excl. GST</em></div>" +
-        '<div class="ucmd-kpi-value" title="' + inr(val) + '">' + inrShort(val) + "</div>" +
-        '<div class="ucmd-kpi-sub">' + inr(val) + " · " + basis.toLowerCase() + "</div>" +
-        (draftVal ? '<div class="ucmd-kpi-foot">+ ' + inrShort(draftVal) + " pending in drafts</div>" : '<div class="ucmd-kpi-foot">' + rangeText() + "</div>") +
-      "</div>" +
-      '<div class="ucmd-kpi">' +
-        '<div class="ucmd-kpi-label">' + V.doc + "es".slice(V.doc === "Dispatch" ? 0 : 1) + "</div>" +
-        '<div class="ucmd-kpi-value">' + num(nDocs) + "</div>" +
-        '<div class="ucmd-meter"><i style="width:' + pc + '%"></i></div>' +
-        '<div class="ucmd-kpi-sub"><span class="ucmd-dot is-ok"></span>' + num(nComp) + ' completed <span class="ucmd-dot is-draft"></span>' + num(nDraft) + " draft</div>" +
-      "</div>" +
-      '<div class="ucmd-kpi">' +
-        '<div class="ucmd-kpi-label">Quantity</div>' +
-        '<div class="ucmd-kpi-value">' + qtyFmt(qty) + "</div>" +
-        '<div class="ucmd-kpi-sub">units · ' + basis.toLowerCase() + "</div>" +
-      "</div>" +
-      seg("Ultra", "is-ultra", u, uShare) +
-      seg("Large Blow", "is-lb", lb, lbShare);
+.ucmd-drawer[data-kind="person"] { width: min(900px, 96vw); }
+.ucmd-dbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 8px; border: 1px solid #c5e6e1; background: #e9f6f4; color: #115e59; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ucmd-dbtn:hover { background: #d9efeb; }
+.ucmd-pp-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.ucmd-pp-tools .ucmd-seg { margin-bottom: 0; }
+.ucmd-pp-tools .ucmd-search { flex: 1 1 220px; }
+.ucmd-mtable .c-muted { color: #94a3b8; width: 32px; }
+.ucmd-mtable .ucmd-sort { cursor: pointer; user-select: none; }
+.ucmd-mtable .ucmd-sort:hover { color: #0f766e; }
+.ucmd-pp-foot { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-top: 1px solid #e5e7eb; background: #f8fafc; font-size: 12.5px; color: #64748b; }
+.ucmd-pp-foot b { font-size: 15px; color: #0f172a; }
+@media (max-width: 1000px) { #ucm-dsr .ucmd-persons { grid-template-columns: 1fr; } }
+#ucm-dsr .ucmd-pbtn[hidden], #ucm-dsr .ucmd-field[hidden] { display: none !important; }
 
-    function seg(name, cls, o, share) {
-      return '<button type="button" class="ucmd-kpi is-seg ' + cls + (S.f.otype === name ? " on" : "") + '" data-otype="' + name + '" title="Show only ' + name + '">' +
-        '<div class="ucmd-kpi-label"><span class="ucmd-sw"></span>' + name + '<span class="ucmd-share">' + share + "%</span></div>" +
-        '<div class="ucmd-kpi-value" title="' + inr(o.v) + '">' + inrShort(o.v) + "</div>" +
-        '<div class="ucmd-meter"><i style="width:' + share + '%"></i></div>' +
-        '<div class="ucmd-kpi-sub">' + qtyFmt(o.q) + " units</div>" +
-      "</button>";
-    }
-    $$("#ucmd-kpis [data-otype]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var v = b.getAttribute("data-otype");
-        setFilter("otype", S.f.otype === v ? "" : v);
-      });
-    });
-  }
-  function rangeText() { return S.from === S.to ? longDate(S.from) : longDate(S.from) + " – " + longDate(S.to); }
+/* ═════ Slider header: rangeen background (dark teal) ═════ */
+.ucmd-dr-head { background: linear-gradient(135deg, #0b3f3b 0%, #0f5f58 60%, #12786f 100%); border-bottom: 0; color: #fff; padding: 18px 18px 16px; }
+.ucmd-dr-head::before { height: 3px; background: linear-gradient(90deg, #d07a45, #f0cfba); }
+.ucmd-dr-head .ucmd-dr-kicker { color: #f6c7a6; }
+.ucmd-dr-head h3 { color: #fff; }
+.ucmd-dr-head .ucmd-dr-sub { color: rgba(255,255,255,.78); }
+.ucmd-dr-head .ucmd-dr-sub a { color: #9ee6dc; }
+.ucmd-dr-head .ucmd-icon-btn { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.28); color: #fff; }
+.ucmd-dr-head .ucmd-icon-btn:hover { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.45); }
+.ucmd-dr-head .ucmd-dbtn { background: #fff; border-color: #fff; color: #0f5f58; }
+.ucmd-dr-head .ucmd-dbtn:hover { background: #e9f6f4; }
+@media print { body.ucmd-print-drawer .ucmd-dr-head { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 
-  /* ───────── table ───────── */
-  function searchRows(rows) {
-    if (!S.q) return rows;
-    var words = lc(S.q).split(/\s+/).filter(Boolean);
-    // poora document match ho to uski saari lines dikhao
-    var hitDocs = {};
-    rows.forEach(function (r) {
-      var hay = lc([r.name, r.customer_name, r.item_name, r.item_code, r.po_no, r.oa_no, r.city, r.state, r.order_by, r.category, r.item_group, r.freight, r.order_type, r.status, r.payment_terms].join(" "));
-      if (words.every(function (wd) { return hay.indexOf(wd) >= 0; })) hitDocs[r.name + "|" + r.item_code] = 1;
-    });
-    return rows.filter(function (r) { return hitDocs[r.name + "|" + r.item_code]; });
-  }
+/* ═════ WHITE DROPDOWN (sab filters + settings ek jaise) ═════ */
+.ucmd-dd { position: relative; width: 100%; }
+.ucmd-dd .ucmd-dd-in {
+  width: 100%; height: 32px; padding: 0 52px 0 10px !important; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff;
+  font: inherit; font-size: 12.5px; color: #0f172a; outline: none; cursor: text; text-overflow: ellipsis;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.ucmd-dd .ucmd-dd-in[readonly] { cursor: pointer; padding-right: 30px !important; }
+.ucmd-dd .ucmd-dd-in::placeholder { color: #94a3b8; }
+.ucmd-dd.open .ucmd-dd-in, .ucmd-dd .ucmd-dd-in:focus { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,.1); background: #fff !important; }
+#ucm-dsr .ucmd-dd.has-val .ucmd-dd-in { background: #e9f6f4; border-color: #c5e6e1; color: #115e59; font-weight: 600; }
+.ucmd-dd-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); color: #94a3b8; pointer-events: none; display: inline-flex; transition: transform .15s; }
+.ucmd-dd.open .ucmd-dd-caret { transform: translateY(-50%) rotate(180deg); color: #0f766e; }
+.ucmd-dd-x { position: absolute; right: 27px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; border: 0; border-radius: 50%; background: #cfe8e3; color: #115e59; display: none; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+.ucmd-dd-x:hover { background: #9fd4cc; }
+.ucmd-dd.has-val .ucmd-dd-x { display: inline-flex; }
+.ucmd-dd-menu {
+  position: fixed; z-index: 1080; display: none; max-height: 280px; overflow-y: auto; overscroll-behavior: contain;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 4px;
+  box-shadow: 0 16px 40px -12px rgba(15,23,42,.28), 0 2px 6px rgba(15,23,42,.06);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; max-width: 420px;
+}
+.ucmd-dd.open .ucmd-dd-menu { display: block; }
+.ucmd-dd-opt { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: #334155; font-size: 12.5px; }
+.ucmd-dd-opt:hover, .ucmd-dd-opt.act { background: #f1f5f9; }
+.ucmd-dd-opt.sel { color: #0f766e; background: #e9f6f4; }
+.ucmd-dd-opt.sel b { font-weight: 600; }
+.ucmd-dd-opt svg { margin-left: auto; flex: 0 0 auto; color: #0f766e; }
+.ucmd-dd-l { display: flex; flex-direction: column; min-width: 0; }
+.ucmd-dd-l b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucmd-dd-l small { font-size: 11px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucmd-dd-none { padding: 12px 10px; color: #94a3b8; font-size: 12px; text-align: center; }
+/* settings modal */
+.ucmd-add .ucmd-add-user { flex: 1 1 auto; }
+.ucmd-add .ucmd-add-level { flex: 0 0 236px; }
+.ucmd-lvl-dd { width: 236px; flex: 0 0 236px; }
+.ucmd-lvl-dd .ucmd-dd-in { height: 28px; font-weight: 600; }
+.ucmd-lvl-dd.is-dispatch .ucmd-dd-in { color: #9a4519; background: #fdf3ec; border-color: #f0cfba; }
+.ucmd-lvl-dd.is-sales .ucmd-dd-in { color: #0f766e; background: #eef8f6; border-color: #c5e6e1; }
+.ucmd-lvl-dd.is-full .ucmd-dd-in { color: #1e293b; background: #f1f5f9; border-color: #cbd5e1; }
 
-  function renderTable(rowsIn) {
-    var rows = searchRows(rowsIn || filtered());
-    var V = VIEWS[S.view], isSales = S.view === "sales";
-    var host = $("#ucmd-table");
-    var docsAll = {}; rows.forEach(function (r) { docsAll[r.name] = 1; });
-    var nDocs = Object.keys(docsAll).length;
-    $$(".ucmd-view").forEach(function (b) {
-      var c = $(".ucmd-tab-count", b); if (c) c.textContent = b.getAttribute("data-view") === S.view ? num(nDocs) : "";
-    });
-    var rt = $("#ucmd-range-txt"); if (rt) rt.textContent = rangeText();
-    $("#ucmd-info").textContent = num(nDocs) + " document" + (nDocs === 1 ? "" : "s") + " · " + num(rows.length) + " line" + (rows.length === 1 ? "" : "s");
+/* Filter row poori width bhare (last field tak) */
+#ucm-dsr .ucmd-band { flex-wrap: nowrap; }
+@media (max-width: 1200px) { #ucm-dsr .ucmd-band { flex-wrap: wrap; } }
+#ucm-dsr .ucmd-clear { flex: 0 0 auto; }
+#ucm-dsr .ucmd-fgroup { flex: 0 0 auto; }
+#ucm-dsr .ucmd-band .ucmd-periods { flex-wrap: nowrap; }
+#ucm-dsr .ucmd-band .ucmd-field { min-width: 96px; }
+#ucm-dsr .ucmd-band .ucmd-field.is-sm { min-width: 88px; }
+#ucm-dsr .ucmd-clear { padding: 0 8px; }
 
-    if (!rows.length) {
-      host.innerHTML = '<div class="ucmd-empty">' + ico(I.search, 22) + "<b>No " + V.label.toLowerCase() + " found</b><span>" +
-        (S.rows.length ? "Try clearing filters or search." : "Nothing in " + rangeText() + ". Try another period.") + "</span></div>";
-      return;
-    }
+/* ═════ Kal ke Draft dispatches — popup ═════ */
+.ucmd-draft-modal { max-width: 820px; }
+.ucmd-draft-head { display: flex; align-items: flex-start; gap: 14px; padding: 18px 18px 16px; background: linear-gradient(135deg, #fff7ed, #fffbeb); border-bottom: 1px solid #fde4c3; position: relative; }
+.ucmd-draft-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, #f59e0b, #d07a45); }
+.ucmd-draft-head > div { flex: 1 1 auto; }
+.ucmd-draft-ico { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; background: #fef3c7; color: #b45309; box-shadow: inset 0 0 0 1px #fde68a; }
+.ucmd-draft-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #b45309; }
+.ucmd-draft-head h3 { margin: 2px 0 4px; font-size: 17px; font-weight: 700; color: #0f172a; }
+.ucmd-draft-head p { margin: 0; font-size: 12.5px; color: #64748b; line-height: 1.5; }
+.ucmd-draft-head p b { color: #9a4519; }
+.ucmd-draft-body { overflow-y: auto; overscroll-behavior: auto; padding: 6px 18px 4px; max-height: 52vh; }
+.ucmd-draft-body .ucmd-mtable th { top: -6px; }
+.ucmd-draft-link { display: inline-flex; align-items: center; gap: 4px; font-weight: 700 !important; color: #b45309 !important; }
+.ucmd-draft-link svg { opacity: .6; }
+.ucmd-draft-lines { color: #94a3b8; font-size: 11px; }
+.ucmd-draft-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid #eef1f4; background: #fafbfc; }
 
-    var limit = S.showAll ? rows.length : Math.min(rows.length, ROW_LIMIT);
-    if (isMobile()) { renderCards(rows, limit, nDocs, V, isSales, host); return; }
-    var h = [], last = null, parity = 1, sn = 0, tq = 0, ta = 0;
-    rows.forEach(function (r) { tq += r.qty; ta += r.amount; });
-    for (var i = 0; i < limit; i++) {
-      var r = rows[i], first = r.name !== last;
-      if (first) { parity = 1 - parity; sn++; last = r.name; }
-      var nextSame = i + 1 < limit && rows[i + 1].name === r.name;
-      var cls = "b" + parity + (first ? " is-first" : "") + (nextSame ? "" : " is-last") + (r.status === "Draft" ? " is-draft" : "");
-      var loc = [r.city, r.state].filter(Boolean).join(", ");
-      h.push('<tr class="' + cls + '">' +
-        '<td class="c-sn">' + (first ? sn : "") + "</td>" +
-        '<td class="c-date">' + (first ? esc(shortDate(r.posting_date)) : "") + "</td>" +
-        '<td class="c-st">' + (first ? '<span class="ucmd-pill ' + (r.status === "Draft" ? "is-draft" : "is-ok") + '">' + r.status + "</span>" : "") + "</td>" +
-        '<td class="c-type">' + (first && r.order_type ? '<span class="ucmd-type ' + (r.order_type === "Ultra" ? "is-ultra" : "is-lb") + '">' + esc(r.order_type) + "</span>" : "") + "</td>" +
-        '<td class="c-doc">' + (first ? '<a href="/app/' + V.slug + "/" + encodeURIComponent(r.name) + '" target="_blank" rel="noopener">' + esc(r.name) + "</a>" : "") + "</td>" +
-        '<td class="c-po">' + (first ? esc(r.po_no) : "") + "</td>" +
-        '<td class="c-cust">' + (first ? '<span title="' + esc(r.customer_name) + '">' + esc(r.customer_name) + "</span>" : "") + "</td>" +
-        '<td class="c-item"><a href="#" class="ucmd-item" data-item="' + esc(r.item_code) + '" title="' + esc(r.item_code) + ' — click for stock">' + esc(r.item_name) + "</a></td>" +
-        '<td class="c-num c-qty">' + qtyFmt(r.qty) + "</td>" +
-        '<td class="c-num">' + nf2.format(r.rate) + "</td>" +
-        '<td class="c-num c-amt">' + nf2.format(r.amount) + "</td>" +
-        '<td class="c-by">' + (first ? esc(r.order_by) : "") + "</td>" +
-        '<td class="c-oa">' + (first ? esc(r.oa_no) : "") + "</td>" +
-        '<td class="c-loc">' + (first ? esc(loc) : "") + "</td>" +
-        '<td class="c-frt">' + (first ? '<span title="' + esc(r.freight) + '">' + esc(r.freight) + "</span>" : "") + "</td>" +
-        '<td class="c-cat">' + esc(r.category) + "</td>" +
-        (isSales ? '<td class="c-pt">' + (first ? esc(r.payment_terms) : "") + "</td>" : "") +
-      "</tr>");
-    }
-    var cols = isSales ? 17 : 16;
-    host.innerHTML =
-      '<table class="ucmd-table"><thead><tr>' +
-        '<th class="c-sn">#</th><th>Date</th><th>Status</th><th>Type</th><th>' + V.doc + '</th><th>PO No</th><th>Customer</th><th>Product</th>' +
-        '<th class="c-num">Qty</th><th class="c-num">Rate</th><th class="c-num">Amount</th><th>Order by</th><th>OA No</th><th>City, State</th><th>Freight</th><th>Category</th>' +
-        (isSales ? "<th>Payment terms</th>" : "") +
-      "</tr></thead><tbody>" + h.join("") + "</tbody>" +
-      '<tfoot><tr><td colspan="8">Total · ' + num(nDocs) + " documents · amounts excl. GST, incl. drafts</td>" +
-        '<td class="c-num">' + qtyFmt(tq) + '</td><td></td><td class="c-num">' + nf2.format(ta) + '</td><td colspan="' + (cols - 11) + '"></td></tr></tfoot>' +
-      "</table>" +
-      (limit < rows.length ? '<div class="ucmd-more-wrap"><button type="button" class="ucmd-more">Show all ' + num(rows.length) + " lines (" + num(rows.length - limit) + " more)</button></div>" : "");
-  }
+/* ═════════════ MOBILE (phone) ═════════════ */
+#ucm-dsr .ucmd-vs { display: none; }
+#ucm-dsr #ucmd-cat-btn { white-space: nowrap; }
+#ucm-dsr .ucmd-mcards { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: #f6f8fa; }
+#ucm-dsr .ucmd-mc { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 0 14px; overflow: hidden; }
+#ucm-dsr .ucmd-mc::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #cbd5e1; }
+#ucm-dsr .ucmd-mc.is-ultra::before { background: #0f766e; }
+#ucm-dsr .ucmd-mc.is-lb::before { background: #c2622d; }
+#ucm-dsr .ucmd-mc.is-draft { background: #fffcf5; border-color: #fde4c3; }
+#ucm-dsr .ucmd-mc-top { display: flex; align-items: center; gap: 8px; }
+#ucm-dsr .ucmd-mc-sn { font-size: 11px; color: var(--mut2); min-width: 14px; }
+#ucm-dsr .ucmd-mc-doc { font-weight: 700; font-size: 13px; color: var(--plum); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ucm-dsr .ucmd-mc-date { margin-left: auto; font-size: 12px; color: var(--mut); white-space: nowrap; }
+#ucm-dsr .ucmd-mc-cust { margin-top: 3px; font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.3; }
+#ucm-dsr .ucmd-mc-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+#ucm-dsr .ucmd-mc-meta { font-size: 11.5px; color: var(--mut); min-width: 0; overflow-wrap: anywhere; }
+#ucm-dsr .ucmd-mc-lines { margin-top: 8px; border-top: 1px dashed #e6eaef; }
+#ucm-dsr .ucmd-mc-line { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px dashed #eef1f4; font-size: 12.5px; }
+#ucm-dsr .ucmd-mc-line:last-child { border-bottom: 0; }
+#ucm-dsr .ucmd-mc-line .ucmd-item { flex: 1 1 auto; min-width: 0; color: var(--ink2); text-decoration: none; line-height: 1.35; }
+#ucm-dsr .ucmd-mc-q { flex: 0 0 auto; text-align: right; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+#ucm-dsr .ucmd-mc-q small { display: block; font-size: 11px; font-weight: 500; color: var(--mut); }
+#ucm-dsr .ucmd-mc-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 -12px 0 -14px; padding: 7px 12px 8px 14px; background: #f8fafb; border-top: 1px solid #eef1f4; font-size: 11.5px; color: var(--mut); }
+#ucm-dsr .ucmd-mc-foot span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ucm-dsr .ucmd-mc-foot b { flex: 0 0 auto; color: var(--ink2); font-weight: 600; }
+#ucm-dsr .ucmd-mc-total { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--mut); background: #fff; }
+#ucm-dsr .ucmd-mc-total b { color: var(--ink); }
 
-  /* ───────── Mobile: register as document cards ───────── */
-  function isMobile() { return w.matchMedia && w.matchMedia("(max-width: 700px)").matches; }
-  function renderCards(rows, limit, nDocs, V, isSales, host) {
-    var docs = [], byName = {}, tq = 0, ta = 0;
-    rows.forEach(function (r) { tq += r.qty; ta += r.amount; });
-    for (var i = 0; i < limit; i++) {
-      var r = rows[i], g = byName[r.name];
-      if (!g) { g = byName[r.name] = { h: r, lines: [], qty: 0, amt: 0 }; docs.push(g); }
-      g.lines.push(r); g.qty += r.qty; g.amt += r.amount;
-    }
-    var out = docs.map(function (g, k) {
-      var r = g.h, draft = r.status === "Draft";
-      var loc = [r.city, r.state].filter(Boolean).join(", ");
-      var meta = [r.po_no ? "PO " + esc(r.po_no) : "", r.oa_no ? "OA " + esc(r.oa_no) : "", esc(loc)].filter(Boolean).join(" · ");
-      var foot = [r.order_by ? "By " + esc(r.order_by) : "", r.freight ? esc(r.freight) : "", isSales && r.payment_terms ? esc(r.payment_terms) : ""].filter(Boolean).join(" · ");
-      return '<article class="ucmd-mc' + (draft ? " is-draft" : "") + (r.order_type === "Ultra" ? " is-ultra" : r.order_type ? " is-lb" : "") + '">' +
-        '<div class="ucmd-mc-top"><span class="ucmd-mc-sn">' + (k + 1) + "</span>" +
-          '<a class="ucmd-mc-doc" href="/app/' + V.slug + "/" + encodeURIComponent(r.name) + '" target="_blank" rel="noopener">' + esc(r.name) + "</a>" +
-          '<span class="ucmd-mc-date">' + esc(shortDate(r.posting_date)) + "</span></div>" +
-        '<div class="ucmd-mc-cust">' + esc(r.customer_name) + "</div>" +
-        '<div class="ucmd-mc-tags"><span class="ucmd-pill ' + (draft ? "is-draft" : "is-ok") + '">' + esc(r.status) + "</span>" +
-          (r.order_type ? '<span class="ucmd-type ' + (r.order_type === "Ultra" ? "is-ultra" : "is-lb") + '">' + esc(r.order_type) + "</span>" : "") +
-          (meta ? '<span class="ucmd-mc-meta">' + meta + "</span>" : "") + "</div>" +
-        '<div class="ucmd-mc-lines">' + g.lines.map(function (l) {
-          return '<div class="ucmd-mc-line"><a href="#" class="ucmd-item" data-item="' + esc(l.item_code) + '">' + esc(l.item_name) + "</a>" +
-            '<span class="ucmd-mc-q">' + qtyFmt(l.qty) + (isSales ? "<small>" + inr(l.amount) + "</small>" : "") + "</span></div>";
-        }).join("") + "</div>" +
-        '<div class="ucmd-mc-foot"><span>' + (foot || "&nbsp;") + "</span>" +
-          '<b>' + (g.lines.length > 1 ? g.lines.length + " items · " : "") + "Qty " + qtyFmt(g.qty) + (isSales ? " · " + inr(g.amt) : "") + "</b></div>" +
-      "</article>";
-    }).join("");
-    host.innerHTML = '<div class="ucmd-mcards">' + out + "</div>" +
-      '<div class="ucmd-mc-total"><span>Total · ' + num(nDocs) + " " + V.label.toLowerCase() + "</span><b>Qty " + qtyFmt(tq) + (isSales ? " · " + inr(ta) : "") + "</b></div>" +
-      (limit < rows.length ? '<div class="ucmd-more-wrap"><button type="button" class="ucmd-more">Show all ' + num(rows.length) + " lines (" + num(rows.length - limit) + " more)</button></div>" : "");
-  }
-  // phone <-> desktop switch par register dobara banao
-  (function () {
-    var was = isMobile();
-    w.addEventListener("resize", function () {
-      var now = isMobile();
-      if (now !== was) { was = now; if (S.rows && S.view !== "persons" && $("#ucmd-table")) renderTable(); }
-    });
-  })();
+@media (max-width: 700px) {
+  html, body { overflow-x: hidden; }
 
-  /* ───────── CSV ───────── */
-  function downloadCSV() {
-    var rows = searchRows(filtered());
-    if (!rows.length) { toast("Nothing to download", true); return; }
-    var isSales = S.view === "sales";
-    var cols = [["posting_date", "Date"], ["status", "Status"], ["order_type", "Order Type"], ["name", "Document ID"], ["po_no", "PO No"],
-      ["customer_name", "Customer Name"], ["item_code", "Item Code"], ["item_name", "Product Name"], ["qty", "Quantity"], ["rate", "Rate"],
-      ["amount", "Non-Taxable Amount"], ["order_by", "Order By"], ["oa_no", "OA NO"], ["city", "City / Town"], ["state", "State"],
-      ["freight", "Freight / Incoterm"], ["category", "Item Category"]];
-    if (isSales) cols.push(["payment_terms", "Payment Terms"]);
-    var q = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    var out = [cols.map(function (c) { return q(c[1]); }).join(",")];
-    rows.forEach(function (r) { out.push(cols.map(function (c) { return q(r[c[0]]); }).join(",")); });
-    var blob = new Blob(["﻿" + out.join("\n")], { type: "text/csv;charset=utf-8" });
-    var a = d.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "ucm-" + (isSales ? "sales-invoices" : "dispatches") + "-" + S.from + "-to-" + S.to + ".csv";
-    d.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  }
+  /* filters: period scroll row · date full · fields 2-up */
+  #ucm-dsr .ucmd-band { display: grid !important; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px 8px; padding: 12px; }
+  #ucm-dsr .ucmd-band > .ucmd-fgroup { grid-column: 1 / -1; min-width: 0; }
+  #ucm-dsr .ucmd-band .ucmd-periods { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; margin: 0 -12px; padding: 0 12px 2px; }
+  #ucm-dsr .ucmd-band .ucmd-periods::-webkit-scrollbar { display: none; }
+  #ucm-dsr .ucmd-chip { flex: 0 0 auto; height: 34px; padding: 0 12px; }
+  #ucm-dsr .ucmd-range { display: flex; width: 100%; height: 36px; }
+  #ucm-dsr .ucmd-range input { flex: 1 1 0; width: auto; min-width: 0; }
+  #ucm-dsr .ucmd-band .ucmd-field, #ucm-dsr .ucmd-band .ucmd-field.is-sm { min-width: 0; }
+  #ucm-dsr .ucmd-band .ucmd-field[data-fk="customer"] { grid-column: 1 / -1; }
+  #ucm-dsr .ucmd-clear { grid-column: 1 / -1; justify-self: end; }
 
-  /* ═════════════════════════ DRAWER (slider) ═════════════════════════ */
-  function drawer(kind) {
-    var dr = $("#ucmd-drawer");
-    if (!dr) {
-      var scrim = d.createElement("div"); scrim.className = "ucmd-scrim"; scrim.id = "ucmd-scrim";
-      scrim.addEventListener("click", closeDrawer);
-      dr = d.createElement("aside"); dr.id = "ucmd-drawer"; dr.className = "ucmd-drawer"; dr.setAttribute("role", "dialog");
-      d.body.appendChild(scrim); d.body.appendChild(dr);
-      dr.addEventListener("click", function (e) { if (e.target.closest(".ucmd-x")) closeDrawer(); });
-    }
-    dr.setAttribute("data-kind", kind);
-    requestAnimationFrame(function () { dr.classList.add("on"); $("#ucmd-scrim").classList.add("on"); });
-    return dr;
-  }
-  function closeDrawer() {
-    var dr = $("#ucmd-drawer"); if (dr) dr.classList.remove("on");
-    var s = $("#ucmd-scrim"); if (s) s.classList.remove("on");
-  }
-  d.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeDrawer(); closeSettings(); var dm = $("#ucmd-drafts"); if (dm) dm.classList.remove("on"); }
-  });
+  /* tabs: 3 equal tabs, then action row */
+  #ucm-dsr .ucmd-tabs { flex-wrap: wrap; gap: 0; padding: 0 8px; align-items: stretch; }
+  #ucm-dsr .ucmd-view { flex: 1 1 0; min-width: 0; justify-content: center; gap: 5px; height: 44px; padding: 0 4px; font-size: 12.5px; white-space: nowrap; }
+  #ucm-dsr .ucmd-view svg { display: none; }
+  #ucm-dsr .ucmd-view > span:not(.ucmd-tab-count) { overflow: hidden; text-overflow: ellipsis; }
+  #ucm-dsr .ucmd-tabs-meta { display: none; }
+  #ucm-dsr .ucmd-vl { display: none; }
+  #ucm-dsr .ucmd-vs { display: inline; }
+  #ucm-dsr .ucmd-band-actions { display: contents; }
+  #ucm-dsr #ucmd-refresh { order: 5; flex: 0 0 34px; width: 34px; height: 34px; align-self: center; margin-left: 4px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
+  #ucm-dsr #ucmd-cat-btn { order: 9; flex: 1 0 100%; justify-content: center; height: 38px; margin: 8px 0 10px; white-space: nowrap; }
+  #ucm-dsr #ucmd-cat-btn[hidden] { display: none !important; }
 
-  function drawerHead(kicker, title, sub, extra) {
-    return '<header class="ucmd-dr-head"><div class="ucmd-dr-titles"><div class="ucmd-dr-kicker">' + kicker + "</div>" +
-      '<h3 title="' + esc(title) + '">' + esc(title) + "</h3>" + (sub ? '<div class="ucmd-dr-sub">' + sub + "</div>" : "") + "</div>" +
-      '<div class="ucmd-dr-actions">' + (extra || "") + '<button type="button" class="ucmd-icon-btn is-sm ucmd-x" title="Close" aria-label="Close">' + ico(I.close, 15) + "</button></div></header>";
-  }
+  /* cards & kpis */
+  #ucm-dsr .ucmd-main { padding: 12px 12px 32px; }
+  #ucm-dsr .ucmd-kpis { gap: 8px; }
+  #ucm-dsr .ucmd-kpi { padding: 12px; }
+  #ucm-dsr .ucmd-kpi { position: relative; }
+  #ucm-dsr .ucmd-kpi-label { letter-spacing: .03em; font-size: 10px; padding-right: 44px; }
+  #ucm-dsr .ucmd-kpi-label .ucmd-share { position: absolute; top: 10px; right: 10px; margin: 0; }
+  #ucm-dsr .ucmd-tab-count { display: none; }
+  #ucm-dsr .ucmd-kpi-label .ucmd-sw { display: none; }
+  #ucm-dsr .ucmd-ptbl tr > :nth-child(5) { display: none; }
+  #ucm-dsr .ucmd-ptbl th, #ucm-dsr .ucmd-ptbl td { padding-left: 8px; padding-right: 8px; }
 
-  /* ───────── stock slider (Product click) ───────── */
-  var stock = { data: null, tab: "all" };
-  function openStock(code, name) {
-    if (!code) return;
-    var dr = drawer("stock");
-    stock.data = null; stock.tab = "all";
-    dr.innerHTML = drawerHead("Stock · WH2 - UCM", name || code, esc(code)) +
-      '<div class="ucmd-dr-body"><div class="ucmd-empty"><span class="ucmd-spin"></span>Loading stock &amp; transactions…</div></div>';
-    api(API_STOCK, { item_code: code }).then(function (m) {
-      if (!m) throw new Error("No data returned");
-      stock.data = m;
-      renderStock(dr);
-    }).catch(function (err) {
-      $(".ucmd-dr-body", dr).innerHTML = '<div class="ucmd-error"><b>Could not load stock.</b> ' + esc(cleanMsg(err)) +
-        "<div>Check that the Server Script <code>" + API_STOCK + "</code> is saved and enabled.</div></div>";
-    });
-  }
-  var SLE_ROUTE = { "Delivery Note": "delivery-note", "Sales Invoice": "sales-invoice", "Stock Entry": "stock-entry", "Stock Reconciliation": "stock-reconciliation", "Purchase Receipt": "purchase-receipt", "Purchase Invoice": "purchase-invoice" };
-  function renderStock(dr) {
-    var m = stock.data;
-    var tabs = [["all", "All"], ["dispatched", "Dispatched"], ["manufactured", "Manufactured"], ["stock_adjustment", "Stock adj."]];
-    var period = m.from_date ? shortDate(m.from_date) + " – " + shortDate(m.to_date) : "last 30 days";
-    dr.innerHTML = drawerHead("Stock · " + esc(m.warehouse || "WH2 - UCM"), m.item_name || m.item_code,
-        '<a href="/app/item/' + encodeURIComponent(m.item_code) + '" target="_blank" rel="noopener">' + esc(m.item_code) + "</a>") +
-      '<div class="ucmd-dr-body">' +
-        (m.description && m.description !== m.item_name ? '<p class="ucmd-dr-desc">' + esc(String(m.description).replace(/<[^>]*>/g, " ")) + "</p>" : "") +
-        '<div class="ucmd-stockcard"><div><div class="ucmd-kpi-label">Current stock</div><div class="ucmd-stock-val">' + qtyFmt(m.current_stock) +
-          "<small>" + esc(m.stock_uom || "") + "</small></div></div>" +
-          '<div class="ucmd-stock-note">' + esc(m.warehouse || "WH2 - UCM") + "<br>Stock ledger · " + esc(period) + "</div></div>" +
-        (m.opening_qty != null ? '<div class="ucmd-sle-sum">' +
-          '<div><span>Opening</span><b>' + qtyFmt(m.opening_qty) + "</b></div>" +
-          '<div class="in"><span>+ In</span><b>' + qtyFmt(m.total_in) + "</b></div>" +
-          '<div class="out"><span>− Out</span><b>' + qtyFmt(m.total_out) + "</b></div>" +
-          '<div class="bal"><span>= Closing</span><b>' + qtyFmt((+m.opening_qty || 0) + (+m.total_in || 0) - (+m.total_out || 0)) + "</b></div></div>" : "") +
-        setBlock(m) +
-        '<div class="ucmd-seg">' + tabs.map(function (t) {
-          var n = (m[t[0]] || []).length;
-          return '<button type="button" class="' + (stock.tab === t[0] ? "on" : "") + '" data-stab="' + t[0] + '">' + t[1] + "<span>" + n + "</span></button>";
-        }).join("") + "</div>" +
-        '<div class="ucmd-dr-table">' + stockTable(m[stock.tab] || []) + "</div>" +
-      "</div>";
-    $$(".ucmd-set-item", dr).forEach(function (el) {
-      el.addEventListener("click", function (e) { e.preventDefault(); openStock(el.getAttribute("data-item"), el.textContent); });
-    });
-    $$("[data-stab]", dr).forEach(function (b) {
-      b.addEventListener("click", function () { stock.tab = b.getAttribute("data-stab"); renderStock(dr); });
-    });
-  }
-  /* Item ek SET hai to: uske andar ke items, per set qty, stock aur kitne set ban sakte hain */
-  function setBlock(m) {
-    var comps = m.components || [];
-    if (!comps.length) return "";
-    var wh = esc(m.warehouse || "WH2 - UCM");
-    return '<div class="ucmd-set">' +
-      '<div class="ucmd-set-h"><div><b>Items used in this set</b><small>' + esc(m.set_source || "") + (m.set_name && m.set_source === "BOM" ? " \u00b7 " + esc(m.set_name) : "") + "</small></div>" +
-        (m.sets_possible != null ? '<div class="ucmd-set-can"><span>Sets possible</span><b>' + qtyFmt(m.sets_possible) + "</b></div>" : "") + "</div>" +
-      '<table class="ucmd-mtable"><thead><tr><th>Item</th><th class="c-num">Per set</th><th class="c-num">Stock \u00b7 ' + wh + '</th><th class="c-num">All warehouses</th><th class="c-num">Sets possible</th></tr></thead><tbody>' +
-      comps.map(function (c) {
-        var low = m.sets_possible != null && c.sets === m.sets_possible;
-        return '<tr class="' + (low ? "is-short" : "") + '"><td><a href="#" class="ucmd-set-item" data-item="' + esc(c.item_code) + '"><b>' + esc(c.item_name || c.item_code) + "</b></a><small>" + esc(c.item_code) + "</small></td>" +
-          '<td class="c-num">' + qtyFmt(c.per_set) + " <small>" + esc(c.uom || "") + "</small></td>" +
-          '<td class="c-num"><b>' + qtyFmt(c.stock) + "</b></td>" +
-          '<td class="c-num">' + qtyFmt(c.stock_all) + "</td>" +
-          '<td class="c-num">' + (c.sets == null ? "\u2013" : qtyFmt(c.sets)) + (low ? ' <span class="ucmd-set-tag">limit</span>' : "") + "</td></tr>";
-      }).join("") + "</tbody></table></div>";
-  }
-  function stockTable(rows) {
-    if (!rows.length) return '<div class="ucmd-mini-empty">No transactions in the last 30 days.</div>';
-    var all = stock.tab === "all";
-    return '<table class="ucmd-mtable"><thead><tr><th>Date</th><th>Type</th><th>Document</th><th>Party / Entry</th><th class="c-num">Qty</th>' + (all ? '<th class="c-num">Balance</th>' : "") + "</tr></thead><tbody>" +
-      rows.map(function (r) {
-        var q = +r.qty_change || 0, route = SLE_ROUTE[r.voucher_type];
-        var doc = route && r.voucher_no ? '<a href="/app/' + route + "/" + encodeURIComponent(r.voucher_no) + '" target="_blank" rel="noopener">' + esc(r.voucher_no) + "</a>" : esc(r.voucher_no || "");
-        return "<tr><td>" + esc(shortDate(r.posting_date)) + "</td><td>" + esc(r.voucher_type || "") + "</td><td>" + doc + '</td><td class="c-party">' + esc(r.detail || "") + "</td>" +
-          '<td class="c-num ' + (q >= 0 ? "is-in" : "is-out") + '">' + (q > 0 ? "+" : "") + qtyFmt(q) + "</td>" +
-          (all ? '<td class="c-num">' + (r.balance_qty == null ? "" : qtyFmt(r.balance_qty)) + "</td>" : "") + "</tr>";
-      }).join("") + "</tbody></table>";
-  }
+  /* register header */
+  #ucm-dsr .ucmd-table-head { padding: 10px; gap: 8px; }
+  #ucm-dsr .ucmd-table-head > * { min-width: 0; }
 
+  /* sliders full screen */
+  .ucmd-drawer, .ucmd-drawer[data-kind="category"] { width: 100vw !important; }
+  /* popup + person slider tables -> stacked rows */
+  .ucmd-draft-body .ucmd-mtable, #ucmd-pp-table .ucmd-mtable { display: block; width: 100%; }
+  .ucmd-draft-body .ucmd-mtable thead, #ucmd-pp-table .ucmd-mtable thead { display: none; }
+  .ucmd-draft-body .ucmd-mtable tbody, #ucmd-pp-table .ucmd-mtable tbody { display: block; }
+  .ucmd-draft-body .ucmd-mtable tr, #ucmd-pp-table .ucmd-mtable tr { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; column-gap: 8px; row-gap: 3px; align-items: center; padding: 10px 2px; border-bottom: 1px solid #eef1f4; }
+  .ucmd-draft-body .ucmd-mtable td, #ucmd-pp-table .ucmd-mtable td { display: block; padding: 0 !important; border: 0 !important; background: none !important; white-space: normal; min-width: 0; }
+  .ucmd-draft-body .ucmd-mtable td:nth-child(1), #ucmd-pp-table .ucmd-mtable td:nth-child(1) { grid-column: 1; grid-row: 1 / span 3; align-self: start; font-size: 11px; color: #94a3b8; }
+  .ucmd-draft-body .ucmd-mtable td:nth-child(2), #ucmd-pp-table .ucmd-mtable td:nth-child(2) { grid-column: 2; grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* draft popup: DN | qty / party / type | person */
+  .ucmd-draft-body .ucmd-mtable td:nth-child(6) { grid-column: 3; grid-row: 1; text-align: right; font-weight: 600; }
+  .ucmd-draft-body .ucmd-mtable td:nth-child(3) { grid-column: 2 / 4; grid-row: 2; font-weight: 600; color: #0f172a; }
+  .ucmd-draft-body .ucmd-mtable td:nth-child(4) { grid-column: 2; grid-row: 3; }
+  .ucmd-draft-body .ucmd-mtable td:nth-child(5) { grid-column: 3; grid-row: 3; text-align: right; font-size: 12px; color: #64748b; }
+  /* person slider: invoice | amount / customer / date | type */
+  #ucmd-pp-table .ucmd-mtable td:nth-child(6) { grid-column: 3; grid-row: 1; text-align: right; }
+  #ucmd-pp-table .ucmd-mtable td:nth-child(4) { grid-column: 2 / 4; grid-row: 2; font-weight: 500; color: #0f172a; }
+  #ucmd-pp-table .ucmd-mtable td:nth-child(3) { grid-column: 2; grid-row: 3; font-size: 12px; color: #64748b; }
+  #ucmd-pp-table .ucmd-mtable td:nth-child(5) { grid-column: 3; grid-row: 3; text-align: right; }
+  .ucmd-draft-body { padding: 4px 14px; max-height: 50vh; }
+  .ucmd-draft-head { padding: 16px 14px 14px; gap: 10px; }
+  .ucmd-draft-ico { width: 34px; height: 34px; flex-basis: 34px; }
+  .ucmd-draft-head h3 { font-size: 16px; }
+  .ucmd-draft-foot { padding: 10px 14px; }
+  .ucmd-draft-foot > * { flex: 1 1 0; justify-content: center; }
+}
 
-  /* ═════════════════════════ SALES PERSON (Monthly Sales Summary jaisa) ═════════════════════════ */
-  // Report jaisa: Ultra table mein "Others" → "Others(AG)"
-  function personLabel(p, type) { p = p || "Not Set"; return (p === "Others" && type === "Ultra") ? "Others(AG)" : p; }
-  function personGroups(rows, type) {
-    var m = {}, tot = 0;
-    rows.forEach(function (r) {
-      if (r.order_type !== type) return;
-      var k = r.order_by || "Not Set";
-      if (!m[k]) m[k] = { k: k, v: 0, n: 0 };
-      m[k].v += r.amount; m[k].n++; tot += r.amount;
-    });
-    var list = Object.keys(m).map(function (k) { return m[k]; }).sort(function (a, b) { return b.v - a.v; });
-    return { list: list, total: tot };
-  }
-  function renderPersonKpis(rows) {
-    var u = 0, lb = 0, persons = {};
-    rows.forEach(function (r) {
-      if (r.order_type === "Ultra") u += r.amount; else lb += r.amount;
-      persons[r.order_by || "Not Set"] = 1;
-    });
-    var tot = u + lb, us = tot ? Math.round(u / tot * 100) : 0, ls = tot ? 100 - us : 0;
-    $("#ucmd-kpis").innerHTML =
-      '<div class="ucmd-kpi is-hero">' +
-        '<div class="ucmd-kpi-label">Total Sales <em>excl. GST</em></div>' +
-        '<div class="ucmd-kpi-value" title="' + inr(tot) + '">' + inrShort(tot) + "</div>" +
-        '<div class="ucmd-kpi-sub">' + inr(tot) + " · submitted Invoices</div>" +
-        '<div class="ucmd-kpi-foot">' + rangeText() + "</div>" +
-      "</div>" +
-      '<div class="ucmd-kpi"><div class="ucmd-kpi-label">Invoices</div><div class="ucmd-kpi-value">' + num(rows.length) + '</div><div class="ucmd-kpi-sub">submitted · returns excluded</div></div>' +
-      '<div class="ucmd-kpi"><div class="ucmd-kpi-label">Sales Persons</div><div class="ucmd-kpi-value">' + num(Object.keys(persons).length) + '</div><div class="ucmd-kpi-sub">with sales in this period</div></div>' +
-      seg("Ultra", "is-ultra", u, us) + seg("Large Blow", "is-lb", lb, ls);
-    function seg(name, cls, v, share) {
-      return '<button type="button" class="ucmd-kpi is-seg ' + cls + (S.f.otype === name ? " on" : "") + '" data-kf="otype" data-kv="' + name + '" title="Show only ' + name + '">' +
-        '<div class="ucmd-kpi-label"><span class="ucmd-sw"></span>' + name + ' Sales<span class="ucmd-share">' + share + "%</span></div>" +
-        '<div class="ucmd-kpi-value" title="' + inr(v) + '">' + inrShort(v) + "</div>" +
-        '<div class="ucmd-meter"><i style="width:' + share + '%"></i></div>' +
-        '<div class="ucmd-kpi-sub">' + inr(v) + "</div></button>";
-    }
-    $$("#ucmd-kpis [data-kf]").forEach(function (b) {
-      b.addEventListener("click", function () { var v = b.getAttribute("data-kv"); setFilter("otype", S.f.otype === v ? "" : v); });
-    });
-  }
-  function renderPersons(rows) {
-    var host = $("#ucmd-persons");
-    $$(".ucmd-view").forEach(function (b) {
-      var c = $(".ucmd-tab-count", b); if (c) c.textContent = b.getAttribute("data-view") === S.view ? num(rows.length) : "";
-    });
-    var rt = $("#ucmd-range-txt"); if (rt) rt.textContent = rangeText();
-    host.innerHTML = table("Ultra", "is-ultra") + table("Large Blow", "is-lb");
-    function table(type, cls) {
-      var g = personGroups(rows, type), max = g.list.length ? g.list[0].v : 0;
-      var body = g.list.map(function (x, i) {
-        var pct = g.total ? x.v / g.total * 100 : 0, bar = max ? Math.max(2, Math.round(x.v / max * 100)) : 0;
-        return '<tr class="b' + (i % 2) + '">' +
-          '<td class="c-rank"><span class="ucmd-rank">' + (i + 1) + "</span></td>" +
-          '<td><button type="button" class="ucmd-person" data-person="' + esc(x.k) + '" data-type="' + type + '">' + esc(personLabel(x.k, type)) + "</button></td>" +
-          '<td class="c-num">' + num(x.n) + "</td>" +
-          '<td class="c-num c-amt">' + inr2(x.v) + "</td>" +
-          '<td class="c-num c-pct"><span class="ucmd-share-cell"><i style="width:' + bar + '%"></i></span>' + pct.toFixed(2) + "%</td></tr>";
-      }).join("");
-      return '<div class="ucmd-card ucmd-ptable ' + cls + '">' +
-        '<div class="ucmd-ptable-head"><span class="ucmd-sw"></span><b>' + type + ' Sales by Person</b><span class="ucmd-ptable-tot">' + inr(g.total) + "</span></div>" +
-        (body ? '<table class="ucmd-table ucmd-ptbl"><thead><tr><th class="c-rank">#</th><th>Sales Person</th><th class="c-num">Invoices</th><th class="c-num">Value</th><th class="c-num">% of ' + type + "</th></tr></thead><tbody>" + body + "</tbody>" +
-          '<tfoot><tr><td></td><td>Total</td><td class="c-num">' + num(g.list.reduce(function (a, x) { return a + x.n; }, 0)) + '</td><td class="c-num">' + inr2(g.total) + '</td><td class="c-num">100.00%</td></tr></tfoot></table>'
-          : '<div class="ucmd-mini-empty">No ' + type + " sales in this selection</div>") +
-      "</div>";
-    }
-  }
+/* Stock slider: 30 din ka ledger summary */
+.ucmd-sle-sum { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin: -2px 0 12px; }
+.ucmd-sle-sum > div { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; background: #fff; }
+.ucmd-sle-sum span { display: block; font-size: 11px; font-weight: 600; color: #64748b; }
+.ucmd-sle-sum b { font-size: 16px; font-weight: 700; color: #0f172a; }
+.ucmd-sle-sum .in b { color: #0f766e; }
+.ucmd-sle-sum .out b { color: #c2410c; }
+.ucmd-sle-sum .bal { background: #f0faf8; border-color: #c5e6e1; }
+.ucmd-mtable td.c-party { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #475569; }
+@media (max-width: 700px) {
+  .ucmd-sle-sum { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .ucmd-dr-table { overflow-x: auto; }
+}
 
-  // Person par click → uske saare invoices (amount ke hisaab se sorted)
-  var PP = { person: "", tab: "Ultra", dir: "desc", q: "" };
-  function openPerson(person, type) {
-    PP.person = person; PP.tab = type || "Ultra"; PP.dir = "desc"; PP.q = "";
-    renderPersonDrawer(drawer("person"));
-  }
-  function personList() {
-    var mine = filtered().filter(function (r) { return (r.order_by || "Not Set") === PP.person; });
-    return {
-      all: mine,
-      "Ultra": mine.filter(function (r) { return r.order_type === "Ultra"; }),
-      "Large Blow": mine.filter(function (r) { return r.order_type === "Large Blow"; })
-    };
-  }
-  function renderPersonDrawer(dr) {
-    var L = personList();
-    var title = personLabel(PP.person, PP.tab === "all" ? "Ultra" : PP.tab);
-    dr.innerHTML = drawerHead("Sales Person", title, rangeText() + " · submitted Invoices, excl. taxes",
-        '<button type="button" class="ucmd-icon-btn is-sm" id="ucmd-pp-csv" title="Download (Excel / CSV)" aria-label="Download">' + ico(I.download, 14) + "</button>") +
-      '<div class="ucmd-dr-body ucmd-pp">' +
-        '<div class="ucmd-pp-tools">' +
-          '<div class="ucmd-seg">' + [["all", "All"], ["Ultra", "Ultra"], ["Large Blow", "Large Blow"]].map(function (t) {
-            return '<button type="button" class="' + (PP.tab === t[0] ? "on" : "") + '" data-pptab="' + t[0] + '">' + t[1] + "<span>" + L[t[0]].length + "</span></button>";
-          }).join("") + "</div>" +
-          '<label class="ucmd-search">' + ico(I.search, 14) + '<input type="search" id="ucmd-pp-q" placeholder="Search customer name…" value="' + esc(PP.q) + '"></label>' +
-        "</div>" +
-        '<div class="ucmd-dr-table" id="ucmd-pp-table"></div>' +
-      "</div>" +
-      '<footer class="ucmd-pp-foot" id="ucmd-pp-foot"></footer>';
-    $$("[data-pptab]", dr).forEach(function (b) {
-      b.addEventListener("click", function () { PP.tab = b.getAttribute("data-pptab"); renderPersonDrawer(dr); });
-    });
-    $("#ucmd-pp-q").addEventListener("input", function (e) { PP.q = e.target.value; ppTable(); });
-    $("#ucmd-pp-csv").addEventListener("click", function () { ppExport(); });
-    ppTable();
-  }
-  function ppRows() {
-    var q = lc(PP.q.trim());
-    var list = personList()[PP.tab].filter(function (r) { return !q || lc(r.customer_name).indexOf(q) >= 0; });
-    return list.slice().sort(function (a, b) { return PP.dir === "desc" ? b.amount - a.amount : a.amount - b.amount; });
-  }
-  function ppTable() {
-    var list = ppRows(), tot = list.reduce(function (a, r) { return a + r.amount; }, 0);
-    $("#ucmd-pp-table").innerHTML = list.length
-      ? '<table class="ucmd-mtable"><thead><tr><th>#</th><th>Invoice No</th><th>Date</th><th>Customer Name</th><th>Type</th>' +
-          '<th class="c-num ucmd-sort" title="Click to change sort order">Amount ' + (PP.dir === "desc" ? "▼" : "▲") + "</th></tr></thead><tbody>" +
-        list.map(function (r, i) {
-          return '<tr><td class="c-muted">' + (i + 1) + '</td><td><a href="/app/sales-invoice/' + encodeURIComponent(r.name) + '" target="_blank" rel="noopener">' + esc(r.name) + "</a></td>" +
-            "<td>" + esc(shortDate(r.posting_date)) + "</td><td>" + esc(r.customer_name) + "</td>" +
-            '<td><span class="ucmd-type ' + (r.order_type === "Ultra" ? "is-ultra" : "is-lb") + '">' + esc(r.order_type) + "</span></td>" +
-            '<td class="c-num"><b>' + inr2(r.amount) + "</b></td></tr>";
-        }).join("") + "</tbody></table>"
-      : '<div class="ucmd-mini-empty">No Invoices</div>';
-    $("#ucmd-pp-foot").innerHTML = "<span>Total · " + num(list.length) + " Invoice" + (list.length === 1 ? "" : "s") + " (excl. taxes)</span><b>" + inr2(tot) + "</b>";
-    var so = $("#ucmd-pp-table .ucmd-sort");
-    if (so) so.addEventListener("click", function () { PP.dir = PP.dir === "desc" ? "asc" : "desc"; ppTable(); });
-  }
-  function ppExport() {
-    var list = ppRows();
-    if (!list.length) { toast("No data to export", true); return; }
-    var q = function (v) { return '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"'; };
-    var out = [["Invoice No", "Date", "Customer Name", "Type", "Amount (excl. taxes)"].map(q).join(",")], tot = 0;
-    list.forEach(function (r) { tot += r.amount; out.push([r.name, r.posting_date, r.customer_name, r.order_type, r.amount.toFixed(2)].map(q).join(",")); });
-    out.push(["", "", "Total", "", tot.toFixed(2)].map(q).join(","));
-    var blob = new Blob(["﻿" + out.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    var a = d.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = (PP.person + "_" + (PP.tab === "all" ? "All" : PP.tab)).replace(/[^a-z0-9_\-]+/gi, "_") + "_invoices_" + S.from + "_to_" + S.to + ".csv";
-    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-  }
+/* Stock slider: chauda, taaki date / document / party ek line mein dikhein */
+.ucmd-drawer[data-kind="stock"] { width: min(980px, 96vw); }
+.ucmd-drawer[data-kind="stock"] .ucmd-mtable td,
+.ucmd-drawer[data-kind="stock"] .ucmd-mtable th { white-space: nowrap; }
+.ucmd-drawer[data-kind="stock"] .ucmd-mtable td.c-party { max-width: 300px; }
+@media (max-width: 700px) { .ucmd-drawer[data-kind="stock"] { width: 100vw !important; } }
 
-  /* ───────── Category Wise slider (report ka "Category Wise Sales" button) ─────────
-     Report ki tarah: current tab + filters ki saari lines (Draft + Completed),
-     bina category wale items chhod kar. Dispatches tab mein sirf qty (value nahi). */
-  function showMoney() { return S.view === "sales"; }
-  function categoryData() {
-    var rows = filtered(), map = {}, gq = 0, ga = 0, money = showMoney();
-    rows.forEach(function (r) {
-      var c = (r.category || "").trim(); if (!c) return;
-      gq += r.qty; ga += r.amount;
-      if (!map[c]) map[c] = { k: c, q: 0, v: 0, n: 0, items: {} };
-      map[c].q += r.qty; map[c].v += r.amount; map[c].n++;
-      var it = map[c].items[r.item_code] || (map[c].items[r.item_code] = { code: r.item_code, name: r.item_name, q: 0, v: 0 });
-      it.q += r.qty; it.v += r.amount;
-    });
-    var key = money ? "v" : "q";
-    var list = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return b[key] - a[key]; });
-    return { list: list, map: map, q: gq, v: ga };
-  }
-  function openCategory() {
-    if (!S.rows.length) { toast("No data for this period", true); return; }
-    var dr = drawer("category");
-    renderCatList(dr, categoryData());
-  }
-  function catHead(sub) {
-    var t = S.view === "sales" ? "Category Wise Sales" : "Category Wise Dispatch";
-    return drawerHead(VIEWS[S.view].label, t, sub,
-      '<button type="button" class="ucmd-icon-btn is-sm ucmd-print" title="Print">' + ico(I.print, 14) + "</button>");
-  }
-  function bindPrint(dr) {
-    var p = $(".ucmd-print", dr);
-    if (p) p.addEventListener("click", function () {
-      d.body.classList.add("ucmd-print-drawer");
-      setTimeout(function () { w.print(); setTimeout(function () { d.body.classList.remove("ucmd-print-drawer"); }, 300); }, 50);
-    });
-  }
-  function renderCatList(dr, cd) {
-    var money = showMoney();
-    var maxQ = cd.list.length ? Math.max.apply(null, cd.list.map(function (c) { return c.q; })) : 0;
-    dr.innerHTML = catHead(rangeText() + " · " + (S.f.status ? S.f.status.toLowerCase() + " only" : "completed + draft")) +
-      '<div class="ucmd-dr-body">' +
-        '<div class="ucmd-dr-stats"><div><span>Categories</span><b>' + cd.list.length + "</b></div><div><span>Total qty</span><b>" + qtyFmt(cd.q) + "</b></div>" +
-          (money ? "<div><span>Grand total amount</span><b>" + inr(cd.v) + "</b></div>" : "<div><span>Products</span><b>" +
-            cd.list.reduce(function (a, c) { return a + Object.keys(c.items).length; }, 0) + "</b></div>") + "</div>" +
-        '<div class="ucmd-dr-table">' + (cd.list.length ?
-          '<table class="ucmd-mtable is-click"><thead><tr><th>Category</th><th class="c-num">Qty</th>' +
-            (money ? '<th class="c-num">Avg rate</th><th class="c-num">Total amount</th><th class="c-num">Share</th>' : '<th class="c-num">Lines</th><th class="c-num">Share of qty</th>') +
-          "</tr></thead><tbody>" +
-          cd.list.map(function (c) {
-            var share = money ? (cd.v ? c.v / cd.v * 100 : 0) : (cd.q ? c.q / cd.q * 100 : 0);
-            return '<tr data-cat-row="' + esc(c.k) + '"><td><span class="ucmd-linkish">' + esc(c.k) + '</span></td><td class="c-num">' + qtyFmt(c.q) + "</td>" +
-              (money
-                ? '<td class="c-num">' + inr2(c.q ? c.v / c.q : 0) + '</td><td class="c-num"><b>' + inr(c.v) + "</b></td>"
-                : '<td class="c-num">' + num(c.n) + "</td>") +
-              '<td class="c-num"><span class="ucmd-share-cell"><i style="width:' + Math.round(share) + '%"></i></span>' + share.toFixed(1) + "%</td></tr>";
-          }).join("") + "</tbody></table>" : '<div class="ucmd-mini-empty">No categorised items for this selection.</div>') + "</div>" +
-        '<p class="ucmd-dr-note">Click a category to see its products.</p>' +
-      "</div>";
-    bindPrint(dr);
-    $$("[data-cat-row]", dr).forEach(function (tr) {
-      tr.addEventListener("click", function () { renderCatItems(dr, cd, cd.map[tr.getAttribute("data-cat-row")]); });
-    });
-  }
-  function renderCatItems(dr, cd, c) {
-    var money = showMoney();
-    var items = Object.keys(c.items).map(function (k) { return c.items[k]; }).sort(function (a, b) { return money ? b.v - a.v : b.q - a.q; });
-    dr.innerHTML = catHead(esc(c.k) + " · " + rangeText()) +
-      '<div class="ucmd-dr-body">' +
-        '<button type="button" class="ucmd-back">' + ico(I.back, 13) + "All categories</button>" +
-        '<div class="ucmd-dr-stats"><div><span>Category</span><b class="is-text">' + esc(c.k) + "</b></div><div><span>Total qty</span><b>" + qtyFmt(c.q) + "</b></div>" +
-          (money ? "<div><span>Total amount</span><b>" + inr(c.v) + "</b></div>" : "<div><span>Products</span><b>" + items.length + "</b></div>") + "</div>" +
-        '<div class="ucmd-dr-table"><table class="ucmd-mtable"><thead><tr><th>Product</th><th class="c-num">Qty</th>' +
-          (money ? '<th class="c-num">Rate</th><th class="c-num">Total amount</th>' : "") + "</tr></thead><tbody>" +
-          items.map(function (it) {
-            return '<tr><td><a href="/app/item/' + encodeURIComponent(it.code) + '" target="_blank" rel="noopener">' + esc(it.name || it.code) + '</a></td><td class="c-num">' + qtyFmt(it.q) + "</td>" +
-              (money ? '<td class="c-num">' + inr2(it.q ? it.v / it.q : 0) + '</td><td class="c-num"><b>' + inr(it.v) + "</b></td>" : "") + "</tr>";
-          }).join("") + "</tbody></table></div>" +
-      "</div>";
-    bindPrint(dr);
-    $(".ucmd-back", dr).addEventListener("click", function () { renderCatList(dr, cd); });
-  }
+/* Stock slider: set ke andar ke items */
+.ucmd-set { border: 1px solid #c5e6e1; border-radius: 12px; overflow: hidden; margin: 0 0 14px; background: #fff; }
+.ucmd-set-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; background: #f0faf8; border-bottom: 1px solid #d4ebe7; }
+.ucmd-set-h b { display: block; font-size: 13px; color: #0f172a; }
+.ucmd-set-h small { font-size: 11px; color: #64748b; }
+.ucmd-set-can { text-align: right; }
+.ucmd-set-can span { display: block; font-size: 11px; font-weight: 600; color: #64748b; }
+.ucmd-set-can b { font-size: 20px; color: #115e59; }
+.ucmd-set .ucmd-mtable { margin: 0; }
+.ucmd-set .ucmd-mtable td small { display: block; font-size: 10.5px; color: #94a3b8; }
+.ucmd-set .ucmd-mtable td.c-num small { display: inline; }
+.ucmd-set-item { color: #0f766e; text-decoration: none; }
+.ucmd-set-item:hover { text-decoration: underline; }
+.ucmd-set tr.is-short td { background: #fff7ed; }
+.ucmd-set-tag { font-size: 10px; font-weight: 700; color: #c2410c; background: #ffedd5; border-radius: 99px; padding: 1px 6px; margin-left: 4px; }
 
-  /* ═════════════════════════ SETTINGS (System Manager) ═════════════════════════ */
-  var ST = { users: [], candidates: [], busy: false, pick: "", typed: "", addLevel: "dispatch" };
-  var LEVEL_TXT = { admin: "System Manager", full: "Full Access", dispatch: "Dispatches Only", sales: "Sales Invoices + Sales Person" };
-  var LEVEL_OPTS = [["dispatch", "Dispatches Only"], ["sales", "Sales Invoices + Sales Person"], ["full", "Full Access"]];
-
-  function openSettings() {
-    if (!S.isAdmin) return;
-    var m = $("#ucmd-settings");
-    if (!m) {
-      m = d.createElement("div"); m.id = "ucmd-settings"; m.className = "ucmd-modal-scrim";
-      m.innerHTML =
-        '<div class="ucmd-modal" role="dialog" aria-modal="true" aria-labelledby="ucmd-set-title">' +
-          '<header class="ucmd-modal-head"><span class="ucmd-modal-ico">' + ico(I.shield, 18) + "</span>" +
-            '<div><h3 id="ucmd-set-title">Page Access</h3><p>Choose who can open the Dispatch &amp; Sales Register and what they see.</p></div>' +
-            '<button type="button" class="ucmd-icon-btn is-sm ucmd-mx" aria-label="Close">' + ico(I.close, 15) + "</button></header>" +
-          '<div class="ucmd-levels">' +
-            '<div class="ucmd-level is-dispatch"><b>' + ico(I.truck, 14) + "Dispatches Only</b><span>Store &amp; Dispatch team. Sales Invoices stay hidden.</span></div>" +
-            '<div class="ucmd-level is-sales"><b>' + ico(I.invoice, 14) + "Sales Invoices + Sales Person</b><span>Accounts / sales. Dispatches stay hidden.</span></div>" +
-            '<div class="ucmd-level is-full"><b>' + ico(I.shield, 14) + "Full Access</b><span>Sees Dispatches, Sales Invoices and Sales Person.</span></div>" +
-            '<div class="ucmd-level is-admin"><b>' + ico(I.shield, 14) + "System Manager</b><span>Always has full access and can open these settings.</span></div>" +
-          "</div>" +
-          '<div class="ucmd-add">' +
-            '<div class="ucmd-add-user" id="ucmd-add-user"></div>' +
-            '<div class="ucmd-add-level" id="ucmd-add-level"></div>' +
-            '<button type="button" class="ucmd-btn is-primary" id="ucmd-add-btn">Grant access</button>' +
-          "</div>" +
-          '<div class="ucmd-ulist" id="ucmd-ulist"><div class="ucmd-empty"><span class="ucmd-spin"></span>Loading users…</div></div>' +
-          '<footer class="ucmd-modal-foot">Saved as roles on each user: <code>UCM Dispatch Viewer</code> = Dispatches, <code>UCM Invoice Viewer</code> = Sales Invoices + Sales Person, both = Full access.</footer>' +
-        "</div>";
-      d.body.appendChild(m);
-      m.addEventListener("click", function (e) { if (e.target === m || e.target.closest(".ucmd-mx")) closeSettings(); });
-      ST.addDD = makeDD($("#ucmd-add-user"), {
-        search: true, placeholder: "Add user — name or email",
-        get: function () { return ST.pick; },
-        display: function (v) { var c = ST.candidates.filter(function (x) { return x.user === v; })[0]; return c ? c.full_name : (ST.typed || ""); },
-        type: function (t) { ST.typed = t; ST.pick = ""; },
-        options: function (q) {
-          var has = {}; ST.users.forEach(function (u) { has[u.user] = 1; });
-          return ST.candidates.filter(function (c) { return !has[c.user] && (!q || lc(c.full_name).indexOf(q) >= 0 || lc(c.user).indexOf(q) >= 0); })
-            .map(function (c) { return { v: c.user, l: c.full_name, sub: c.user }; });
-        },
-        pick: function (v) { ST.pick = v || ""; ST.typed = ""; }
-      });
-      ST.levelDD = makeDD($("#ucmd-add-level"), {
-        search: false, clearable: false,
-        get: function () { return ST.addLevel; },
-        display: function (v) { return LEVEL_TXT[v] || ""; },
-        options: function () { return LEVEL_OPTS.map(function (o) { return { v: o[0], l: o[1] }; }); },
-        pick: function (v) { if (v) ST.addLevel = v; }
-      });
-      $("#ucmd-add-btn").addEventListener("click", function () {
-        var u = ST.pick ? { user: ST.pick } : resolveUser(ST.typed || "");
-        if (!u) { toast("Pick a user from the list", true); return; }
-        setLevel(u.user, ST.addLevel, function () { ST.pick = ""; ST.typed = ""; ST.addDD.sync(); });
-      });
-      $("#ucmd-ulist").addEventListener("click", function (e) {
-        var b = e.target.closest("[data-remove]"); if (b) setLevel(b.getAttribute("data-remove"), "none");
-      });
-    }
-    m.classList.add("on");
-    api(API_ACCESS, { action: "list" }).then(gotUsers).catch(function (err) {
-      $("#ucmd-ulist").innerHTML = '<div class="ucmd-error"><b>Could not load users.</b> ' + esc(cleanMsg(err)) +
-        "<div>Check that the Server Script <code>" + API_ACCESS + "</code> is saved and enabled.</div></div>";
-    });
-  }
-  function closeSettings() { var m = $("#ucmd-settings"); if (m) m.classList.remove("on"); }
-  function resolveUser(raw) {
-    if (!raw) return null;
-    var l = lc(raw);
-    return ST.candidates.filter(function (c) { return lc(c.user) === l; })[0] ||
-      ST.candidates.filter(function (c) { return lc(c.full_name) === l; })[0] ||
-      ST.candidates.filter(function (c) { return lc(c.full_name + " (" + c.user + ")") === l; })[0] || null;
-  }
-  function gotUsers(m) {
-    ST.users = (m && m.users) || []; ST.candidates = (m && m.candidates) || [];
-    var has = {}; ST.users.forEach(function (u) { has[u.user] = 1; });
-    var counts = { admin: 0, full: 0, dispatch: 0, sales: 0 };
-    ST.users.forEach(function (u) { counts[u.level] = (counts[u.level] || 0) + 1; });
-    var host = $("#ucmd-ulist");
-    if (!ST.users.length) { host.innerHTML = '<div class="ucmd-mini-empty">No users yet.</div>'; return; }
-    host.innerHTML =
-      '<div class="ucmd-ulist-head">' + ST.users.length + " users with access <span>" + counts.dispatch + " Dispatches · " + counts.sales + " Invoices · " + counts.full + " full · " + counts.admin + " system managers</span></div>" +
-      ST.users.map(function (u) {
-        var admin = u.level === "admin";
-        return '<div class="ucmd-urow' + (u.enabled ? "" : " is-off") + '">' +
-          '<span class="ucmd-av is-' + u.level + '">' + esc(initials(u.full_name)) + "</span>" +
-          '<span class="ucmd-uname"><b>' + esc(u.full_name) + (u.user === S.me ? ' <em>you</em>' : "") + (u.enabled ? "" : " <em>disabled</em>") + "</b><small>" + esc(u.user) + "</small></span>" +
-          (admin
-            ? '<span class="ucmd-lvl is-admin">' + ico(I.lock, 12) + "System Manager</span><span class=\"ucmd-rm-ph\"></span>"
-            : '<div class="ucmd-lvl-dd is-' + u.level + '" data-user="' + esc(u.user) + '" data-level="' + u.level + '"></div>' +
-              '<button type="button" class="ucmd-icon-btn is-sm is-danger" data-remove="' + esc(u.user) + '" title="Remove access">' + ico(I.trash, 14) + "</button>") +
-        "</div>";
-      }).join("");
-    $$(".ucmd-lvl-dd", host).forEach(function (el) {
-      var user = el.getAttribute("data-user"), lvl = el.getAttribute("data-level");
-      makeDD(el, {
-        search: false, clearable: false,
-        get: function () { return lvl; },
-        display: function (v) { return LEVEL_TXT[v] || ""; },
-        options: function () { return LEVEL_OPTS.map(function (o) { return { v: o[0], l: o[1] }; }); },
-        pick: function (v) { if (v && v !== lvl) setLevel(user, v); }
-      });
-    });
-  }
-  function setLevel(user, level, done) {
-    if (ST.busy) return; ST.busy = true;
-    var modal = $("#ucmd-settings .ucmd-modal"); modal.classList.add("is-busy");
-    api(API_ACCESS, { action: "set", user: user, level: level }).then(function (m) {
-      ST.busy = false; modal.classList.remove("is-busy");
-      gotUsers(m);
-      toast(level === "none" ? "Access removed" : "Saved · " + LEVEL_TXT[level]);
-      if (done) done();
-    }).catch(function (err) {
-      ST.busy = false; modal.classList.remove("is-busy");
-      toast(cleanMsg(err), true);
-      api(API_ACCESS, { action: "list" }).then(gotUsers).catch(function () { /* ignore */ });
-    });
-  }
-
-
-  /* ═════════════════════════ Kal ke DRAFT dispatches (page khulte hi) ═════════════════════════ */
-  function checkYesterdayDrafts() {
-    if (!canView("dispatch")) return;
-    var y = periodRange("yesterday")[0], key = "dispatch|" + y + "|" + y;
-    var got = function (rows) {
-      S.cache[key] = rows;
-      var docs = {}, order = [];
-      rows.forEach(function (r) {
-        if (r.status !== "Draft") return;
-        if (!docs[r.name]) { docs[r.name] = { name: r.name, party: r.customer_name, type: r.order_type, by: r.order_by, qty: 0, lines: 0, date: r.posting_date }; order.push(docs[r.name]); }
-        docs[r.name].qty += r.qty; docs[r.name].lines++;
-      });
-      if (order.length) showDraftAlert(order, y);
-    };
-    if (S.cache[key]) { got(S.cache[key]); return; }
-    api(API_DATA, { source: "Delivery Note", from_date: y, to_date: y }).then(function (m) { got((m && m.rows) || []); }).catch(function () { /* chup-chaap */ });
-  }
-  function showDraftAlert(list, y) {
-    var m = $("#ucmd-drafts");
-    if (!m) { m = d.createElement("div"); m.id = "ucmd-drafts"; m.className = "ucmd-modal-scrim"; d.body.appendChild(m); }
-    m.innerHTML =
-      '<div class="ucmd-modal ucmd-draft-modal" role="alertdialog" aria-modal="true" aria-labelledby="ucmd-dr-title">' +
-        '<header class="ucmd-draft-head">' +
-          '<span class="ucmd-draft-ico">' + ico('<path d="M12 3l9.5 16.5h-19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r=".9" fill="currentColor" stroke="none"/>', 20) + "</span>" +
-          '<div><div class="ucmd-draft-kicker">Action Needed</div>' +
-          '<h3 id="ucmd-dr-title">' + list.length + " Dispatch" + (list.length === 1 ? " is" : "es are") + " still in Draft</h3>" +
-          "<p>These Delivery Notes from <b>yesterday, " + esc(longDate(y)) + "</b> have not been submitted yet. Please check and submit them.</p></div>" +
-          '<button type="button" class="ucmd-icon-btn is-sm ucmd-dx" aria-label="Close">' + ico(I.close, 15) + "</button>" +
-        "</header>" +
-        '<div class="ucmd-draft-body"><table class="ucmd-mtable"><thead><tr><th>#</th><th>Delivery Note</th><th>Party Name</th><th>Type</th><th>Sales Person</th><th class="c-num">Qty</th></tr></thead><tbody>' +
-          list.map(function (x, i) {
-            return '<tr><td class="c-muted">' + (i + 1) + '</td>' +
-              '<td><a href="/app/delivery-note/' + encodeURIComponent(x.name) + '" target="_blank" rel="noopener" class="ucmd-draft-link">' + esc(x.name) + " " + ico('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 11) + "</a></td>" +
-              "<td><b>" + esc(x.party) + "</b></td>" +
-              "<td>" + (x.type ? '<span class="ucmd-type ' + (x.type === "Ultra" ? "is-ultra" : "is-lb") + '">' + esc(x.type) + "</span>" : "") + "</td>" +
-              "<td>" + esc(x.by || "") + "</td>" +
-              '<td class="c-num">' + qtyFmt(x.qty) + '<small class="ucmd-draft-lines"> · ' + x.lines + " item" + (x.lines === 1 ? "" : "s") + "</small></td></tr>";
-          }).join("") + "</tbody></table></div>" +
-        '<footer class="ucmd-draft-foot">' +
-          '<button type="button" class="ucmd-btn" id="ucmd-draft-close">Close</button>' +
-          '<button type="button" class="ucmd-btn is-primary" id="ucmd-draft-show">Show in Register</button>' +
-        "</footer>" +
-      "</div>";
-    var close = function () { m.classList.remove("on"); };
-    m.onclick = function (e) { if (e.target === m || e.target.closest(".ucmd-dx") || e.target.id === "ucmd-draft-close") close(); };
-    $("#ucmd-draft-show").addEventListener("click", function () {
-      close();
-      S.period = "yesterday"; S.from = y; S.to = y;
-      $("#ucmd-from").value = y; $("#ucmd-to").value = y; markPeriod();
-      S.f.status = "Draft"; if (FD.status) FD.status.sync();
-      if (S.view !== "dispatch") setView("dispatch"); else load();
-    });
-    requestAnimationFrame(function () { m.classList.add("on"); });
-  }
-
-  /* ═════════════════════════ BOOT ═════════════════════════ */
-  function boot() {
-    var root = $("#ucm-dsr");
-    if (!root || root.getAttribute("data-ready")) return;
-    root.setAttribute("data-ready", "1");
-    if (isGuest()) { renderGate(root, "guest"); return; }
-    root.className = "ucmd-root is-checking";
-    root.innerHTML = '<div class="ucmd-checking"><span class="ucmd-spin"></span>Checking access…</div>';
-    api(API_DATA, { check_access: 1 }).then(function (m) {
-      if (!m || !m.access) { renderGate(root, "denied"); return; }
-      S.access = m.access; S.isAdmin = !!m.is_admin; S.me = m.user; S.meName = m.full_name;
-      buildShell(root);
-      try { mergeNavbar(); } catch (e) { console.warn("[UCM] navbar merge skipped", e); }
-      var want = (location.hash || "").replace("#", "");
-      setView((want === "sales" || want === "persons") && canView(want) ? want : (canView("dispatch") ? "dispatch" : "sales"));
-      setTimeout(checkYesterdayDrafts, 400);
-    }).catch(function (err) {
-      if (isNoAccess(err)) { renderGate(root, "denied"); return; }
-      root.className = "ucmd-root";
-      root.innerHTML = '<div class="ucmd-error" style="margin:40px auto;max-width:640px"><b>Could not open the register.</b> ' + esc(cleanMsg(err)) +
-        "<div>Check that the Server Script <code>" + API_DATA + "</code> is saved and enabled.</div></div>";
-    });
-  }
-  if (d.readyState === "loading") d.addEventListener("DOMContentLoaded", boot); else boot();
-  w.addEventListener("load", boot);
-})(window);
+/* ═════ Freight tab ═════ */
+.ucmd-fpaid { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.ucmd-fpaid.is-ok { background: #e8f5e9; color: #2e7d32; }
+.ucmd-fpaid.is-warn { background: #fff3e0; color: #b8560c; }
+.ucmd-warn { color: #b8560c; font-weight: 600; }
+#ucm-dsr .ucmd-ftable td.c-trn { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #475569; }
+#ucm-dsr .ucmd-ftable td.c-paid { white-space: nowrap; }
+#ucm-dsr .ucmd-ftable tr.is-nofr td.c-doc a { color: #b45309; }
+#ucm-dsr .ucmd-item-txt { flex: 1 1 auto; min-width: 0; color: #334155; line-height: 1.35; }
+@media (max-width: 700px) { #ucm-dsr .ucmd-view { font-size: 12px; padding: 0 2px; } }
