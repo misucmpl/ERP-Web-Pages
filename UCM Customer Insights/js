@@ -1,0 +1,884 @@
+/* ============================================================
+   UCMPL \u00b7 Customer Insights \u2014 Web Page JS
+   Web Page \u2192 Javascript box mein poora paste karein.
+   API (Server Script) : ucm_customer_insights  (access + 3 reports + settings)
+   Slider APIs (pehle se bane hue):
+     ucm_customer_acquisition_detail  \u00b7 ucm_customer_insights_detail  \u00b7 ucm_territory_till_date_summary
+   ============================================================ */
+(function () {
+  "use strict";
+  var d = document, w = window;
+  var API = "/api/method/ucm_customer_insights";
+  var ACQ_API = "/api/method/ucm_customer_acquisition_detail";
+  var CUST_API = "/api/method/ucm_customer_insights_detail";
+  var TERR_API = "/api/method/ucm_territory_till_date_summary";
+
+  var root = d.getElementById("ucm-ci");
+  if (!root) return;
+
+  /* --------- helpers --------- */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function $(s, el) { return (el || d).querySelector(s); }
+  function $$(s, el) { return Array.prototype.slice.call((el || d).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  function n0(v) { return nf0.format(Math.round(+v || 0)); }
+  function inr(v) { return "\u20b9" + nf0.format(Math.round(+v || 0)); }
+  function lakh(v) {
+    v = +v || 0; var a = Math.abs(v);
+    if (a >= 1e7) return "\u20b9" + (v / 1e7).toFixed(2).replace(/\.?0+$/, "") + " Cr";
+    if (a >= 1e5) return "\u20b9" + (v / 1e5).toFixed(2).replace(/\.?0+$/, "") + " L";
+    return inr(v);
+  }
+  function pct(v, t) { return t ? Math.round(v / t * 1000) / 10 : 0; }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
+  function parseIso(s) { var p = String(s || "").split(" ")[0].split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+  function nice(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
+  function initials(s) { var p = String(s || "?").trim().split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+  function plain(html) { var t = d.createElement("div"); t.innerHTML = String(html == null ? "" : html).replace(/<\/p>|<br\s*\/?>/gi, "\n"); return (t.textContent || "").replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim(); }
+  function slug(dt) { return String(dt || "").toLowerCase().replace(/ /g, "-"); }
+  function docLink(dt, name, label) {
+    if (!name) return "\u2013";
+    return '<a href="/app/' + slug(dt) + "/" + encodeURIComponent(name) + '" target="_blank" rel="noopener">' + esc(label || name) + "</a>";
+  }
+  function cookie(k) { var m = d.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; }
+  function store(k, v) { try { if (v === undefined) return w.localStorage.getItem("ucm-ci-" + k); w.localStorage.setItem("ucm-ci-" + k, v); } catch (e) { return null; } }
+  function lock(on) { d.documentElement.style.overflow = on ? "hidden" : ""; d.body.style.overflow = on ? "hidden" : ""; }
+  function saveFile(text, name, type) {
+    var blob = new Blob([text], { type: type });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+  function csvCell(v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function saveCSV(lines, name) { saveFile("\ufeff" + lines.map(function (r) { return r.map(csvCell).join(","); }).join("\r\n"), name, "text/csv;charset=utf-8"); }
+  function saveXLS(head, rows, name) {
+    var h = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1"><tr>' +
+      head.map(function (c) { return "<th>" + esc(c) + "</th>"; }).join("") + "</tr>" +
+      rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + esc(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</table></body></html>";
+    saveFile(h, name, "application/vnd.ms-excel");
+  }
+
+  var I = {
+    gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+    down: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    sort: '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6 6 6-6"/><path d="m6 9 6-6 6 6"/></svg>',
+    left: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+    right: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    plus: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>',
+    clock: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><circle cx="18" cy="15" r="4"/><path d="M18 13.5V15l1 1"/></svg>',
+    map: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/></svg>',
+    check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>'
+  };
+
+  async function call(url, params, method) {
+    var token = (w.frappe && w.frappe.csrf_token) || w.csrf_token || "";
+    var opts = { credentials: "same-origin", headers: { Accept: "application/json", "X-Frappe-CSRF-Token": token } };
+    if (method === "POST") { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(params); }
+    else url += "?" + Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k] == null ? "" : params[k]); }).join("&");
+    var r = await fetch(url, opts);
+    if (r.status === 401 || (r.status === 403 && !cookie("user_id"))) { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      var reason = "";
+      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script not found";
+      throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+    }
+    return j.message;
+  }
+  function api(params, method) { return call(API, params, method); }
+
+  /* --------- sections --------- */
+  var SECS = [
+    { k: "acquisition", label: "Acquisition", short: "Acquisition", icon: I.plus, title: "New, repeat and sample customers month by month" },
+    { k: "inactive", label: "Inactive Customers", short: "Inactive", icon: I.clock, title: "Customers with no order for the chosen number of days" },
+    { k: "territory", label: "Territory", short: "Territory", icon: I.map, title: "State and city reach of completed sales" }
+  ];
+  var REP_LABEL = { acquisition: "Acquisition", inactive: "Inactive", territory: "Territory" };
+
+  var AQ_MIN = "2026-07-01";   /* Acquisition July 2026 se dikhana hai (pehle ke months hide) */
+  function fyFrom(fy) { var f = fy + "-04-01"; return f < AQ_MIN ? AQ_MIN : f; }
+  function fyOf(dt) { var y = dt.getMonth() >= 3 ? dt.getFullYear() : dt.getFullYear() - 1; return y; }
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var S = {
+    acc: null, sec: null, secs: [],
+    aq: { fy: fyOf(today), from: "", to: "", rows: null, seq: 0, err: "" },
+    inx: { type: "Sales Order", ig: "", days: 30, rows: null, overall: 0, counts: {}, card: "all", q: "", sort: null, seq: 0, groups: null, err: "" },
+    tr: { from: iso(new Date(today.getFullYear(), today.getMonth(), 1)), to: iso(today), sot: "Large Blow", states: null, till: null, tillErr: false, tab: "reach", seq: 0, err: "" }
+  };
+  S.aq.from = fyFrom(S.aq.fy); S.aq.to = (S.aq.fy + 1) + "-03-31";
+  (function restore() {
+    var t = store("in-type"); if (t === "Sales Invoice") S.inx.type = t;
+    var dd = parseInt(store("in-days"), 10); if (dd > 0 && dd <= 1000) S.inx.days = dd;
+    var so = store("tr-sot"); if (so === "Ultra") S.tr.sot = so;
+    var tb = store("tr-tab"); if (tb === "category") S.tr.tab = tb;
+  })();
+
+  function secButtons() {
+    return SECS.map(function (s) { return '<button type="button" role="tab" data-sec="' + s.k + '" title="' + esc(s.title) + '">' + s.icon + '<span class="l">' + esc(s.label) + '</span><span class="s">' + esc(s.short) + "</span></button>"; }).join("");
+  }
+
+  /* --------- shell --------- */
+  root.innerHTML =
+    '<div class="ci-gate" id="ci-gate"><div class="ci-gate-card"><span class="ci-spin"></span><p>Checking access\u2026</p></div></div>' +
+    '<div class="ci-app" id="ci-app" hidden>' +
+      '<header class="ci-head" id="ci-head">' +
+        '<div class="ci-title"><h1>Customer Insights</h1><p class="ci-sub"></p></div>' +
+        '<div class="ci-sec" role="tablist">' + secButtons() + "</div>" +
+        '<div class="ci-head-act" id="ci-act">' +
+          '<button type="button" class="ci-ibtn" id="ci-print" title="Print">' + I.print + "</button>" +
+          '<button type="button" class="ci-ibtn" id="ci-refresh" title="Refresh">' + I.refresh + "</button>" +
+          '<button type="button" class="ci-ibtn is-gear" id="ci-gear" title="Access settings" hidden>' + I.gear + "</button>" +
+        "</div>" +
+      "</header>" +
+      '<div class="ci-secbar"><div class="ci-sec is-bar" role="tablist">' + secButtons() + "</div></div>" +
+
+      /* ---- Acquisition ---- */
+      '<section class="ci-band" data-band="acquisition" hidden><div class="ci-filters">' +
+        '<div class="ci-f"><span>Financial Year</span><div class="ci-nav">' +
+          '<button type="button" class="ci-nbtn" id="ci-aq-prev" title="Previous year">' + I.left + '</button><b id="ci-aq-fy"></b>' +
+          '<button type="button" class="ci-nbtn" id="ci-aq-next" title="Next year">' + I.right + "</button></div></div>" +
+        '<div class="ci-f"><span>Period</span><div class="ci-dates"><input type="date" id="ci-aq-from"><i>to</i><input type="date" id="ci-aq-to"></div></div>' +
+        '<p class="ci-note">Large Blow and Ultra orders only \u00b7 click a number to see the customers</p>' +
+      "</div></section>" +
+      '<main class="ci-main" data-main="acquisition" hidden></main>' +
+
+      /* ---- Inactive ---- */
+      '<section class="ci-band" data-band="inactive" hidden><div class="ci-filters">' +
+        '<div class="ci-f"><span>Based on</span><div class="ci-pills" id="ci-in-type">' +
+          '<button type="button" data-v="Sales Order">Sales Order</button><button type="button" data-v="Sales Invoice">Sales Invoice</button></div></div>' +
+        '<div class="ci-f"><span>Item Group</span><select id="ci-in-ig"><option value="">All Item Groups</option></select></div>' +
+        '<div class="ci-f"><span>No order for</span><div class="ci-days"><div class="ci-pills" id="ci-in-chips">' +
+          [30, 60, 90, 180].map(function (n) { return '<button type="button" data-d="' + n + '">' + n + "d</button>"; }).join("") + "</div>" +
+          '<label class="ci-dayin"><input type="number" id="ci-in-days" min="1" max="1000" inputmode="numeric"><i>days</i></label></div></div>' +
+      "</div></section>" +
+      '<main class="ci-main" data-main="inactive" hidden></main>' +
+
+      /* ---- Territory ---- */
+      '<section class="ci-band" data-band="territory" hidden><div class="ci-filters">' +
+        '<div class="ci-f"><span>Month</span><div class="ci-nav">' +
+          '<button type="button" class="ci-nbtn" id="ci-tr-prev" title="Previous month">' + I.left + '</button><b id="ci-tr-mon"></b>' +
+          '<button type="button" class="ci-nbtn" id="ci-tr-next" title="Next month">' + I.right + "</button></div></div>" +
+        '<div class="ci-f"><span>Period</span><div class="ci-dates"><input type="date" id="ci-tr-from"><i>to</i><input type="date" id="ci-tr-to"></div></div>' +
+        '<div class="ci-f"><span>Sales Order Type</span><div class="ci-pills" id="ci-tr-sot">' +
+          '<button type="button" data-v="Large Blow">Large Blow</button><button type="button" data-v="Ultra">Ultra</button></div></div>' +
+      "</div></section>" +
+      '<main class="ci-main" data-main="territory" hidden></main>' +
+    "</div>" +
+    '<div class="ci-scrim" id="ci-scrim"></div>' +
+    '<aside class="ci-drawer" id="ci-drawer" aria-hidden="true"></aside>' +
+    '<div class="ci-modal-bg" id="ci-set" hidden><div class="ci-modal" role="dialog" aria-label="Access settings"></div></div>';
+
+  function mainEl(k) { return $('[data-main="' + k + '"]'); }
+  function loadingHTML() { return '<div class="ci-empty"><span class="ci-spin"></span>Loading\u2026</div>'; }
+  function errorHTML(msg) { return '<div class="ci-error"><b>Could not load the report.</b> ' + esc(msg) + "</div>"; }
+  function busy(on) { root.classList.toggle("is-busy", !!on); }
+  function kpi(label, val, sub, cls, key, on) {
+    return '<button type="button" class="ci-kpi' + (cls ? " " + cls : "") + (key ? " is-click" : "") + (on ? " on" : "") + '"' + (key ? ' data-card="' + key + '"' : " disabled") + ">" +
+      "<span>" + esc(label) + "</span><b>" + val + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</button>";
+  }
+  function bar(p) { return '<span class="ci-bar"><i style="width:' + Math.max(2, Math.min(100, p)) + '%"></i></span>'; }
+
+  /* ===================================================================
+     1. ACQUISITION
+     =================================================================== */
+  function syncAqBand() {
+    $("#ci-aq-fy").textContent = "FY " + S.aq.fy + "-" + String(S.aq.fy + 1).slice(2);
+    $("#ci-aq-from").value = S.aq.from; $("#ci-aq-to").value = S.aq.to;
+    $("#ci-aq-from").min = AQ_MIN; $("#ci-aq-to").min = AQ_MIN;
+    $("#ci-aq-prev").disabled = S.aq.fy + "-03-31" < AQ_MIN;
+  }
+  async function loadAq() {
+    var my = ++S.aq.seq, el = mainEl("acquisition");
+    busy(true); if (!S.aq.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "acquisition", from_date: S.aq.from, to_date: S.aq.to });
+      if (!m || my !== S.aq.seq) return;
+      S.aq.rows = m.rows || []; S.aq.err = "";
+      renderAq();
+    } catch (e) { if (my !== S.aq.seq) return; S.aq.rows = null; S.aq.err = e.message; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.aq.seq) { busy(false); el.classList.remove("is-loading"); } }
+  }
+  function renderAq() {
+    var rows = (S.aq.rows || []).filter(function (r) { return r.year + "-" + pad(r.month) + "-01" >= AQ_MIN; }), t = { n: 0, r: 0, s: 0, tot: 0, amt: 0 }, cur = new Date(today.getFullYear(), today.getMonth(), 1);
+    rows.forEach(function (r) { t.n += r.new_customers; t.r += r.repeat_customers; t.s += r.sample_customers; t.tot += r.total_customers; t.amt += r.sales; });
+    var best = null; rows.forEach(function (r) { if (!best || r.new_customers > best.new_customers) best = r; });
+    var html = '<div class="ci-kpis k5">' +
+      kpi("New Customers", n0(t.n), best && best.new_customers ? "Best: " + esc(MON[best.month - 1] + " " + best.year) + " (" + n0(best.new_customers) + ")" : "Sum of months", "is-pri") +
+      kpi("Repeat Customers", n0(t.r), t.tot ? pct(t.r, t.tot) + "% of buyers" : "&nbsp;", "is-blue") +
+      kpi("Sample Customers", n0(t.s), "Sample orders only", "is-violet") +
+      kpi("Total Buyers", n0(t.tot), "New + Repeat (sum of months)", "is-dark") +
+      kpi("Order Value", lakh(t.amt), "Excluding sample orders", "is-green") +
+      "</div>";
+    html += '<section class="ci-reg"><div class="ci-reg-h"><div class="ci-reg-t"><h2>Month wise acquisition</h2><p>' + esc(nice(S.aq.from)) + " \u2013 " + esc(nice(S.aq.to)) + "</p></div>" +
+      '<div class="ci-reg-tools"><span class="ci-legend"><i class="lg-n"></i>New<i class="lg-r"></i>Repeat</span><button type="button" class="ci-ibtn" id="ci-aq-csv" title="Download CSV">' + I.down + "</button></div></div>";
+    if (!rows.length) html += '<div class="ci-empty">No months in this period.</div>';
+    else {
+      html += '<div class="ci-tw"><table class="ci-t ci-aq-t"><thead><tr><th>Month</th><th class="n">New</th><th class="n">Repeat</th><th class="n">Sample</th><th class="n">Total</th><th class="n">Order Value</th><th class="mix">New vs Repeat</th></tr></thead><tbody>';
+      rows.forEach(function (r) {
+        var fut = new Date(r.year, r.month - 1, 1) > cur;
+        function cell(v, type) { return fut ? '<td class="n mut">\u2013</td>' : (v ? '<td class="n"><button type="button" class="ci-num t-' + type + '" data-y="' + r.year + '" data-m="' + r.month + '" data-t="' + type + '">' + n0(v) + "</button></td>" : '<td class="n mut">0</td>'); }
+        var np = r.total_customers ? r.new_customers / r.total_customers * 100 : 0;
+        html += "<tr" + (fut ? ' class="fut"' : "") + '><td class="nm">' + esc(MONTH[r.month - 1]) + " <small>" + r.year + "</small></td>" +
+          cell(r.new_customers, "new") + cell(r.repeat_customers, "repeat") + cell(r.sample_customers, "sample") +
+          '<td class="n"><b>' + (fut ? "\u2013" : n0(r.total_customers)) + "</b></td>" +
+          '<td class="n">' + (fut ? "\u2013" : inr(r.sales)) + "</td>" +
+          '<td class="mix">' + (fut || !r.total_customers ? "" : '<span class="ci-mix"><i class="n" style="width:' + np + '%"></i><i class="r" style="width:' + (100 - np) + '%"></i></span><em>' + Math.round(np) + "% new</em>") + "</td></tr>";
+      });
+      html += '</tbody><tfoot><tr><td>Total</td><td class="n">' + n0(t.n) + '</td><td class="n">' + n0(t.r) + '</td><td class="n">' + n0(t.s) + '</td><td class="n">' + n0(t.tot) + '</td><td class="n">' + inr(t.amt) + "</td><td></td></tr></tfoot></table></div>";
+    }
+    html += "</section>";
+    mainEl("acquisition").innerHTML = html;
+  }
+  function aqCSV() {
+    var out = [["Year", "Month", "New Customers", "Repeat Customers", "Sample", "Total", "Order Value"]];
+    (S.aq.rows || []).filter(function (r) { return r.year + "-" + pad(r.month) + "-01" >= AQ_MIN; }).forEach(function (r) { out.push([r.year, MONTH[r.month - 1], r.new_customers, r.repeat_customers, r.sample_customers, r.total_customers, Math.round(r.sales)]); });
+    saveCSV(out, "customer-acquisition-" + S.aq.from + "-to-" + S.aq.to + ".csv");
+  }
+
+  /* acquisition slider */
+  var AQD = { res: null, tab: "all", q: "", y: 0, m: 0, t: "new" };
+  var AQ_TYPE = { "new": "New Customers", repeat: "Repeat Customers", sample: "Sample Customers" };
+  async function openAq(y, m, t) {
+    AQD.res = null; AQD.tab = "all"; AQD.q = ""; AQD.y = y; AQD.m = m; AQD.t = t;
+    var seq = openDrawer(AQ_TYPE[t], MONTH[m - 1] + " " + y + " \u00b7 Large Blow & Ultra", "", "is-" + t);
+    try {
+      var res = await call(ACQ_API, { year: y, month: m, company: "", customer_type: t });
+      if (seq !== DR.seq) return;
+      AQD.res = res || {}; drawAq();
+    } catch (e) { if (seq !== DR.seq) return; $("#ci-dr-body").innerHTML = errorHTML(e.message + " (ucm_customer_acquisition_detail)"); }
+  }
+  function aqList(key) { var x = AQD.res && AQD.res[key]; return (x && x.customers) || []; }
+  function drawAq() {
+    var tabs = [["all", "All"], ["ultra", "Ultra"], ["large_blow", "Large Blow"]];
+    var all = aqList(AQD.tab), q = AQD.q.toLowerCase();
+    var list = all.filter(function (c) { return !q || ((c.customer_id || "") + " " + (c.customer_name || "")).toLowerCase().indexOf(q) >= 0; });
+    var tot = 0; list.forEach(function (c) { tot += +c.total_sales || 0; });
+    var body = '<div class="ci-dtabs">' + tabs.map(function (t) { return '<button type="button" data-aqt="' + t[0] + '"' + (AQD.tab === t[0] ? ' class="on"' : "") + ">" + t[1] + "<em>" + aqList(t[0]).length + "</em></button>"; }).join("") + "</div>" +
+      '<div class="ci-dtools"><label class="ci-search">' + I.search + '<input type="search" id="ci-aq-q" placeholder="Search customer\u2026" value="' + esc(AQD.q) + '"></label>' +
+      '<button type="button" class="ci-btn is-ghost" id="ci-aq-xls">' + I.down + "<span>Excel</span></button></div>";
+    if (!list.length) body += '<div class="ci-empty">' + (all.length ? "No customer matches the search." : "No customers in this list.") + "</div>";
+    else {
+      body += '<table class="ci-t ci-dt"><thead><tr><th class="i">#</th><th>Customer</th><th class="n">Orders</th><th class="n">Sales</th></tr></thead><tbody>' +
+        list.map(function (c, i) {
+          return '<tr><td class="i">' + (i + 1) + '</td><td class="nm">' + (S.acc.access.inactive ? '<button type="button" class="ci-lnk" data-cust="' + esc(c.customer_id) + '" data-cn="' + esc(c.customer_name) + '">' + esc(c.customer_name || c.customer_id) + "</button>" : esc(c.customer_name || c.customer_id)) +
+            "<small>" + docLink("Customer", c.customer_id) + "</small></td>" +
+            '<td class="n">' + n0(c.order_count) + '</td><td class="n"><b>' + inr(c.total_sales) + "</b></td></tr>";
+        }).join("") +
+        '</tbody><tfoot><tr><td></td><td>Total \u00b7 ' + list.length + ' customers</td><td></td><td class="n">' + inr(tot) + "</td></tr></tfoot></table>";
+    }
+    $("#ci-dr-body").innerHTML = body;
+    var qi = $("#ci-aq-q"); if (qi && AQD.focus) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+  }
+  function aqXLS() {
+    var tabs = { all: "All", ultra: "Ultra", large_blow: "Large Blow" }, rows = [], tot = 0;
+    aqList(AQD.tab).forEach(function (c) { tot += +c.total_sales || 0; rows.push([c.customer_id || "", c.customer_name || "", c.order_count || 0, Math.round(c.total_sales || 0)]); });
+    rows.push(["", "Total", rows.length, Math.round(tot)]);
+    saveXLS(["Customer ID", "Customer Name", "Orders", "Sales"], rows, (AQ_TYPE[AQD.t] + " " + MONTH[AQD.m - 1] + " " + AQD.y + " " + tabs[AQD.tab]).toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".xls");
+  }
+
+  /* ===================================================================
+     2. INACTIVE CUSTOMERS
+     =================================================================== */
+  function syncInBand() {
+    $$("#ci-in-type button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === S.inx.type); });
+    $$("#ci-in-chips button").forEach(function (b) { b.classList.toggle("on", +b.getAttribute("data-d") === S.inx.days); });
+    $("#ci-in-days").value = S.inx.days;
+    $("#ci-in-ig").value = S.inx.ig;
+  }
+  async function loadGroups() {
+    if (S.inx.groups) return;
+    try {
+      var g = await api({ action: "item_groups" }); S.inx.groups = g || [];
+      $("#ci-in-ig").innerHTML = '<option value="">All Item Groups</option>' + S.inx.groups.map(function (x) { return '<option value="' + esc(x) + '">' + esc(x) + "</option>"; }).join("");
+      $("#ci-in-ig").value = S.inx.ig;
+    } catch (e) { S.inx.groups = null; }
+  }
+  async function loadIn() {
+    var my = ++S.inx.seq, el = mainEl("inactive");
+    busy(true); if (!S.inx.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    loadGroups();
+    try {
+      var m = await api({ action: "inactive", transaction_type: S.inx.type, item_group: S.inx.ig, inactive_days: S.inx.days });
+      if (!m || my !== S.inx.seq) return;
+      S.inx.rows = m.rows || []; S.inx.overall = m.overall || 0; S.inx.counts = m.counts || {}; S.inx.floor = m.data_floor; S.inx.err = "";
+      renderIn();
+    } catch (e) { if (my !== S.inx.seq) return; S.inx.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.inx.seq) { busy(false); el.classList.remove("is-loading"); } }
+  }
+  var IN_CARDS = { all: "Inactive", ultra: "Ultra", large_blow: "Large Blow", others: "Others", no_gst: "Without GST" };
+  function inVisible() {
+    var q = S.inx.q.toLowerCase(), c = S.inx.card;
+    var list = (S.inx.rows || []).filter(function (r) {
+      if (c === "no_gst" && r.gst) return false;
+      if (c !== "all" && c !== "no_gst" && r.segment !== c) return false;
+      if (q && ([r.customer, r.customer_name, r.contact_no, r.city, r.state, r.item_group].join(" ").toLowerCase().indexOf(q) < 0)) return false;
+      return true;
+    });
+    var s = S.inx.sort;
+    if (s) list.sort(function (a, b) {
+      var x = a[s.k], y = b[s.k];
+      if (typeof x === "string" || typeof y === "string") { x = String(x || "").toLowerCase(); y = String(y || "").toLowerCase(); }
+      else { x = +x || 0; y = +y || 0; }
+      return (x < y ? -1 : x > y ? 1 : 0) * s.dir;
+    });
+    return list;
+  }
+  var IN_COLS = [
+    ["customer_name", "Customer", ""], ["contact_no", "Contact", ""], ["gst", "GST", "c"], ["number_of_orders", "Orders", "n"],
+    ["total_order_value", "Order Value", "n"], ["last_order_amount", "Last Order", "n"], ["last_order_date", "Last Date", ""],
+    ["days", "Days", "c"], ["item_group", "Item Group", ""], ["city", "City", ""], ["state", "State", ""]
+  ];
+  function daysPill(n) { return '<span class="ci-dp ' + (n >= 90 ? "hi" : n >= 60 ? "md" : "lo") + '">' + n0(n) + "d</span>"; }
+  function renderIn() {
+    var c = S.inx.counts, rows = S.inx.rows || [], k = S.inx.card;
+    var html = '<div class="ci-kpis k6">' +
+      kpi("Customers", n0(S.inx.overall), "Ordered since " + esc(nice(S.inx.floor)), "is-dark") +
+      kpi("Inactive", n0(rows.length), S.inx.overall ? pct(rows.length, S.inx.overall) + "% \u00b7 no order " + S.inx.days + "d+" : "No order " + S.inx.days + "d+", "is-pri", "all", k === "all") +
+      kpi("Ultra", n0(c.ultra), "Last order Ultra", "is-blue", "ultra", k === "ultra") +
+      kpi("Large Blow", n0(c.large_blow), "Last order Large Blow", "is-violet", "large_blow", k === "large_blow") +
+      kpi("Others", n0(c.others), "Other item groups", "is-green", "others", k === "others") +
+      kpi("Without GST", n0(c.no_gst), "No GSTIN on customer", "is-red", "no_gst", k === "no_gst") +
+      "</div>";
+    html += '<section class="ci-reg"><div class="ci-reg-h"><div class="ci-reg-t"><h2 id="ci-in-title"></h2><p id="ci-in-sub"></p></div>' +
+      '<div class="ci-reg-tools"><label class="ci-search">' + I.search + '<input type="search" id="ci-in-q" placeholder="Search customer, contact, city\u2026" value="' + esc(S.inx.q) + '"></label>' +
+      '<button type="button" class="ci-ibtn" id="ci-in-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="ci-tw" id="ci-in-tw"></div><div class="ci-mlist" id="ci-in-ml"></div></section>';
+    mainEl("inactive").innerHTML = html;
+    renderInTable();
+  }
+  function renderInTable() {
+    var list = inVisible(), s = S.inx.sort;
+    $("#ci-in-title").textContent = (S.inx.card === "all" ? "Inactive customers" : IN_CARDS[S.inx.card] + " \u00b7 inactive") + " (" + list.length + ")";
+    $("#ci-in-sub").textContent = S.inx.type + " \u00b7 no order for " + S.inx.days + "+ days" + (S.inx.ig ? " \u00b7 " + S.inx.ig : "") + " \u00b7 click a customer for details";
+    if (!list.length) { $("#ci-in-tw").innerHTML = '<div class="ci-empty">' + ((S.inx.rows || []).length ? "No customer matches this filter." : "No inactive customers \u2014 everyone ordered within " + S.inx.days + " days.") + "</div>"; $("#ci-in-ml").innerHTML = ""; return; }
+    var h = '<table class="ci-t ci-in-t"><thead><tr>' + IN_COLS.map(function (col) {
+      return '<th class="' + col[2] + '"><button type="button" data-sort="' + col[0] + '"' + (s && s.k === col[0] ? ' class="on"' : "") + ">" + col[1] + I.sort + "</button></th>";
+    }).join("") + "</tr></thead><tbody>";
+    list.forEach(function (r, i) {
+      h += '<tr data-i="' + i + '"><td class="nm"><button type="button" class="ci-lnk" data-cust="' + esc(r.customer) + '" data-cn="' + esc(r.customer_name) + '">' + esc(r.customer_name) + "</button><small>" + esc(r.customer) + "</small></td>" +
+        "<td>" + (r.contact_no ? '<a href="tel:' + esc(r.contact_no) + '">' + esc(r.contact_no) + "</a>" : '<span class="mut">\u2013</span>') + "</td>" +
+        '<td class="c">' + (r.gst ? '<span class="ci-gst ok">GST</span>' : '<span class="ci-gst no">No GST</span>') + "</td>" +
+        '<td class="n">' + n0(r.number_of_orders) + '</td><td class="n"><b>' + inr(r.total_order_value) + '</b></td><td class="n">' + inr(r.last_order_amount) + "</td>" +
+        "<td>" + esc(nice(r.last_order_date)) + '</td><td class="c">' + daysPill(r.days) + "</td>" +
+        '<td><span class="ci-ig s-' + r.segment + '">' + esc(r.item_group || "\u2013") + "</span></td><td>" + esc(r.city || "\u2013") + "</td><td>" + esc(r.state || "\u2013") + "</td></tr>";
+    });
+    $("#ci-in-tw").innerHTML = h + "</tbody></table>";
+    $("#ci-in-ml").innerHTML = list.map(function (r) {
+      return '<button type="button" class="ci-mcard" data-cust="' + esc(r.customer) + '" data-cn="' + esc(r.customer_name) + '"><div class="t"><b>' + esc(r.customer_name) + "</b>" + daysPill(r.days) + "</div>" +
+        '<div class="m"><span>' + esc([r.city, r.state].filter(Boolean).join(", ") || "\u2013") + "</span><span>" + (r.gst ? '<span class="ci-gst ok">GST</span>' : '<span class="ci-gst no">No GST</span>') + "</span></div>" +
+        '<div class="m"><span>' + n0(r.number_of_orders) + " orders \u00b7 " + inr(r.total_order_value) + "</span><span>Last " + esc(nice(r.last_order_date)) + "</span></div></button>";
+    }).join("");
+  }
+  function inCSV() {
+    var out = [["Customer ID", "Customer", "Contact", "GST", "Orders", "Order Value", "Last Order Amount", "Last Order Date", "Days", "Item Group", "City", "State"]];
+    inVisible().forEach(function (r) { out.push([r.customer, r.customer_name, r.contact_no, r.gst ? "Yes" : "No", r.number_of_orders, Math.round(r.total_order_value), Math.round(r.last_order_amount), r.last_order_date || "", r.days, r.item_group, r.city, r.state]); });
+    saveCSV(out, "inactive-customers-" + S.inx.days + "d.csv");
+  }
+
+  /* customer slider (ucm_customer_insights_detail) */
+  async function openCust(id, name) {
+    var seq = openDrawer(name || id, "Orders & customer details", "", "is-cust");
+    try {
+      var m = await call(CUST_API, { customer: id });
+      if (seq !== DR.seq) return;
+      drawCust(m || {});
+    } catch (e) { if (seq !== DR.seq) return; $("#ci-dr-body").innerHTML = errorHTML(e.message + " (ucm_customer_insights_detail)"); }
+  }
+  function drawCust(data) {
+    var cu = data.customer || {}, ad = data.address || null, orders = data.orders || [], comments = data.comments || [], att = data.attachments || [];
+    var so = {}, bySo = {};
+    orders.forEach(function (o) { if (o.so_name) so[o.so_name] = 1; });
+    att.forEach(function (a) { (bySo[a.so_name] = bySo[a.so_name] || []).push(a); });
+    var nSo = Object.keys(so).length;
+    if (cu.name) {
+      $("#ci-dr-h h3").textContent = cu.customer_name || cu.name;
+      $("#ci-dr-badge").innerHTML = cu.gstin ? '<span class="ci-gst ok big" title="' + esc(cu.gstin) + '">GST</span>' : '<span class="ci-gst no big">No GST</span>';
+    }
+    function info(l, v) { return '<div class="ci-info"><span>' + l + "</span><b>" + v + "</b></div>"; }
+    var h = '<div class="ci-infos">' +
+      info("Contact No", esc(cu.contact_no || cu.mobile_no || "\u2013")) +
+      info("Customer Type", esc(cu.customer_type || "\u2013")) +
+      info("City", esc((ad && ad.city) || "\u2013")) +
+      info("State", esc((ad && ad.state) || "\u2013")) +
+      info("Customer ID", docLink("Customer", cu.name)) +
+      info("Sales Orders", n0(nSo)) + "</div>";
+    if (cu.gstin) h += '<div class="ci-line"><span>GSTIN</span><b>' + esc(cu.gstin) + "</b></div>";
+    if (ad) {
+      var parts = [ad.address_line1, ad.address_line2, [ad.country, ad.pincode].filter(Boolean).join(" ")].filter(Boolean);
+      if (parts.length) h += '<section class="ci-ps"><h4>Street Address</h4><p class="ci-addr">' + esc(parts.join(", ")) + "</p></section>";
+    }
+    h += '<section class="ci-ps"><h4>Order Items <em>' + orders.length + "</em> \u00b7 " + nSo + " Sales Order" + (nSo === 1 ? "" : "s") + "</h4>";
+    if (!orders.length) h += '<div class="ci-none">No orders found for this customer.</div>';
+    else h += '<table class="ci-t ci-dt"><thead><tr><th>Sales Order</th><th>Date</th><th>Status</th><th>Item</th><th class="n">Qty</th></tr></thead><tbody>' +
+      orders.map(function (o) {
+        var po = (bySo[o.so_name] || []).map(function (a, i, arr) { return '<a class="ci-po" href="' + esc(a.file_url) + '" target="_blank" rel="noopener" title="' + esc(a.file_name || "") + '">PO' + (arr.length > 1 ? " " + (i + 1) : "") + "</a>"; }).join("");
+        return "<tr><td>" + docLink("Sales Order", o.so_name) + po + "</td><td>" + esc(nice(o.transaction_date)) + '</td><td><span class="ci-st">' + esc(o.status || "\u2013") + "</span></td><td>" + esc(o.item_name || o.item_code || "\u2013") + '</td><td class="n">' + n0(o.qty) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+    h += "</section>";
+    h += '<section class="ci-ps"><h4>Customer Interaction <em>' + comments.length + "</em></h4>";
+    if (!comments.length) h += '<div class="ci-none">No comments on this customer\'s orders.</div>';
+    else h += '<div class="ci-cmts">' + comments.map(function (c) {
+      var by = String(c.comment_by || "").split("@")[0].split(/[ ._]/)[0];
+      return '<div class="ci-cmt"><div class="mt">' + docLink("Sales Order", c.so_name) + "<b>" + esc(by ? by.charAt(0).toUpperCase() + by.slice(1) : "\u2013") + "</b><span>" + esc(nice(c.creation)) + '</span></div><p>' + esc(plain(c.content)) + "</p></div>";
+    }).join("") + "</div>";
+    h += "</section>";
+    $("#ci-dr-body").innerHTML = h;
+  }
+
+  /* ===================================================================
+     3. TERRITORY
+     =================================================================== */
+  var T_STATES = ["Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
+    "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim",
+    "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal"];
+  var T_UTS = ["Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"];
+  var T_ALL = T_STATES.concat(T_UTS);
+  var T_ALIAS = {
+    "ORISSA": "Odisha", "PONDICHERRY": "Puducherry", "NCT OF DELHI": "Delhi", "NEW DELHI": "Delhi", "DELHI NCR": "Delhi", "UTTARANCHAL": "Uttarakhand",
+    "UK": "Uttarakhand", "UP": "Uttar Pradesh", "MP": "Madhya Pradesh", "HP": "Himachal Pradesh", "J&K": "Jammu and Kashmir",
+    "JAMMU & KASHMIR": "Jammu and Kashmir", "ANDAMAN & NICOBAR ISLANDS": "Andaman and Nicobar Islands", "ANDAMAN AND NICOBAR": "Andaman and Nicobar Islands",
+    "DADRA AND NAGAR HAVELI": "Dadra and Nagar Haveli and Daman and Diu", "DADRA & NAGAR HAVELI": "Dadra and Nagar Haveli and Daman and Diu",
+    "DAMAN AND DIU": "Dadra and Nagar Haveli and Daman and Diu", "DAMAN & DIU": "Dadra and Nagar Haveli and Daman and Diu",
+    "TAMILNADU": "Tamil Nadu", "CHATTISGARH": "Chhattisgarh", "WESTBENGAL": "West Bengal"
+  };
+  function canon(name) {
+    var raw = String(name || "").trim();
+    if (!raw || raw.toUpperCase() === "UNKNOWN") return null;
+    var up = raw.toUpperCase().replace(/\s+/g, " ").replace(/^\d+\s*-\s*/, "");
+    if (T_ALIAS[up]) return T_ALIAS[up];
+    var upAnd = up.replace(/&/g, "AND");
+    for (var i = 0; i < T_ALL.length; i++) { var c = T_ALL[i].toUpperCase(); if (c === up || c === upAnd) return T_ALL[i]; }
+    return null;
+  }
+  function trMonthLabel() {
+    var f = parseIso(S.tr.from), t = parseIso(S.tr.to);
+    var whole = f.getDate() === 1 && f.getMonth() === t.getMonth() && f.getFullYear() === t.getFullYear() &&
+      (new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate() === t.getDate() || iso(t) === iso(today));
+    return whole ? MONTH[f.getMonth()] + " " + f.getFullYear() : "Custom";
+  }
+  function syncTrBand() {
+    $("#ci-tr-mon").textContent = trMonthLabel();
+    $("#ci-tr-from").value = S.tr.from; $("#ci-tr-to").value = S.tr.to;
+    $$("#ci-tr-sot button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === S.tr.sot); });
+  }
+  function shiftMonth(n) {
+    var f = parseIso(S.tr.from), b = new Date(f.getFullYear(), f.getMonth() + n, 1), e = new Date(b.getFullYear(), b.getMonth() + 1, 0);
+    if (e > today) e = today;
+    if (b > today) return;
+    S.tr.from = iso(b); S.tr.to = iso(e); syncTrBand(); loadTr();
+  }
+  async function loadTr() {
+    var my = ++S.tr.seq, el = mainEl("territory");
+    busy(true); if (!S.tr.states) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    var tillP = call(TERR_API, { from_date: S.tr.from, to_date: S.tr.to }).then(function (m) { return { ok: true, m: m || {} }; }, function () { return { ok: false }; });
+    try {
+      var m = await api({ action: "territory", from_date: S.tr.from, to_date: S.tr.to, sales_order_type: S.tr.sot });
+      var t = await tillP;
+      if (!m || my !== S.tr.seq) return;
+      S.tr.states = m.states || [];
+      var key = S.tr.sot.toUpperCase();
+      S.tr.till = t.ok ? (t.m.by_type ? t.m.by_type[key] || null : (key === "LARGE BLOW" ? t.m : null)) : null;
+      S.tr.tillErr = !t.ok;
+      renderTr();
+    } catch (e) { if (my !== S.tr.seq) return; S.tr.states = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.tr.seq) { busy(false); el.classList.remove("is-loading"); } }
+  }
+  var TR = { cats: [], total: 0 };
+  function renderTr() {
+    var states = S.tr.states || [], till = S.tr.till;
+    var tSales = 0, tInv = 0, tCities = 0, cust = {};
+    states.forEach(function (s) { tSales += s.amount; tInv += s.invoices; tCities += s.cities.length; (s.cust_rows || []).forEach(function (c) { cust[c.customer] = 1; }); });
+    var nCust = Object.keys(cust).length; TR.total = tSales;
+    var period = {}; states.forEach(function (s) { var c = canon(s.name); if (c) period[c] = 1; });
+    var tillSet = null, unmatched = [];
+    if (till) {
+      tillSet = {};
+      (till.states_covered_till_date || []).forEach(function (s) { var c = canon(s); if (c) tillSet[c] = 1; else if (s && String(s).trim().toUpperCase() !== "UNKNOWN") unmatched.push(s); });
+      Object.keys(period).forEach(function (c) { tillSet[c] = 1; });
+    }
+    function count(list, set) { return list.filter(function (s) { return set && set[s]; }).length; }
+
+    var html = '<div class="ci-till"><span class="ci-badge">' + esc(S.tr.sot) + "</span>" +
+      (tillSet ? "<span>Till date: <b>" + count(T_ALL, tillSet) + " / 36</b> States &amp; UTs \u00b7 <b>" + n0(till.total_cities_till_date) + "</b> Cities \u00b7 <b>" + lakh(till.total_sales_till_date) + "</b> sales</span>"
+        : '<span class="mut">' + (S.tr.tillErr ? "Till-date summary could not be loaded (ucm_territory_till_date_summary)." : "No till-date data for " + esc(S.tr.sot) + ".") + "</span>") + "</div>";
+    html += '<div class="ci-kpis k6">' +
+      kpi("Sales (excl. GST)", lakh(tSales), esc(nice(S.tr.from)) + " \u2013 " + esc(nice(S.tr.to)), "is-pri") +
+      kpi("States Covered", n0(states.length), count(T_ALL, period) + " of 36 matched", "is-violet") +
+      kpi("Cities Covered", n0(tCities), "&nbsp;", "is-violet") +
+      kpi("Customers", n0(nCust), "&nbsp;", "is-green") +
+      kpi("Invoices", n0(tInv), "&nbsp;", "is-green") +
+      kpi("Avg Sales / State", lakh(states.length ? tSales / states.length : 0), "&nbsp;", "is-blue") + "</div>";
+    html += '<div class="ci-subtabs"><button type="button" data-trt="reach"' + (S.tr.tab === "reach" ? ' class="on"' : "") + '>Reach</button><button type="button" data-trt="category"' + (S.tr.tab === "category" ? ' class="on"' : "") + ">Category Reach</button></div>";
+
+    /* reach */
+    function reachCard(label, got, total) {
+      var p = pct(got, total);
+      return '<div class="ci-reach"><span>' + label + "</span><b>" + got + "<i> / " + total + "</i></b>" + bar(p) + "<small>" + p + "% reach \u00b7 " + (total - got) + " remaining</small></div>";
+    }
+    function chips(list) {
+      return '<div class="ci-chips">' + list.map(function (s) {
+        var cls = period[s] ? "p" : (tillSet && tillSet[s] ? "e" : "n");
+        return '<span class="ci-chip ' + cls + '">' + esc(s) + "</span>";
+      }).join("") + "</div>";
+    }
+    var reach = '<div class="ci-reaches">' + reachCard("States", count(T_STATES, period), 28) + reachCard("Union Territories", count(T_UTS, period), 8) + reachCard("Total India", count(T_ALL, period), 36) + "</div>" +
+      '<div class="ci-reg ci-pad"><div class="ci-legend2"><span><i class="p"></i>Sales this period</span><span><i class="e"></i>Covered earlier, not this period</span><span><i class="n"></i>Never covered</span></div>' +
+      '<h5 class="ci-h5">States</h5>' + chips(T_STATES) + '<h5 class="ci-h5">Union Territories</h5>' + chips(T_UTS) +
+      (unmatched.length ? '<div class="ci-warn"><b>Note:</b> these state names in addresses did not match: ' + esc(unmatched.join(", ")) + "</div>" : "") + "</div>";
+    reach += '<section class="ci-reg"><div class="ci-reg-h"><div class="ci-reg-t"><h2>State wise sales</h2><p>Click a state for city and customer breakup</p></div>' +
+      '<div class="ci-reg-tools"><button type="button" class="ci-ibtn" id="ci-tr-csv" title="Download CSV">' + I.down + "</button></div></div>";
+    if (!states.length) reach += '<div class="ci-empty">No completed ' + esc(S.tr.sot) + " sales in this period.</div>";
+    else {
+      reach += '<div class="ci-tw"><table class="ci-t ci-tr-t"><thead><tr><th>State</th><th class="n">Cities</th><th class="n">Customers</th><th class="n">Invoices</th><th class="n">Qty</th><th class="n">Sales (excl. GST)</th><th class="sh">Share</th></tr></thead><tbody>' +
+        states.map(function (s, i) {
+          var p = pct(s.amount, tSales);
+          return '<tr class="ci-click" data-st="' + i + '"><td class="nm">' + esc(s.name) + '</td><td class="n">' + s.cities.length + '</td><td class="n">' + s.customers + '</td><td class="n">' + n0(s.invoices) + '</td><td class="n">' + n0(s.qty) + '</td><td class="n"><b>' + inr(s.amount) + '</b></td><td class="sh">' + bar(p) + "<em>" + p + "%</em></td></tr>";
+        }).join("") +
+        '</tbody><tfoot><tr><td>Grand Total</td><td class="n">' + tCities + '</td><td class="n">' + nCust + '</td><td class="n">' + n0(tInv) + '</td><td></td><td class="n">' + inr(tSales) + "</td><td>100%</td></tr></tfoot></table></div>";
+    }
+    reach += "</section>";
+
+    /* category */
+    var cats = ((till && till.category_reach) || []).map(function (c) {
+      var merged = {}, total = 0;
+      Object.keys(c.states || {}).forEach(function (s) { var amt = parseFloat(c.states[s]) || 0, k = canon(s) || (String(s || "").trim() || "Unknown"); merged[k] = (merged[k] || 0) + amt; total += amt; });
+      var got = Object.keys(merged).filter(function (k) { return T_ALL.indexOf(k) !== -1; }).length;
+      return { name: c.category || "Uncategorized", states: merged, total: total, reached: got };
+    }).sort(function (a, b) { return b.total - a.total; });
+    TR.cats = cats;
+    var cg = 0; cats.forEach(function (c) { cg += c.total; });
+    var cat = '<section class="ci-reg"><div class="ci-reg-h"><div class="ci-reg-t"><h2>Category reach</h2><p>' + esc(nice(S.tr.from)) + " \u2013 " + esc(nice(S.tr.to)) + " \u00b7 click a category for state breakup</p></div></div>";
+    if (!cats.length) cat += '<div class="ci-empty">No category sales in this period.</div>';
+    else cat += '<div class="ci-tw"><table class="ci-t"><thead><tr><th>Category</th><th class="n">States Reached</th><th class="n">Sales (excl. GST)</th><th class="sh">Share</th></tr></thead><tbody>' +
+      cats.map(function (c, i) { var p = pct(c.total, cg); return '<tr class="ci-click" data-cat="' + i + '"><td class="nm">' + esc(c.name) + '</td><td class="n">' + c.reached + ' / 36</td><td class="n"><b>' + inr(c.total) + '</b></td><td class="sh">' + bar(p) + "<em>" + p + "%</em></td></tr>"; }).join("") +
+      '</tbody><tfoot><tr><td>Grand Total</td><td></td><td class="n">' + inr(cg) + "</td><td>100%</td></tr></tfoot></table></div>";
+    cat += "</section>";
+
+    html += '<div data-pane="reach"' + (S.tr.tab === "reach" ? "" : " hidden") + ">" + reach + "</div>" +
+      '<div data-pane="category"' + (S.tr.tab === "category" ? "" : " hidden") + ">" + cat + "</div>";
+    mainEl("territory").innerHTML = html;
+  }
+  function trCSV() {
+    var out = [["State", "City", "Customers", "Invoices", "Qty", "Sales (excl. GST)"]];
+    (S.tr.states || []).forEach(function (s) {
+      out.push([s.name, "", s.customers, s.invoices, Math.round(s.qty), Math.round(s.amount)]);
+      s.cities.forEach(function (c) { out.push([s.name, c.name, c.customers, c.invoices, Math.round(c.qty), Math.round(c.amount)]); });
+    });
+    saveCSV(out, "territory-" + S.tr.sot.toLowerCase().replace(/ /g, "-") + "-" + S.tr.from + "-to-" + S.tr.to + ".csv");
+  }
+  function mini(l, v, cls) { return '<div class="ci-mini ' + (cls || "") + '"><span>' + l + "</span><b>" + v + "</b></div>"; }
+  function share(v, t) { var p = pct(v, t); return '<td class="sh">' + bar(p) + "<em>" + p + "%</em></td>"; }
+  function trSub() { return esc(S.tr.sot) + " \u00b7 " + esc(nice(S.tr.from)) + " \u2013 " + esc(nice(S.tr.to)); }
+  function openState(s) {
+    if (!s) return;
+    openDrawer(s.name, trSub(), "", "is-wide");
+    var cm = {};
+    (s.cust_rows || []).forEach(function (c) {
+      var k = c.customer || c.customer_name;
+      if (!cm[k]) cm[k] = { id: c.customer, name: c.customer_name || k, cities: {}, invoices: 0, qty: 0, amount: 0 };
+      var m = cm[k]; m.cities[c.city] = 1; m.invoices += c.invoices || 0; m.qty += c.qty || 0; m.amount += c.amount || 0;
+    });
+    var cl = Object.keys(cm).map(function (k) { return cm[k]; }).sort(function (a, b) { return b.amount - a.amount; });
+    var h = '<div class="ci-minis">' + mini("Sales", lakh(s.amount), "is-pri") + mini("Share of Total", pct(s.amount, TR.total) + "%", "is-violet") + mini("Cities", s.cities.length, "is-violet") + mini("Customers", cl.length, "is-green") + mini("Invoices", n0(s.invoices), "is-green") + "</div>";
+    h += '<section class="ci-ps"><h4>City wise <em>' + s.cities.length + '</em></h4><table class="ci-t ci-dt"><thead><tr><th>City</th><th class="n">Customers</th><th class="n">Invoices</th><th class="n">Qty</th><th class="n">Sales</th><th class="sh">Share</th></tr></thead><tbody>' +
+      s.cities.map(function (c) { return '<tr><td class="nm">' + esc(c.name) + '</td><td class="n">' + c.customers + '</td><td class="n">' + n0(c.invoices) + '</td><td class="n">' + n0(c.qty) + '</td><td class="n"><b>' + inr(c.amount) + "</b></td>" + share(c.amount, s.amount) + "</tr>"; }).join("") + "</tbody></table></section>";
+    h += '<section class="ci-ps"><h4>Customer wise <em>' + cl.length + '</em></h4><table class="ci-t ci-dt"><thead><tr><th>Customer</th><th>City</th><th class="n">Invoices</th><th class="n">Qty</th><th class="n">Sales</th><th class="sh">Share</th></tr></thead><tbody>' +
+      cl.map(function (c) {
+        return '<tr><td class="nm">' + (S.acc.access.inactive && c.id ? '<button type="button" class="ci-lnk" data-cust="' + esc(c.id) + '" data-cn="' + esc(c.name) + '">' + esc(c.name) + "</button>" : esc(c.name)) + "</td><td>" + esc(Object.keys(c.cities).join(", ")) + '</td><td class="n">' + n0(c.invoices) + '</td><td class="n">' + n0(c.qty) + '</td><td class="n"><b>' + inr(c.amount) + "</b></td>" + share(c.amount, s.amount) + "</tr>";
+      }).join("") + "</tbody></table></section>";
+    $("#ci-dr-body").innerHTML = h;
+  }
+  function openCat(c) {
+    if (!c) return;
+    openDrawer(c.name, trSub(), "", "");
+    var names = Object.keys(c.states).sort(function (a, b) { return c.states[b] - c.states[a]; });
+    var h = '<div class="ci-minis k3">' + mini("Sales", lakh(c.total), "is-pri") + mini("States Reached", c.reached + " / 36", "is-violet") + mini("Reach", pct(c.reached, 36) + "%", "is-violet") + "</div>" +
+      '<section class="ci-ps"><h4>State wise <em>' + names.length + '</em></h4><table class="ci-t ci-dt"><thead><tr><th>State</th><th class="n">Sales (excl. GST)</th><th class="sh">Share</th></tr></thead><tbody>' +
+      names.map(function (s) { return '<tr><td class="nm">' + esc(s) + '</td><td class="n"><b>' + inr(c.states[s]) + "</b></td>" + share(c.states[s], c.total) + "</tr>"; }).join("") + "</tbody></table></section>";
+    $("#ci-dr-body").innerHTML = h;
+  }
+
+  /* ===================================================================
+     drawer (shared slider)
+     =================================================================== */
+  var DR = { seq: 0, back: null };
+  function openDrawer(title, sub, badge, cls) {
+    DR.seq++;
+    var dr = $("#ci-drawer"), wasOpen = dr.classList.contains("on");
+    dr.className = "ci-drawer on" + (cls ? " " + cls : "");
+    dr.innerHTML = '<div class="ci-dr-h" id="ci-dr-h"><div class="tt"><h3>' + esc(title) + "</h3><p>" + sub + '</p></div><div id="ci-dr-badge">' + (badge || "") + "</div>" +
+      '<button type="button" class="ci-ibtn" id="ci-dr-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="ci-dr-b" id="ci-dr-body">' + loadingHTML() + "</div>";
+    dr.setAttribute("aria-hidden", "false");
+    $("#ci-scrim").classList.add("on"); lock(true);
+    if (!wasOpen) dr.scrollTop = 0;
+    return DR.seq;
+  }
+  function closeDrawer() { DR.seq++; var dr = $("#ci-drawer"); dr.classList.remove("on"); dr.setAttribute("aria-hidden", "true"); $("#ci-scrim").classList.remove("on"); lock(false); }
+  $("#ci-scrim").addEventListener("click", closeDrawer);
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (!$("#ci-set").hidden) closeSettings(); else closeDrawer(); } });
+  $("#ci-drawer").addEventListener("click", function (e) {
+    if (e.target.closest("#ci-dr-x")) { closeDrawer(); return; }
+    var t = e.target.closest("[data-aqt]"); if (t) { AQD.tab = t.getAttribute("data-aqt"); AQD.focus = false; drawAq(); return; }
+    if (e.target.closest("#ci-aq-xls")) { aqXLS(); return; }
+    var c = e.target.closest("[data-cust]"); if (c) { openCust(c.getAttribute("data-cust"), c.getAttribute("data-cn")); }
+  });
+  $("#ci-drawer").addEventListener("input", function (e) { if (e.target.id === "ci-aq-q") { AQD.q = e.target.value; AQD.focus = true; drawAq(); } });
+
+  /* ===================================================================
+     events
+     =================================================================== */
+  /* section switch navbar mein bhi hai (root ke bahar) */
+  d.addEventListener("click", function (e) {
+    var b = e.target.closest(".ci-sec [data-sec]"); if (!b) return;
+    closeDrawer(); setSection(b.getAttribute("data-sec"));
+  });
+  root.addEventListener("click", function (e) {
+    var b;
+    /* acquisition */
+    if (e.target.closest("#ci-aq-prev")) { if (S.aq.fy + "-03-31" < AQ_MIN) return; S.aq.fy--; S.aq.from = fyFrom(S.aq.fy); S.aq.to = (S.aq.fy + 1) + "-03-31"; syncAqBand(); loadAq(); return; }
+    if (e.target.closest("#ci-aq-next")) { S.aq.fy++; S.aq.from = fyFrom(S.aq.fy); S.aq.to = (S.aq.fy + 1) + "-03-31"; syncAqBand(); loadAq(); return; }
+    if ((b = e.target.closest(".ci-num[data-t]"))) { openAq(+b.getAttribute("data-y"), +b.getAttribute("data-m"), b.getAttribute("data-t")); return; }
+    if (e.target.closest("#ci-aq-csv")) { aqCSV(); return; }
+    /* inactive */
+    if ((b = e.target.closest("#ci-in-type [data-v]"))) { S.inx.type = b.getAttribute("data-v"); store("in-type", S.inx.type); syncInBand(); loadIn(); return; }
+    if ((b = e.target.closest("#ci-in-chips [data-d]"))) { setDays(+b.getAttribute("data-d")); return; }
+    if ((b = e.target.closest('[data-main="inactive"] .ci-kpi[data-card]'))) { S.inx.card = b.getAttribute("data-card"); $$('[data-main="inactive"] .ci-kpi[data-card]').forEach(function (x) { x.classList.toggle("on", x === b); }); renderInTable(); return; }
+    if ((b = e.target.closest(".ci-in-t [data-sort]"))) {
+      var k = b.getAttribute("data-sort"), s = S.inx.sort;
+      S.inx.sort = s && s.k === k ? (s.dir === 1 ? { k: k, dir: -1 } : null) : { k: k, dir: /^(days|number_of_orders|total_order_value|last_order_amount|gst)$/.test(k) ? -1 : 1 };
+      renderInTable(); return;
+    }
+    if ((b = e.target.closest('[data-main="inactive"] [data-cust], [data-main="inactive"] .ci-in-t tbody tr'))) {
+      if (e.target.closest("a")) return;
+      var cb = b.hasAttribute("data-cust") ? b : b.querySelector("[data-cust]");
+      if (cb) openCust(cb.getAttribute("data-cust"), cb.getAttribute("data-cn"));
+      return;
+    }
+    if (e.target.closest("#ci-in-csv")) { inCSV(); return; }
+    /* territory */
+    if (e.target.closest("#ci-tr-prev")) { shiftMonth(-1); return; }
+    if (e.target.closest("#ci-tr-next")) { shiftMonth(1); return; }
+    if ((b = e.target.closest("#ci-tr-sot [data-v]"))) { S.tr.sot = b.getAttribute("data-v"); store("tr-sot", S.tr.sot); syncTrBand(); loadTr(); return; }
+    if ((b = e.target.closest("[data-trt]"))) {
+      S.tr.tab = b.getAttribute("data-trt"); store("tr-tab", S.tr.tab);
+      $$("[data-trt]").forEach(function (x) { x.classList.toggle("on", x === b); });
+      $$('[data-main="territory"] [data-pane]').forEach(function (p) { p.hidden = p.getAttribute("data-pane") !== S.tr.tab; });
+      return;
+    }
+    if ((b = e.target.closest("tr[data-st]"))) { openState((S.tr.states || [])[+b.getAttribute("data-st")]); return; }
+    if ((b = e.target.closest("tr[data-cat]"))) { openCat(TR.cats[+b.getAttribute("data-cat")]); return; }
+    if (e.target.closest("#ci-tr-csv")) { trCSV(); return; }
+  });
+  function setDays(n) { if (!(n > 0)) return; S.inx.days = Math.min(1000, Math.round(n)); store("in-days", S.inx.days); syncInBand(); loadIn(); }
+  var qT = null;
+  root.addEventListener("input", function (e) {
+    if (e.target.id === "ci-in-q") { S.inx.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderInTable, 120); }
+  });
+  root.addEventListener("change", function (e) {
+    var id = e.target.id, v = e.target.value;
+    if (id === "ci-in-days") setDays(parseInt(v, 10));
+    else if (id === "ci-in-ig") { S.inx.ig = v; loadIn(); }
+    else if (id === "ci-aq-from" || id === "ci-aq-to") {
+      if (!v) { syncAqBand(); return; }
+      if (id === "ci-aq-from") S.aq.from = v; else S.aq.to = v;
+      if (S.aq.from > S.aq.to) { var x = S.aq.from; S.aq.from = S.aq.to; S.aq.to = x; }
+      if (S.aq.from < AQ_MIN) S.aq.from = AQ_MIN;
+      if (S.aq.to < AQ_MIN) S.aq.to = AQ_MIN;
+      S.aq.fy = fyOf(parseIso(S.aq.from)); syncAqBand(); loadAq();
+    } else if (id === "ci-tr-from" || id === "ci-tr-to") {
+      if (!v) { syncTrBand(); return; }
+      if (id === "ci-tr-from") S.tr.from = v; else S.tr.to = v;
+      if (S.tr.from > S.tr.to) { var y = S.tr.from; S.tr.from = S.tr.to; S.tr.to = y; }
+      syncTrBand(); loadTr();
+    }
+  });
+  $("#ci-in-days").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); setDays(parseInt(this.value, 10)); } });
+  $("#ci-refresh").addEventListener("click", function () { if (S.sec === "acquisition") loadAq(); else if (S.sec === "inactive") loadIn(); else loadTr(); });
+  $("#ci-print").addEventListener("click", function () { w.print(); });
+
+  /* --- section switch --- */
+  function syncSub() {
+    var sub = "";
+    if (S.sec === "acquisition") sub = "Acquisition \u00b7 FY " + S.aq.fy + "-" + String(S.aq.fy + 1).slice(2);
+    else if (S.sec === "inactive") sub = "Inactive \u00b7 " + S.inx.type + " \u00b7 " + S.inx.days + "+ days";
+    else if (S.sec === "territory") sub = "Territory \u00b7 " + S.tr.sot + " \u00b7 " + trMonthLabel();
+    $$(".ci-sub").forEach(function (p) { p.textContent = sub; });
+  }
+  function setSection(sec) {
+    if (S.secs.indexOf(sec) < 0) sec = S.secs[0];
+    S.sec = sec; store("sec", sec);
+    $$(".ci-sec [data-sec]").forEach(function (b) { var on = b.getAttribute("data-sec") === sec; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    $$("[data-band]").forEach(function (x) { x.hidden = x.getAttribute("data-band") !== sec; });
+    $$("[data-main]").forEach(function (x) { x.hidden = x.getAttribute("data-main") !== sec; });
+    root.setAttribute("data-sec", sec);
+    syncSub();
+    if (sec === "acquisition") { syncAqBand(); if (!S.aq.rows) loadAq(); }
+    else if (sec === "inactive") { syncInBand(); if (!S.inx.rows) loadIn(); }
+    else { syncTrBand(); if (!S.tr.states) loadTr(); }
+  }
+  root.addEventListener("click", function () { setTimeout(syncSub, 0); });
+  root.addEventListener("change", function () { setTimeout(syncSub, 0); });
+
+  /* ===================================================================
+     settings (System Manager): Full ya koi bhi report
+     =================================================================== */
+  var SV = { users: [], cand: [], pick: null, add: { acquisition: 1, inactive: 1, territory: 1 } };
+  function repToggles(sel, attr) {
+    var full = sel.acquisition && sel.inactive && sel.territory;
+    return '<div class="ci-reps">' +
+      '<button type="button" class="ci-rep is-full' + (full ? " on" : "") + '" ' + attr + ' data-rep="full">' + I.check + "Full</button>" +
+      ["acquisition", "inactive", "territory"].map(function (k) { return '<button type="button" class="ci-rep' + (sel[k] ? " on" : "") + '" ' + attr + ' data-rep="' + k + '">' + I.check + REP_LABEL[k] + "</button>"; }).join("") + "</div>";
+  }
+  function toggled(sel, rep) {
+    var o = { acquisition: sel.acquisition ? 1 : 0, inactive: sel.inactive ? 1 : 0, territory: sel.territory ? 1 : 0 };
+    if (rep === "full") { o.acquisition = o.inactive = o.territory = 1; }
+    else o[rep] = o[rep] ? 0 : 1;
+    return o;
+  }
+  function selStr(o) { return ["acquisition", "inactive", "territory"].filter(function (k) { return o[k]; }).join(","); }
+  function openSettings() {
+    var m = $("#ci-set");
+    $(".ci-modal", m).innerHTML =
+      '<div class="ci-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of the 3 reports. View only \u2014 this page cannot change data. System Managers always have full access. Disabled users are not listed.</p></div>' +
+        '<button type="button" class="ci-ibtn" id="ci-set-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="ci-mb"><div class="ci-msg" id="ci-set-msg"></div>' +
+        '<div class="ci-addbox"><div class="ci-add"><div class="ci-pick"><input type="text" id="ci-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="ci-pick-l" id="ci-set-l" hidden></div></div>' +
+        '<button type="button" class="ci-btn" id="ci-set-go">Give access</button></div><div id="ci-set-add"></div></div>' +
+        '<div class="ci-ulist" id="ci-set-list"><div class="ci-none">Loading\u2026</div></div></div>';
+    m.hidden = false; lock(true);
+    drawAdd();
+    $("#ci-set-x").addEventListener("click", closeSettings);
+    var inp = $("#ci-set-u"), lst = $("#ci-set-l");
+    function pick() {
+      var qs = inp.value.trim().toLowerCase(), have = {};
+      SV.users.forEach(function (u) { have[u.user] = 1; });
+      var list = SV.cand.filter(function (c) { return !have[c.user] && (!qs || (c.full_name + " " + c.user).toLowerCase().indexOf(qs) >= 0); }).slice(0, 8);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-u="' + esc(c.user) + '"><b>' + esc(c.full_name) + "</b><small>" + esc(c.user) + "</small></button>"; }).join("") : '<div class="ci-none">No user found</div>';
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", pick);
+    inp.addEventListener("input", function () { SV.pick = null; pick(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; }, 120); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b) return; e.preventDefault();
+      var c = SV.cand.filter(function (x) { return x.user === b.getAttribute("data-u"); })[0];
+      SV.pick = c ? c.user : null; inp.value = c ? c.full_name + " (" + c.user + ")" : ""; lst.hidden = true;
+    });
+    $("#ci-set-add").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-rep]"); if (!b) return;
+      SV.add = toggled(SV.add, b.getAttribute("data-rep")); drawAdd();
+    });
+    $("#ci-set-go").addEventListener("click", async function () {
+      if (!SV.pick) { setMsg("Pick a user from the list first."); return; }
+      var reps = selStr(SV.add); if (!reps) { setMsg("Select Full or at least one report."); return; }
+      this.disabled = true; var who = SV.pick;
+      if (await settingsCall({ action: "set", user: who, reports: reps })) { SV.pick = null; inp.value = ""; setMsg("Access given to " + who + ": " + accText(reps) + ".", true); }
+      this.disabled = false;
+    });
+    $("#ci-set-list").addEventListener("click", async function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b || b.disabled) return;
+      var who = b.getAttribute("data-u"), u = SV.users.filter(function (x) { return x.user === who; })[0]; if (!u) return;
+      var reps;
+      if (b.hasAttribute("data-rm")) {
+        if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(function () { if (b.isConnected) { b.classList.remove("arm"); b.innerHTML = I.x; } }, 3000); return; }
+        reps = "";
+      } else {
+        var cur = {}; (u.reports || []).forEach(function (k) { cur[k] = 1; });
+        reps = selStr(toggled(cur, b.getAttribute("data-rep")));
+        if (!reps && !confirmRemove(b)) return;
+      }
+      $$("button", b.closest(".ci-urow")).forEach(function (x) { x.disabled = true; });
+      if (await settingsCall({ action: "set", user: who, reports: reps })) setMsg(reps ? "Access for " + who + ": " + accText(reps) + "." : "Access removed for " + who + ".", true);
+    });
+    settingsCall({ action: "list" });
+  }
+  function confirmRemove(b) {
+    if (b.classList.contains("arm")) return true;
+    b.classList.add("arm"); setMsg("Click again to remove all access for this user.");
+    setTimeout(function () { if (b.isConnected) b.classList.remove("arm"); }, 3000);
+    return false;
+  }
+  function accText(reps) { var a = reps.split(",").filter(Boolean); return a.length === 3 ? "Full" : a.map(function (k) { return REP_LABEL[k]; }).join(", "); }
+  function drawAdd() { $("#ci-set-add").innerHTML = '<span class="ci-addl">Access</span>' + repToggles(SV.add, ""); }
+  function setMsg(t, ok) { var el = $("#ci-set-msg"); if (!el) return; el.className = "ci-msg" + (t ? " show" + (ok ? " ok" : "") : ""); el.textContent = t || ""; }
+  async function settingsCall(body) {
+    try {
+      var m = await api(body, "POST"); if (!m) return false;
+      SV.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); SV.cand = m.candidates || [];
+      $("#ci-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
+        var sel = {}; (u.reports || []).forEach(function (k) { sel[k] = 1; });
+        return '<div class="ci-urow"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + "</small></div>" +
+          (u.admin ? '<span class="tag admin">System Manager \u00b7 Full</span><span class="rm"></span>'
+            : repToggles(sel, 'data-u="' + esc(u.user) + '"') + '<button type="button" class="rm" data-u="' + esc(u.user) + '" data-rm="1" title="Remove access">' + I.x + "</button>") + "</div>";
+      }).join("") : '<div class="ci-none">No users yet</div>';
+      return true;
+    } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
+  }
+  function closeSettings() { var m = $("#ci-set"); if (m.hidden) return; m.hidden = true; lock(false); }
+  $("#ci-gear").addEventListener("click", openSettings);
+  $("#ci-set").addEventListener("mousedown", function (e) { if (e.target === this) closeSettings(); });
+
+  /* ============ UCM standard header: title + buttons ERP navbar mein ============ */
+  function mergeNav() {
+    var nav = d.querySelector("nav.navbar"), brand = nav && nav.querySelector(".navbar-brand");
+    if (!nav || !brand) return;
+    var t = d.createElement("div"); t.className = "ci-nav-title";
+    t.innerHTML = '<h1>Customer Insights</h1><p class="ci-sub"></p>';
+    brand.insertAdjacentElement("afterend", t);
+    var sw = $("#ci-head .ci-sec"); if (sw) { sw.classList.add("in-nav"); t.insertAdjacentElement("afterend", sw); }
+    var act = $("#ci-act"); act.classList.add("ci-nav-act");
+    var login = nav.querySelector("#website-post-login");
+    if (login && login.parentNode) {
+      var li = d.createElement("li"); li.className = "nav-item ci-nav-li"; li.appendChild(act);
+      login.parentNode.insertBefore(li, login);
+    } else { (brand.parentElement || nav).appendChild(act); act.classList.add("is-end"); }
+    $("#ci-head").hidden = true;
+    d.body.classList.add("ci-nav-merged");
+    alignToLogo();
+    w.addEventListener("resize", alignToLogo);
+    w.addEventListener("load", alignToLogo);
+  }
+  /* page ka left margin = logo ka left margin */
+  function alignToLogo() {
+    var brand = d.querySelector("nav.navbar .navbar-brand"); if (!brand) return;
+    var img = brand.querySelector("img, svg") || brand;
+    var left = Math.round(img.getBoundingClientRect().left - root.getBoundingClientRect().left);
+    if (left >= 8 && left <= 120) root.style.setProperty("--ci-pad", left + "px");
+    var nav = d.querySelector("nav.navbar"), pos = nav ? getComputedStyle(nav).position : "";
+    var stick = nav && (pos === "sticky" || pos === "fixed") ? Math.round(nav.getBoundingClientRect().height) : 0;
+    if (!stick && nav && nav.parentElement && /sticky|fixed/.test(getComputedStyle(nav.parentElement).position)) stick = Math.round(nav.parentElement.getBoundingClientRect().height);
+    root.style.setProperty("--ci-nav-h", stick + "px");
+  }
+
+  /* ============ start ============ */
+  async function boot() {
+    if (!cookie("user_id") || cookie("user_id") === "Guest") { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return; }
+    try { S.acc = await api({ action: "me" }); }
+    catch (e) {
+      $("#ci-gate").innerHTML = '<div class="ci-gate-card"><div class="ico warn">!</div><h3>Could not check access</h3><p>' + esc(e.message) + '</p><p class="s">Check that the <b>ucm_customer_insights</b> Server Script is saved and enabled.</p></div>';
+      return;
+    }
+    var acc = (S.acc && S.acc.access) || {};
+    S.secs = SECS.filter(function (s) { return acc[s.k]; }).map(function (s) { return s.k; });
+    if (!S.secs.length) {
+      $("#ci-gate").innerHTML = '<div class="ci-gate-card"><div class="ico">' + I.lock + '</div><h3>You do not have access</h3><p>This page is open only to System Managers and users given access by them.</p><p class="s">Signed in as <b>' + esc((S.acc && (S.acc.full_name || S.acc.user)) || "") + "</b></p></div>";
+      return;
+    }
+    $$(".ci-sec [data-sec]").forEach(function (b) { b.hidden = S.secs.indexOf(b.getAttribute("data-sec")) < 0; });
+    root.classList.toggle("is-single", S.secs.length === 1); d.body.classList.toggle("ci-is-single", S.secs.length === 1);
+    $("#ci-gate").hidden = true; $("#ci-app").hidden = false;
+    $("#ci-gear").hidden = !S.acc.is_admin;
+    mergeNav();
+    setSection(store("sec") || S.secs[0]);
+  }
+  boot();
+})();
