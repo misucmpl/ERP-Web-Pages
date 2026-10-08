@@ -1083,7 +1083,7 @@
     (cfg.filters || []).forEach(function (df) { $filters.append(makeControl(df).$wrapper); });
 
     var $actions = $(actionsEl);
-    $('<button type="button" class="btn btn-default btn-sm ucmw-btn-export">Export CSV</button>').on("click", exportCSV).appendTo($actions);
+    $("#ucmw-export").on("click", exportCSV);   // Orders row ka chhota print icon = Export CSV
     $('<button type="button" class="btn btn-primary btn-sm ucmw-btn-refresh">Refresh</button>').on("click", function () { scheduleRefresh(10); }).appendTo($actions);
 
     ensureMoment(function () {
