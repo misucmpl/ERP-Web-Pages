@@ -1,0 +1,37 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type        : DocType Event
+#   Reference Document : Customer Complaint
+#   DocType Event      : Before Validate
+#
+# Server par access ki pakki rok — page ke bahar se (Desk, API, Log Complaint
+# page) bhi koi bina access ke complaint log / reply / close nahi kar sakta.
+#   Naya complaint (log)          → "UCM Complaint Logger" role chahiye
+#   Quality reply likhna / badalna → "UCM Complaint Quality" role chahiye
+#   Status badalna (close/reopen)  → Logger ya Quality role chahiye
+#   System Manager / Administrator → sab allowed
+# Roles ⚙️ Settings (ucm_complaint_access) se diye jaate hain.
+# ═══════════════════════════════════════════════════════════════════════════
+
+guard_user = frappe.session.user
+if guard_user != "Administrator":
+    guard_roles = frappe.get_all(
+        "Has Role",
+        filters={"parent": guard_user, "parenttype": "User",
+                 "role": ["in", ["System Manager", "UCM Complaint Logger", "UCM Complaint Quality"]]},
+        pluck="role"
+    )
+    if "System Manager" not in guard_roles:
+        guard_log = "UCM Complaint Logger" in guard_roles
+        guard_quality = "UCM Complaint Quality" in guard_roles
+
+        if doc.is_new():
+            if not guard_log:
+                frappe.throw("You do not have access to log complaints. Ask a System Manager to give you Log Complaint access.")
+        else:
+            before = doc.get_doc_before_save()
+            if before:
+                if (before.get("quality_reply") or "") != (doc.get("quality_reply") or "") and not guard_quality:
+                    frappe.throw("Only the Quality team can write the quality reply.")
+                if (before.get("status") or "") != (doc.get("status") or "") and not (guard_log or guard_quality):
+                    frappe.throw("You can only view complaints. Ask a System Manager for Log or Quality access to close or reopen.")
