@@ -1,400 +1,580 @@
 /* ============================================================
-   UCMPL · Customer Complaints · Dashboard — CSS
-   Web Page → Style → CSS box mein poora paste karein.
-   Layout: left = dashboard (KPIs + charts), right = complaints list.
+   UCMPL · Customer Complaints · Dashboard — JS
+   Web Page → Javascript box mein poora paste karein.
+   API: /api/method/ucm_complaints  (DocType: Customer Complaint)
    ============================================================ */
-body { overflow-x: hidden; }
-.navbar > .container, .navbar .container-fluid, header .navbar .container,
-.web-footer .container, footer .container {
-  max-width: none !important; width: 100% !important;
-  padding-left: 32px !important; padding-right: 32px !important;
-}
-.ucd, .ucd * { box-sizing: border-box; }
-.ucd {
-  --bg: #f5f7fb; --card: #ffffff; --line: #e4e9f2; --line-strong: #cfd8e6;
-  --ink: #1a2433; --ink-2: #4a5568; --ink-3: #8a94a6;
-  --brand: #1f5fbf; --brand-soft: #eaf1fc; --brand-ink: #174a94;
-  --open: #a5610f; --open-soft: #fdf1df;
-  --replied: #1f5fbf; --replied-soft: #eaf1fc;
-  --closed: #1c7a50; --closed-soft: #e5f4ec;
-  --err: #c0392b; --err-soft: #fdecea;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: var(--ink); background: var(--bg); font-size: 14px; line-height: 1.5;
-  min-height: 100vh; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);
-}
-.ucd-top { background: var(--card); border-bottom: 1px solid var(--line); }
-.ucd-title { padding: 16px 32px 4px; font-size: 18px; font-weight: 700; letter-spacing: -.2px; margin: 0; }
-.ucd-nav { padding: 0 18px; display: flex; gap: 4px; }
-.ucd-nav a { padding: 10px 14px; font-size: 13px; font-weight: 500; color: var(--ink-2);
-  text-decoration: none; border-bottom: 2px solid transparent; }
-.ucd-nav a.active { color: var(--brand); border-bottom-color: var(--brand); }
-.ucd-wrap { padding: 22px 32px 48px; }
+(function () {
+/* put "Customer Complaint Portal" next to the ERP header logo */
+(function () {
+  const brand = document.querySelector(".navbar .navbar-brand");
+  if (!brand || document.querySelector(".ux-brand")) return;
+  const t = document.createElement("span");
+  t.className = "ux-brand";
+  t.textContent = "Customer Complaint Portal";
+  brand.insertAdjacentElement("afterend", t);
+  const wrap = brand.parentElement;
+  if (wrap && getComputedStyle(wrap).display !== "flex") {
+    brand.style.display = "inline-flex"; t.style.verticalAlign = "middle";
+  }
+  document.getElementById("ucd").classList.add("has-brand");
+})();
 
-/* toolbar */
-.ucd-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
-.ucd select, .ucd input[type=text], .ucd textarea {
-  font: inherit; color: var(--ink); background: #fff; border: 1px solid var(--line-strong);
-  border-radius: 8px; padding: 8px 12px; outline: none;
-}
-.ucd select:focus, .ucd input[type=text]:focus, .ucd textarea:focus {
-  border-color: var(--brand); box-shadow: 0 0 0 3px rgba(31,95,191,.12);
-}
-.ucd-seg { display: inline-flex; background: #fff; border: 1px solid var(--line-strong); border-radius: 8px; padding: 3px; }
-.ucd-seg button { font: inherit; font-size: 13px; border: 0; background: none; padding: 5px 12px;
-  border-radius: 6px; color: var(--ink-2); cursor: pointer; }
-.ucd-seg button.on { background: var(--brand-soft); color: var(--brand-ink); font-weight: 600; }
-.ucd-search { flex: 1; min-width: 200px; max-width: 360px; }
-.ucd-search input { width: 100%; }
-.ucd-sp { flex: 1; }
-.ucd-btn { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px;
-  padding: 9px 16px; font: inherit; font-weight: 600; background: var(--brand); color: #fff;
-  cursor: pointer; text-decoration: none; }
-.ucd-btn:hover { background: var(--brand-ink); color: #fff; text-decoration: none; }
-.ucd-btn:disabled { background: #b8c4d6; cursor: not-allowed; }
-.ucd-btn.ghost { background: #fff; color: var(--ink-2); border: 1px solid var(--line-strong); }
-.ucd-btn.ghost:hover { color: var(--ink); background: #f8fafc; }
-.ucd-btn.green { background: var(--closed); }
-.ucd-btn.danger { background: #fff; color: var(--err); border: 1px solid #f1c4bf; }
-.ucd-btn.danger:hover { background: var(--err-soft); color: var(--err); }
-.ucd-btn.danger.arm { background: var(--err); color: #fff; border-color: var(--err); }
+const API = "/api/method/ucm_complaints";
+const DOCTYPE = "Customer Complaint";
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-/* KPIs */
-.ucd-kpis { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
-.ucd-kpi { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
-  cursor: pointer; transition: border-color .15s; }
-.ucd-kpi:hover { border-color: var(--line-strong); }
-.ucd-kpi.sel { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(31,95,191,.08); }
-.ucd-kpi .lbl { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); font-weight: 500; }
-.ucd-kpi .dot { width: 8px; height: 8px; border-radius: 50%; }
-.ucd-kpi .val { font-size: 28px; font-weight: 700; letter-spacing: -.5px; margin-top: 4px; }
-.ucd-kpi .sub { font-size: 12px; color: var(--ink-3); }
-.ucd-kpi.static { cursor: default; }
+const $ = (id) => document.getElementById(id);
+const root = $("ucd");
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const cookie = (k) => { const m = document.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; };
+const pd = (s) => s ? new Date(String(s).replace(" ", "T")) : null;
+const fDate = (s) => { if (!s) return ""; const p = String(s).slice(0, 10).split("-"); return `${+p[2]} ${MONTHS[+p[1] - 1]} ${p[0]}`; };
+const fTime = (s) => { const d = pd(s); return d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : ""; };
+const fQty = (q) => q == null ? "" : Number(q).toLocaleString("en-IN", { maximumFractionDigits: 3 });
+const dur = (h) => {
+  if (h == null || isNaN(h)) return "\u2013";
+  if (h < 1) return Math.max(1, Math.round(h * 60)) + "m";
+  if (h < 48) return (Math.round(h * 10) / 10) + "h";
+  return (Math.round(h / 24 * 10) / 10) + "d";
+};
+const replyHours = (c) => {
+  const a = pd(c.logged_on), b = pd(c.replied_on);
+  return a && b ? (b - a) / 36e5 : null;
+};
 
-
-/* charts */
-.ucd-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.ucd-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
-.ucd-card h3 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
-.ucd-card .cap { font-size: 12px; color: var(--ink-3); margin-bottom: 14px; }
-
-.ucd-cols { display: flex; align-items: flex-end; gap: 8px; height: 170px; padding-top: 18px;
-  border-bottom: 1px solid var(--line); }
-.ucd-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-  height: 100%; cursor: pointer; position: relative; }
-.ucd-col .bar { width: 100%; max-width: 36px; background: #bcd0ef; border-radius: 4px 4px 0 0; min-height: 2px;
-  transition: background .15s; }
-.ucd-col.sel .bar, .ucd-col:hover .bar { background: var(--brand); }
-.ucd-col .n { font-size: 11px; color: var(--ink-2); margin-bottom: 4px; font-weight: 500; }
-.ucd-xl { display: flex; gap: 8px; margin-top: 6px; }
-.ucd-xl span { flex: 1; text-align: center; font-size: 11px; color: var(--ink-3); }
-
-.ucd-hb { display: grid; gap: 10px; }
-.ucd-hb .r { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; }
-.ucd-hb .k { font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-hb .v { font-size: 13px; font-weight: 600; text-align: right; }
-.ucd-hb .t { grid-column: 1 / -1; height: 8px; background: #f0f3f8; border-radius: 4px; overflow: hidden; }
-.ucd-hb .t i { display: block; height: 100%; background: var(--brand); border-radius: 0 4px 4px 0; }
-.ucd-none { color: var(--ink-3); font-size: 13px; padding: 24px 0; text-align: center; }
-
-.ucd-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600;
-  padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
-.ucd-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.ucd-badge.Open { color: var(--open); background: var(--open-soft); }
-.ucd-badge.Replied { color: var(--replied); background: var(--replied-soft); }
-.ucd-badge.Closed { color: var(--closed); background: var(--closed-soft); }
-
-/* drawer */
-.ucd-shade { position: fixed; inset: 0; background: rgba(26,36,51,.28); z-index: 1040; display: none; }
-.ucd-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); background: #fff;
-  z-index: 1050; transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column;
-  box-shadow: -12px 0 32px rgba(26,36,51,.12); font-family: inherit; }
-.ucd.dopen .ucd-shade { display: block; }
-.ucd.dopen #dDrawer { transform: none; }
-.ucd-dh { padding: 18px 22px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
-.ucd-dh h2 { margin: 0; font-size: 17px; font-weight: 700; }
-.ucd-x { margin-left: auto; border: 0; background: #f2f4f8; width: 32px; height: 32px; border-radius: 8px;
-  font-size: 18px; cursor: pointer; color: var(--ink-2); }
-.ucd-db { padding: 18px 22px; overflow-y: auto; flex: 1; overscroll-behavior: contain; }
-.ucd-kv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 18px; }
-.ucd-kv div span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--ink-3); }
-.ucd-kv div b { font-weight: 500; word-break: break-word; }
-.ucd-kv .full { grid-column: 1 / -1; }
-.ucd-kv a { color: var(--brand); }
-.ucd-box { border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; white-space: pre-wrap; word-break: break-word; }
-.ucd-box.c { background: #f7f8fb; border: 1px solid var(--line); }
-.ucd-box.q { background: var(--brand-soft); }
-.ucd-box .who { display: block; font-size: 12px; color: var(--ink-3); margin-bottom: 6px; white-space: normal; }
-.ucd-sec { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 0 0 8px; }
-.ucd textarea { width: 100%; min-height: 110px; resize: vertical; }
-.ucd-df { padding: 14px 22px; border-top: 1px solid var(--line); display: flex; gap: 10px; flex-wrap: wrap; }
-.ucd-df .ucd-sp { flex: 1; }
-
-.ucd-msg { padding: 12px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 16px; display: none; }
-.ucd-msg.show { display: block; }
-.ucd-msg.err { background: var(--err-soft); color: var(--err); }
-.ucd-msg.ok { background: var(--closed-soft); color: var(--closed); }
-
-.ucd-tip { position: fixed; z-index: 1060; pointer-events: none; background: #1a2433; color: #fff; font-size: 12px;
-  padding: 6px 9px; border-radius: 6px; display: none; white-space: nowrap; }
-
-@media (max-width: 600px) {
-  .ucd-wrap, .ucd-title { padding-left: 16px; padding-right: 16px; }
-  .ucd-nav { padding-left: 2px; padding-right: 2px; }
-  .navbar > .container, .navbar .container-fluid, header .navbar .container,
-  .web-footer .container, footer .container { padding-left: 16px !important; padding-right: 16px !important; }
-}
-/* portal name beside the ERP header logo */
-.ux-brand { display: inline-flex; align-items: center; margin-left: 12px; padding-left: 12px;
-  border-left: 1px solid #dfe5ee; font-family: "Inter", system-ui, sans-serif; font-size: 16px;
-  font-weight: 600; color: #1a2433; letter-spacing: -.2px; white-space: nowrap; }
-.ucd.has-brand .ucd-title { display: none; }
-.ucd.has-brand .ucd-nav { padding-top: 4px; }
-@media (max-width: 600px) { .ux-brand { font-size: 14px; margin-left: 8px; padding-left: 8px; } }
-
-/* ═════ SPLIT: left dashboard · right list ═════ */
-.ucd-split { display: grid; grid-template-columns: minmax(0, 44fr) minmax(0, 56fr); gap: 18px; align-items: start; }
-.ucd-dash { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 14px; }
-.ucd-dash .ucd-kpis { margin-bottom: 0; }
-.ucd-kpi { padding: 12px 14px; }
-.ucd-kpi .val { font-size: 24px; }
-.ucd-kpi .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-cols { height: 150px; }
-
-.ucd-listcard { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-width: 0; }
-.ucd-thead { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); background: #fafbfd; }
-.ucd-thead h3 { margin: 0; font-size: 14px; font-weight: 600; }
-.ucd-thead span { font-size: 12px; color: var(--ink-3); }
-
-.ucd-list { display: flex; flex-direction: column; }
-.ucd-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; padding: 10px 18px 10px 20px; border-bottom: 1px solid #f0f2f6; cursor: pointer; transition: background .12s; }
-.ucd-item::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
-.ucd-item.Open::before { background: var(--open); }
-.ucd-item.Replied::before { background: var(--replied); }
-.ucd-item.Closed::before { background: var(--closed); }
-.ucd-item:hover { background: #f8faff; }
-.ucd-item.cur { background: var(--brand-soft); }
-.ucd-it-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.ucd-it-top .id { font-weight: 700; color: var(--brand-ink); white-space: nowrap; }
-.ucd-it-top .type { font-size: 11.5px; font-weight: 600; color: var(--ink-2); background: #f2f4f8; border-radius: 6px; padding: 1px 8px; white-space: nowrap; }
-.ucd-it-cust { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-it-meta { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-it-meta b { font-weight: 500; color: var(--ink-2); }
-.ucd-it-text { font-size: 12.5px; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-.ucd-it-side { grid-column: 2; grid-row: 1 / span 4; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; }
-.ucd-it-side .when { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
-.ucd-it-side .when small { display: block; font-size: 11px; color: var(--ink-3); }
-.ucd-it-side .rep { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
-.ucd-it-side .rep b { color: var(--ink); font-weight: 600; }
-.ucd-it-side .rep.pending { color: var(--open); font-weight: 600; }
-.ucd-more { padding: 12px; text-align: center; }
-
-@media (max-width: 1100px) {
-  .ucd-split { grid-template-columns: minmax(0, 1fr); }
-  .ucd-dash, .ucd-dash > * { min-width: 0; }
-  .ucd-dash { position: static; }
-  .ucd-kpis { grid-template-columns: repeat(3, minmax(0,1fr)); }
-}
-@media (max-width: 600px) {
-  .ucd-kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .ucd-charts { grid-template-columns: 1fr; }
+if (!cookie("user_id") || cookie("user_id") === "Guest") {
+  window.location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname);
+  return;
 }
 
-/* ═════ Customer rejection · Credit notes ═════ */
-.ucd-cn {
-  display: flex; align-items: center; gap: 16px; width: 100%; padding: 12px 16px; text-align: left; font: inherit; color: inherit; cursor: pointer;
-  background: linear-gradient(90deg, #fff5f4, #fff); border: 1px solid #f3cfca; border-left: 4px solid var(--err); border-radius: 12px; transition: box-shadow .15s;
-}
-.ucd-cn:hover { box-shadow: 0 6px 18px -12px rgba(192,57,43,.5); }
-.ucd-cn-ico { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--err-soft); color: var(--err); font-size: 18px; font-weight: 700; }
-.ucd-cn-t { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.ucd-cn-t b { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-cn-t small { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-cn-k { display: flex; flex-direction: column; align-items: flex-end; padding-left: 14px; border-left: 1px solid #f3dcd8; }
-.ucd-cn-k small { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
-.ucd-cn-k b { font-size: 18px; font-weight: 700; color: var(--err); letter-spacing: -.3px; white-space: nowrap; }
-.ucd-cn-go { font-size: 22px; color: #d9a39b; line-height: 1; }
+const PAGE = 25;
+const st = { all: [], month: "", status: "", type: "", q: "", cur: null, show: PAGE, canDelete: false, cn: null };
+const CN_API = "/api/method/ucm_complaint_credit_notes";
+const ACCESS_API = "/api/method/ucm_complaint_access";
+/* access: view / log (sales) / quality / full / admin — set from ⚙️ Settings */
+let acc = { can_view: false, can_log: false, can_reply: false, can_close: false, can_comment: false, is_admin: false, level: "none" };
 
-.ucd-cn-drawer { width: min(640px, 100vw); }
-.ucd.cnopen .ucd-shade { display: block; }
-.ucd.cnopen #cnDrawer { transform: none; }
-.ucd-cn-drawer .ucd-dh { background: linear-gradient(135deg, #fff5f4, #fff); }
-.ucd-cn-drawer .ucd-dh h2 { font-size: 16px; }
-.ucd-cn-dsub { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
-.ucd-cn-rows { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.ucd-cn-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 12px; border-bottom: 1px solid #f0f2f6; font-size: 13px; }
-.ucd-cn-row:last-child { border-bottom: 0; }
-.ucd-cn-row:nth-child(even) { background: #fafbfd; }
-.ucd-cn-row a { color: var(--brand-ink); font-weight: 600; text-decoration: none; }
-.ucd-cn-row a:hover { text-decoration: underline; }
-.ucd-cn-row small { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
-.ucd-cn-row .c { min-width: 0; font-weight: 500; }
-.ucd-cn-row .c small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-cn-row > b { color: var(--err); white-space: nowrap; }
-@media (max-width: 600px) {
-  .ucd-cn-row { grid-template-columns: minmax(0,1fr) auto; gap: 2px 10px; padding: 10px; }
-  .ucd-cn-row > :first-child { grid-column: 1; }
-  .ucd-cn-row .c { grid-column: 1; }
-  .ucd-cn-row > b { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+function msg(el, text, kind) {
+  el.className = "ucd-msg" + (text ? " show " + (kind || "err") : "");
+  el.textContent = text || "";
 }
 
-/* ═════ MOBILE (phone) ═════ */
-@media (max-width: 600px) {
-  html, body { overflow-x: hidden; }
-  .ucd-wrap { padding-left: 12px !important; padding-right: 12px !important; padding-top: 12px; }
-  .ucd-nav a { padding-left: 10px; padding-right: 10px; }
-
-  /* filters: [month][type] / [status full] / [search][+] */
-  .ucd-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-  .ucd-bar > select { width: 100%; min-width: 0; }
-  #dMonth { grid-column: 1; grid-row: 1; }
-  #dType  { grid-column: 2; grid-row: 1; }
-  .ucd-seg { grid-column: 1 / -1; grid-row: 2; display: flex; }
-  .ucd-seg button { flex: 1; padding: 7px 4px; }
-  .ucd-search { grid-column: 1 / -1; grid-row: 3; min-width: 0; max-width: none; display: flex; gap: 8px; }
-  .ucd-bar .ucd-sp { display: none; }
-  .ucd-bar > .ucd-btn { grid-column: 1 / -1; grid-row: 4; justify-content: center; text-align: center; width: 100%; }
-
-  .ucd-split, .ucd-dash { gap: 10px; }
-
-  /* KPIs: 3 compact tiles per row */
-  .ucd-kpis { grid-template-columns: repeat(3, minmax(0,1fr)) !important; gap: 8px; }
-  .ucd-kpi { padding: 9px 10px; border-radius: 10px; }
-  .ucd-kpi .lbl { font-size: 11px; gap: 5px; }
-  .ucd-kpi .dot { width: 6px; height: 6px; }
-  .ucd-kpi .val { font-size: 20px; margin-top: 2px; }
-  .ucd-kpi .sub { font-size: 10.5px; }
-  .ucd-kpi.static { grid-column: span 2; }
-
-  /* credit-note strip: title row + 3 equal metrics */
-  .ucd-cn { display: flex; flex-wrap: wrap; gap: 8px 6px; padding: 10px 10px 10px 12px; }
-  .ucd-cn-ico { width: 30px; height: 30px; flex: 0 0 30px; font-size: 16px; order: 0; }
-  .ucd-cn-t { flex: 1 1 calc(100% - 60px); order: 0; align-self: center; }
-  .ucd-cn-go { flex: 0 0 12px; order: 1; align-self: center; }
-  .ucd-cn-k { order: 2; flex: 1 1 0; align-items: flex-start; border-left: 0; padding: 6px 8px; background: #fff; border: 1px solid #f6dcd8; border-radius: 8px; min-width: 0; }
-  .ucd-cn-k small { font-size: 10px; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .ucd-cn-k b { font-size: 16px; }
-
-  .ucd-card { padding: 12px 12px 10px; }
-  .ucd-cols { height: 110px; gap: 4px; }
-  .ucd-card { overflow: hidden; }
-
-  /* list: side info moves under the text */
-  .ucd-thead { padding: 11px 12px; }
-  .ucd-item { grid-template-columns: minmax(0, 1fr); padding: 10px 12px 10px 14px; gap: 3px; }
-  .ucd-it-top { flex-wrap: wrap; gap: 6px; }
-  .ucd-it-side { grid-column: 1; grid-row: auto; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 10px; text-align: left; margin-top: 2px; padding-top: 6px; border-top: 1px dashed #edf0f5; }
-  .ucd-it-side .when small { display: inline; margin-left: 4px; }
-  .ucd-it-text { -webkit-line-clamp: 2; }
-
-  /* drawers full screen */
-  .ucd-drawer, .ucd-cn-drawer { width: 100vw; }
-  .ucd-kv { grid-template-columns: 1fr 1fr; gap: 10px 12px; }
-  .ucd-df { flex-wrap: wrap; gap: 8px; }
-  .ucd-df .ucd-sp { display: none; }
-  .ucd-df .ucd-btn { flex: 1 1 auto; justify-content: center; text-align: center; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+async function api(url, opts) {
+  opts = opts || {};
+  const token = (window.frappe && window.frappe.csrf_token) || window.csrf_token || "";
+  const r = await fetch(url, Object.assign({
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "application/json", "X-Frappe-CSRF-Token": token }
+  }, opts));
+  if (r.status === 401) { window.location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    let reason = "";
+    try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) {}
+    if (r.status === 403) reason = reason || "Permission denied for Customer Complaint.";
+    throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+  }
+  return j;
 }
 
-/* ═════ Access gate ═════ */
-.ucd [hidden] { display: none !important; }
-.ucd-gate { padding: 72px 16px; display: flex; justify-content: center; }
-.ucd-gate-card { width: 100%; max-width: 440px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 34px 28px; text-align: center;
-  box-shadow: 0 18px 40px -28px rgba(26,36,51,.45); }
-.ucd-gate-card .ico { width: 52px; height: 52px; margin: 0 auto 12px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
-  background: var(--err-soft); color: var(--err); font-size: 24px; font-weight: 700; }
-.ucd-gate-card .ico.lock { background: #eef2f8; color: var(--ink-2); }
-.ucd-gate-card h3 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
-.ucd-gate-card p { margin: 0 0 6px; color: var(--ink-2); font-size: 14px; }
-.ucd-gate-card p.s { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); font-size: 12.5px; color: var(--ink-3); }
-.ucd-spin { display: inline-block; width: 22px; height: 22px; border: 3px solid #dbe3ef; border-top-color: var(--brand); border-radius: 50%; animation: ucdSpin .8s linear infinite; }
-@keyframes ucdSpin { to { transform: rotate(360deg); } }
-.ucd-top:has(.ucd-title:only-child) { border-bottom: 0; }
-.ucd.has-brand .ucd-top { display: none; }
-
-/* ═════ Toolbar: role tag + settings gear ═════ */
-.ucd-role { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; background: #eef2f8; color: var(--ink-2); white-space: nowrap; }
-.ucd-role.quality { background: #eaf1fc; color: var(--brand-ink); }
-.ucd-role.log { background: #fdf1df; color: var(--open); }
-.ucd-gear { width: 38px; height: 38px; flex: 0 0 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px;
-  border: 1px solid var(--line-strong); background: #fff; color: var(--ink-2); cursor: pointer; transition: background .15s, color .15s; }
-.ucd-gear:hover { background: var(--brand-soft); color: var(--brand); }
-.ucd-gear svg { transition: transform .35s; }
-.ucd-gear:hover svg { transform: rotate(45deg); }
-
-/* ═════ Comments ═════ */
-.ucd-cm { margin-top: 6px; padding-top: 14px; border-top: 1px dashed var(--line); }
-.ucd-cm .ucd-sec span { color: var(--ink-3); font-weight: 500; }
-.ucd-cm-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
-.ucd-cm-item { display: flex; gap: 10px; align-items: flex-start; }
-.ucd-cm-av { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; background: #eef2f8; color: var(--ink-2); font-size: 11px; font-weight: 700;
-  display: flex; align-items: center; justify-content: center; }
-.ucd-cm-item.me .ucd-cm-av { background: var(--brand-soft); color: var(--brand-ink); }
-.ucd-cm-b { flex: 1; min-width: 0; background: #f7f8fb; border: 1px solid var(--line); border-radius: 4px 12px 12px 12px; padding: 8px 12px; }
-.ucd-cm-item.me .ucd-cm-b { background: #f3f7fe; border-color: #d7e4f8; }
-.ucd-cm-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-.ucd-cm-h b { font-size: 12.5px; font-weight: 600; }
-.ucd-cm-h span { font-size: 11px; color: var(--ink-3); }
-.ucd-cm-t { font-size: 13px; white-space: pre-wrap; word-break: break-word; margin-top: 2px; }
-.ucd-cm-none { font-size: 12.5px; color: var(--ink-3); padding: 4px 0 2px; }
-.ucd-cm-add { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
-.ucd .ucd-cm-add textarea { min-height: 64px; }
-
-/* ═════ Settings modal ═════ */
-.ucd-modal-bg { position: fixed; inset: 0; z-index: 1070; background: rgba(26,36,51,.35); display: flex; align-items: flex-start; justify-content: center;
-  padding: 6vh 16px 16px; overflow-y: auto; }
-.ucd-modal { width: 100%; max-width: 640px; background: #fff; border-radius: 16px; box-shadow: 0 30px 60px -20px rgba(26,36,51,.45); overflow: visible; }
-.ucd-mh { display: flex; align-items: flex-start; gap: 12px; padding: 18px 22px; border-bottom: 1px solid var(--line);
-  background: linear-gradient(135deg, #f3f7fe, #fff); border-radius: 16px 16px 0 0; }
-.ucd-mh h2 { margin: 0; font-size: 17px; font-weight: 700; }
-.ucd-msub { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
-.ucd-mb { padding: 16px 22px 20px; }
-.ucd-levels { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; margin-bottom: 14px; }
-.ucd-levels .lv { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; border-top: 3px solid #94a3b8; }
-.ucd-levels .lv b { display: block; font-size: 12.5px; }
-.ucd-levels .lv span { display: block; font-size: 11.5px; color: var(--ink-3); line-height: 1.35; margin-top: 2px; }
-.ucd-levels .lv.log { border-top-color: var(--open); }
-.ucd-levels .lv.quality { border-top-color: var(--brand); }
-.ucd-levels .lv.full { border-top-color: var(--closed); }
-.ucd-sadd { display: flex; gap: 8px; margin-bottom: 14px; }
-.ucd-pick { position: relative; flex: 1; min-width: 0; }
-.ucd-pick input { width: 100%; }
-.ucd-pick-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; background: #fff; border: 1px solid var(--line-strong); border-radius: 10px;
-  box-shadow: 0 14px 30px -14px rgba(26,36,51,.35); max-height: 280px; overflow-y: auto; padding: 4px; }
-.ucd-pick-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; border: 0; background: none; text-align: left; padding: 7px 10px; border-radius: 7px; cursor: pointer; font: inherit; }
-.ucd-pick-list button:hover { background: var(--brand-soft); }
-.ucd-pick-list b { font-size: 13px; font-weight: 500; }
-.ucd-pick-list small { font-size: 11.5px; color: var(--ink-3); }
-.ucd-pick-list .ucd-none { padding: 10px; }
-.ucd-sadd select { flex: 0 0 140px; }
-.ucd-ulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.ucd-urow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid #f0f2f6; }
-.ucd-urow:last-child { border-bottom: 0; }
-.ucd-urow.off { opacity: .55; }
-.ucd-uav { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; background: #eef2f8; color: var(--ink-2); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.ucd-un { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.ucd-un b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd-un small { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ucd select.ucd-lv { flex: 0 0 132px; padding: 5px 8px; font-size: 12.5px; font-weight: 600; border-radius: 8px; }
-.ucd select.ucd-lv.view { background: #f4f6f9; }
-.ucd select.ucd-lv.log { background: var(--open-soft); color: var(--open); border-color: #f0d4ab; }
-.ucd select.ucd-lv.quality { background: var(--brand-soft); color: var(--brand-ink); border-color: #c9daf4; }
-.ucd select.ucd-lv.full { background: var(--closed-soft); color: var(--closed); border-color: #bfe3cf; }
-.ucd-lvtag { flex: 0 0 132px; text-align: center; font-size: 12px; font-weight: 600; padding: 5px 8px; border-radius: 8px; background: #1a2433; color: #fff; }
-.ucd-urm { flex: 0 0 auto; min-width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--ink-3); font-size: 18px; cursor: pointer; }
-button.ucd-urm:hover { background: var(--err-soft); color: var(--err); }
-button.ucd-urm.arm { background: var(--err); color: #fff; font-size: 12px; font-weight: 600; padding: 0 8px; }
-
-@media (max-width: 600px) {
-  .ucd-levels { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .ucd-sadd { flex-wrap: wrap; }
-  .ucd-sadd .ucd-pick { flex: 1 0 100%; }
-  .ucd-sadd select { flex: 1 1 auto; }
-  .ucd-mh, .ucd-mb { padding-left: 14px; padding-right: 14px; }
-  .ucd-modal-bg { padding: 12px 8px; }
-  .ucd select.ucd-lv, .ucd-lvtag { flex-basis: 108px; }
-  .ucd-bar { grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto !important; }
-  #dType { grid-column: 2 / 4 !important; }
-  .ucd-bar > .ucd-btn { grid-column: 1 / 3 !important; }
-  .ucd-bar:not(:has(.ucd-gear:not([hidden]))):not(:has(.ucd-role:not([hidden]))) > .ucd-btn { grid-column: 1 / -1 !important; }
-  .ucd-bar .ucd-gear, .ucd-bar .ucd-role { grid-column: 3; grid-row: 4; align-self: center; }
-  .ucd-lvtag { white-space: nowrap; font-size: 11px; flex-basis: auto; }
+/* ---------------- load ---------------- */
+async function load(keepId) {
+  try {
+    const j = await api(API);
+    if (!j) return;
+    st.all = Array.isArray(j.message) ? j.message : [];
+    st.canDelete = !!j.can_delete;
+    if (st.cn === null) loadCN();
+    buildFilters();
+    render();
+    if (keepId) { const c = st.all.find((x) => x.name === keepId); if (c) openDrawer(c); }
+    const want = !keepId && !st.opened && new URLSearchParams(location.search).get("open");
+    st.opened = true;
+    if (want) { const c = st.all.find((x) => x.name === want); if (c) openDrawer(c); }
+  } catch (e) {
+    msg($("dMsg"), "Could not load complaints: " + e.message + ". Check that the ucm_complaints API is enabled.");
+    $("tList").innerHTML = '<div class="ucd-none">No data</div>';
+  }
 }
+
+function buildFilters() {
+  const mSel = $("dMonth"), tSel = $("dType");
+  const months = {}, types = {};
+  st.all.forEach((c) => { months[String(c.logged_on).slice(0, 7)] = 1; if (c.complaint_type) types[c.complaint_type] = 1; });
+  const keepM = mSel.value, keepT = tSel.value;
+  mSel.innerHTML = '<option value="">All months</option>' + Object.keys(months).sort().reverse()
+    .map((k) => `<option value="${k}">${MONTHS_FULL[+k.slice(5) - 1]} ${k.slice(0, 4)}</option>`).join("");
+  tSel.innerHTML = '<option value="">All types</option>' + Object.keys(types).sort()
+    .map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
+  mSel.value = months[keepM] ? keepM : "";
+  tSel.value = types[keepT] ? keepT : "";
+  st.month = mSel.value; st.type = tSel.value;
+}
+
+/* rows matching month + type + search (status applied separately so KPIs show the split) */
+function base() {
+  const q = st.q.toLowerCase();
+  return st.all.filter((c) =>
+    (!st.month || String(c.logged_on).startsWith(st.month)) &&
+    (!st.type || c.complaint_type === st.type) &&
+    (!q || [c.name, c.invoice_no, c.customer_name, c.customer, c.item_code, c.logged_by_name]
+      .some((v) => String(v || "").toLowerCase().includes(q))));
+}
+
+function render() {
+  st.show = PAGE;
+  const b = base();
+  const rows = st.status ? b.filter((c) => c.status === st.status) : b;
+
+  /* KPIs */
+  const cnt = (s) => b.filter((c) => c.status === s).length;
+  $("kTotal").textContent = b.length;
+  $("kOpen").textContent = cnt("Open");
+  $("kReplied").textContent = cnt("Replied");
+  $("kClosed").textContent = cnt("Closed");
+  $("kTotalSub").textContent = st.month ? MONTHS_FULL[+st.month.slice(5) - 1] + " " + st.month.slice(0, 4) : "All months";
+  const hs = b.map(replyHours).filter((h) => h != null);
+  $("kAvg").textContent = hs.length ? dur(hs.reduce((a, x) => a + x, 0) / hs.length) : "\u2013";
+  $("kAvgSub").textContent = hs.length ? `${hs.length} replied` : "No replies yet";
+  root.querySelectorAll(".ucd-kpi[data-s]").forEach((k) => k.classList.toggle("sel", k.dataset.s === st.status));
+  root.querySelectorAll("#dStatus button").forEach((x) => x.classList.toggle("on", x.dataset.s === st.status));
+
+  renderCN();
+  monthChart();
+  hbars($("cType"), group(rows, (c) => c.complaint_type || "Other"), 8);
+  hbars($("cCust"), group(rows, (c) => c.customer_name || c.customer || "Unknown"), 6);
+  table(rows);
+}
+
+function group(rows, keyFn) {
+  const m = {};
+  rows.forEach((c) => { const k = keyFn(c); m[k] = (m[k] || 0) + 1; });
+  return Object.keys(m).map((k) => ({ k, v: m[k] })).sort((a, b) => b.v - a.v);
+}
+
+function hbars(el, data, limit) {
+  if (!data.length) { el.innerHTML = '<div class="ucd-none">No complaints</div>'; return; }
+  const top = data.slice(0, limit);
+  if (data.length > limit) top.push({ k: "Other " + (data.length - limit), v: data.slice(limit).reduce((a, x) => a + x.v, 0) });
+  const max = Math.max.apply(null, top.map((d) => d.v));
+  el.innerHTML = '<div class="ucd-hb">' + top.map((d) =>
+    `<div class="r" data-tip="${esc(d.k)}: ${d.v}"><span class="k">${esc(d.k)}</span><span class="v">${d.v}</span>
+      <div class="t"><i style="width:${Math.max(3, d.v / max * 100)}%"></i></div></div>`).join("") + "</div>";
+}
+
+/* last 12 months ending at the latest month with data (or this month) */
+function monthChart() {
+  const el = $("cMonth");
+  const q = st.q.toLowerCase();
+  const pool = st.all.filter((c) => (!st.type || c.complaint_type === st.type) && (!st.status || c.status === st.status) &&
+    (!q || [c.name, c.invoice_no, c.customer_name, c.customer, c.item_code, c.logged_by_name]
+      .some((v) => String(v || "").toLowerCase().includes(q))));
+  const now = new Date();
+  let end = now.getFullYear() * 12 + now.getMonth();
+  const keys = [];
+  for (let i = 11; i >= 0; i--) {
+    const n = end - i, y = Math.floor(n / 12), m = n % 12;
+    keys.push(`${y}-${String(m + 1).padStart(2, "0")}`);
+  }
+  const counts = keys.map((k) => pool.filter((c) => String(c.logged_on).startsWith(k)).length);
+  const max = Math.max(1, Math.max.apply(null, counts));
+  el.innerHTML = `<div class="ucd-cols">${keys.map((k, i) =>
+    `<div class="ucd-col${st.month === k ? " sel" : ""}" data-m="${k}" data-tip="${MONTHS_FULL[+k.slice(5) - 1]} ${k.slice(0, 4)}: ${counts[i]} complaint${counts[i] === 1 ? "" : "s"}">
+      ${counts[i] ? `<span class="n">${counts[i]}</span>` : ""}
+      <div class="bar" style="height:${counts[i] ? Math.max(4, counts[i] / max * 100) : 1.5}%"></div></div>`).join("")}</div>
+    <div class="ucd-xl">${keys.map((k) => `<span>${MONTHS[+k.slice(5) - 1]}</span>`).join("")}</div>`;
+  el.querySelectorAll(".ucd-col").forEach((c) => c.addEventListener("click", () => {
+    st.month = st.month === c.dataset.m ? "" : c.dataset.m;
+    const sel = $("dMonth");
+    if (st.month && !Array.from(sel.options).some((o) => o.value === st.month)) {
+      const o = document.createElement("option"); o.value = st.month;
+      o.textContent = MONTHS_FULL[+st.month.slice(5) - 1] + " " + st.month.slice(0, 4); sel.appendChild(o);
+    }
+    sel.value = st.month;
+    render();
+  }));
+}
+
+/* right side: complaints list (card rows) */
+function ago(s) {
+  const d = pd(s); if (!d) return "";
+  const h = (Date.now() - d) / 36e5;
+  if (h < 1) return Math.max(1, Math.round(h * 60)) + "m ago";
+  if (h < 24) return Math.round(h) + "h ago";
+  const dd = Math.round(h / 24);
+  return dd + (dd === 1 ? " day ago" : " days ago");
+}
+function table(rows) {
+  $("tCount").textContent = `${rows.length} complaint${rows.length === 1 ? "" : "s"}`;
+  if (!rows.length) {
+    $("tList").innerHTML = `<div class="ucd-none">${st.all.length ? "No complaints match these filters" :
+      (acc.can_log ? 'No complaints yet. <a href="/log-complaint">Log the first one</a>.' : "No complaints yet.")}</div>`;
+    return;
+  }
+  const shown = rows.slice(0, st.show);
+  $("tList").innerHTML = shown.map((c) => {
+    const h = replyHours(c);
+    const rep = h != null
+      ? `<span class="rep">Reply in <b>${dur(h)}</b>${c.replied_by_name ? " · " + esc(c.replied_by_name) : ""}</span>`
+      : (c.quality_reply ? '<span class="rep">Replied</span>' : '<span class="rep pending">Reply pending</span>');
+    return `<div class="ucd-item ${esc(c.status)}${st.cur && st.cur.name === c.name ? " cur" : ""}" data-id="${esc(c.name)}">
+      <div class="ucd-it-top"><span class="id">${esc(c.name)}</span><span class="ucd-badge ${esc(c.status)}">${esc(c.status)}</span>${c.complaint_type ? `<span class="type">${esc(c.complaint_type)}</span>` : ""}</div>
+      <div class="ucd-it-cust" title="${esc(c.customer_name || c.customer)}">${esc(c.customer_name || c.customer)}</div>
+      <div class="ucd-it-meta" title="${esc(c.item_code)}"><b>${esc(c.item_code)}</b> · Inv ${esc(c.invoice_no)}${c.invoice_date ? " (" + fDate(c.invoice_date) + ")" : ""}</div>
+      ${c.complaint ? `<div class="ucd-it-text">${esc(c.complaint)}</div>` : ""}
+      <div class="ucd-it-side">
+        <span class="when">${fDate(c.logged_on)}<small>${fTime(c.logged_on)} · ${ago(c.logged_on)}</small></span>
+        <span class="rep">by ${esc(c.logged_by_name || "")}</span>
+        ${rep}
+      </div>
+    </div>`;
+  }).join("") + (rows.length > shown.length
+    ? `<div class="ucd-more"><button class="ucd-btn ghost" id="tMore" type="button">Show more (${rows.length - shown.length} left)</button></div>` : "");
+  const more = $("tMore");
+  if (more) more.addEventListener("click", (e) => { e.stopPropagation(); st.show += PAGE; table(rows); });
+}
+function markCur() {
+  document.querySelectorAll("#tList .ucd-item").forEach((el) => el.classList.toggle("cur", !!st.cur && el.dataset.id === st.cur.name));
+}
+
+/* ---------------- drawer ---------------- */
+function openDrawer(c) {
+  st.cur = c;
+  msg($("dwMsg"), "");
+  $("dwId").textContent = c.name;
+  $("dwBadge").innerHTML = `<span class="ucd-badge ${esc(c.status)}">${esc(c.status)}</span>`;
+  $("dwKv").innerHTML = `
+    <div><span>Invoice</span><b>${esc(c.invoice_no)}</b></div>
+    <div><span>Invoice date</span><b>${fDate(c.invoice_date)}</b></div>
+    <div class="full"><span>Customer</span><b>${esc(c.customer_name || c.customer)}</b></div>
+    <div class="full"><span>Item</span><b>${esc(c.item_code)}</b></div>
+    <div><span>Invoice qty</span><b>${fQty(c.item_qty)}</b></div>
+    <div><span>Type</span><b>${esc(c.complaint_type)}</b></div>
+    <div><span>Logged by</span><b>${esc(c.logged_by_name)}</b></div>
+    <div><span>Logged on</span><b>${fDate(c.logged_on)}, ${fTime(c.logged_on)}</b></div>`;
+  $("dwText").textContent = c.complaint || "";
+  if (c.quality_reply) {
+    const meta = [];
+    if (c.replied_by_name) meta.push(esc(c.replied_by_name));
+    if (c.replied_on) {
+      meta.push(fDate(c.replied_on) + ", " + fTime(c.replied_on));
+      meta.push(dur(replyHours(c)) + " after logging");
+    }
+    $("dwReplyShow").innerHTML = `<p class="ucd-sec">Quality reply</p><div class="ucd-box q">${meta.length ? `<span class="who">${meta.join(" &middot; ")}</span>` : ""}${esc(c.quality_reply)}</div>`;
+    $("dwReplyLbl").textContent = "Update reply";
+  } else {
+    $("dwReplyShow").innerHTML = "";
+    $("dwReplyLbl").textContent = "Quality reply";
+  }
+  $("dwReply").value = "";
+  $("dwReply").placeholder = c.quality_reply
+    ? "Write the updated reply here. It will replace the reply above\u2026"
+    : "Root cause, action taken, and what the customer should expect\u2026";
+  const closed = c.status === "Closed";
+  $("dwReplyEdit").style.display = closed || !acc.can_reply ? "none" : "";
+  $("dwSave").style.display = closed || !acc.can_reply ? "none" : "";
+  $("dwDone").style.display = acc.can_close ? "" : "none";
+  $("dwCmAdd").style.display = acc.can_comment ? "" : "none";
+  $("dwCmText").value = "";
+  loadComments(c.name);
+  $("dwDone").textContent = closed ? "Reopen" : "Mark Closed";
+  $("dwDone").classList.toggle("green", !closed);
+  $("dwDone").classList.toggle("ghost", closed);
+  $("dwDel").style.display = st.canDelete ? "" : "none";
+  resetDel();
+  root.classList.add("dopen");
+  markCur();
+  lockScroll(true);
+  $("dDrawer").setAttribute("aria-hidden", "false");
+}
+function closeDrawer() { root.classList.remove("dopen"); $("dDrawer").setAttribute("aria-hidden", "true"); st.cur = null; lockScroll(false); markCur(); }
+/* stop the page behind the panel from scrolling; keep layout from jumping */
+function lockScroll(on) {
+  const de = document.documentElement, b = document.body;
+  if (on) {
+    if (b.dataset.ucdLock) return;
+    const gap = window.innerWidth - de.clientWidth;
+    b.dataset.ucdLock = "1";
+    de.style.overflow = "hidden"; b.style.overflow = "hidden";
+    if (gap > 0) b.style.paddingRight = gap + "px";
+  } else {
+    delete b.dataset.ucdLock;
+    de.style.overflow = ""; b.style.overflow = ""; b.style.paddingRight = "";
+  }
+}
+
+async function update(fields, okText) {
+  const c = st.cur;
+  if (!c) return;
+  const btns = [$("dwSave"), $("dwDone"), $("dwDel")];
+  btns.forEach((b) => (b.disabled = true));
+  try {
+    await api(`/api/resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(c.name)}`,
+      { method: "PUT", body: JSON.stringify(fields) });
+    await load(c.name);
+    msg($("dwMsg"), okText, "ok");
+  } catch (e) {
+    msg($("dwMsg"), "Not saved: " + e.message);
+  }
+  btns.forEach((b) => (b.disabled = false));
+}
+
+$("dwSave").addEventListener("click", () => {
+  const t = $("dwReply").value.trim();
+  if (t.length < 5) { msg($("dwMsg"), "Write the reply first (at least a few words)."); return; }
+  if (st.cur && t === (st.cur.quality_reply || "")) { msg($("dwMsg"), "Reply is unchanged."); return; }
+  update({ quality_reply: t }, "Reply saved and posted on the invoice.");
+});
+/* Delete: System Manager only, click twice to confirm */
+let delTimer;
+function resetDel() { const b = $("dwDel"); b.classList.remove("arm"); b.textContent = "Delete"; clearTimeout(delTimer); }
+$("dwDel").addEventListener("click", async () => {
+  const b = $("dwDel"), c = st.cur;
+  if (!c) return;
+  if (!b.classList.contains("arm")) {
+    b.classList.add("arm"); b.textContent = "Click again to delete";
+    delTimer = setTimeout(resetDel, 4000);
+    return;
+  }
+  resetDel();
+  b.disabled = true;
+  try {
+    await api(`/api/resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(c.name)}`, { method: "DELETE" });
+    closeDrawer();
+    await load();
+    msg($("dMsg"), `${c.name} deleted.`, "ok");
+    setTimeout(() => msg($("dMsg"), ""), 4000);
+  } catch (e) {
+    msg($("dwMsg"), "Not deleted: " + e.message);
+  }
+  b.disabled = false;
+});
+
+$("dwDone").addEventListener("click", () => {
+  if (!st.cur) return;
+  if (st.cur.status === "Closed") update({ status: st.cur.quality_reply ? "Replied" : "Open" }, "Complaint reopened.");
+  else update({ status: "Closed" }, "Complaint closed.");
+});
+$("dwClose").addEventListener("click", closeDrawer);
+$("dShade").addEventListener("click", () => { closeDrawer(); closeCN(); });
+document.addEventListener("keydown", (e) => { if (e.key !== "Escape") return; if (st.cur) closeDrawer(); closeCN(); });
+$("tList").addEventListener("click", (e) => {
+  if (e.target.closest("a, button")) return;
+  const tr = e.target.closest(".ucd-item[data-id]");
+  if (!tr) return;
+  const c = st.all.find((x) => x.name === tr.dataset.id);
+  if (c) openDrawer(c);
+});
+
+
+/* ---------------- customer rejection: credit notes ---------------- */
+const fAmt = (v) => "\u20b9" + Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const fAmtS = (v) => { v = v || 0; return v >= 1e7 ? "\u20b9" + (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? "\u20b9" + (v / 1e5).toFixed(2) + " L" : fAmt(v); };
+async function loadCN() {
+  st.cn = [];
+  try {
+    const j = await api(CN_API);
+    st.cn = (j && Array.isArray(j.message)) ? j.message : [];
+    if (j && !Array.isArray(j.message)) console.warn("ucm_complaint_credit_notes response:", j);
+    st.cnErr = "";
+  } catch (e) { st.cnErr = e.message; }
+  renderCN();
+}
+/* month filter + search (customer / invoice) lagta hai; status / type nahi */
+function cnRows() {
+  const q = st.q.toLowerCase();
+  return (st.cn || []).filter((r) =>
+    (!st.month || String(r.posting_date).startsWith(st.month)) &&
+    (!q || [r.name, r.customer_name, r.customer, r.return_against].some((v) => String(v || "").toLowerCase().includes(q))));
+}
+function renderCN() {
+  if (st.cnErr) { $("cnAmt").textContent = "\u2013"; $("cnCount").textContent = "\u2013"; $("cnInv").textContent = "\u2013"; $("cnSub").textContent = "Could not load: " + st.cnErr; $("cnSub").title = st.cnErr; return; }
+  const r = cnRows();
+  const amt = r.reduce((a, x) => a + (x.amount || 0), 0);
+  const inv = {}; r.forEach((x) => { if (x.return_against) inv[x.return_against] = 1; });
+  $("cnAmt").textContent = fAmtS(amt);
+  $("cnAmt").title = fAmt(amt);
+  $("cnCount").textContent = r.length;
+  $("cnInv").textContent = Object.keys(inv).length;
+  $("cnSub").textContent = (st.month ? MONTHS_FULL[+st.month.slice(5) - 1] + " " + st.month.slice(0, 4) : "Since 1 Jul 2026") + " \u00b7 Sales Invoice returns";
+  if (root.classList.contains("cnopen")) drawCNList();
+}
+function drawCNList() {
+  const r = cnRows();
+  const amt = r.reduce((a, x) => a + (x.amount || 0), 0);
+  $("cnDSub").textContent = `${r.length} credit note${r.length === 1 ? "" : "s"} \u00b7 ${fAmt(amt)} excl. GST \u00b7 ` + (st.month ? MONTHS_FULL[+st.month.slice(5) - 1] + " " + st.month.slice(0, 4) : "since 1 Jul 2026");
+  if (!r.length) { $("cnList").innerHTML = '<div class="ucd-none">No credit notes for this filter</div>'; return; }
+  /* customer-wise summary + list */
+  const byC = {};
+  r.forEach((x) => { const k = x.customer_name || x.customer; byC[k] = byC[k] || { n: 0, a: 0 }; byC[k].n++; byC[k].a += x.amount || 0; });
+  const cs = Object.keys(byC).sort((a, b) => byC[b].a - byC[a].a);
+  const max = cs.length ? byC[cs[0]].a : 0;
+  $("cnList").innerHTML =
+    '<p class="ucd-sec">By customer</p><div class="ucd-hb" style="margin-bottom:18px">' + cs.slice(0, 8).map((k) =>
+      `<div class="r"><span class="k">${esc(k)} <span style="color:var(--ink-3)">\u00b7 ${byC[k].n}</span></span><span class="v">${fAmt(byC[k].a)}</span>
+        <div class="t"><i style="width:${Math.max(3, byC[k].a / max * 100)}%;background:var(--err)"></i></div></div>`).join("") + "</div>" +
+    '<p class="ucd-sec">Credit notes</p><div class="ucd-cn-rows">' + r.map((x) =>
+      `<div class="ucd-cn-row">
+        <div><a href="/app/sales-invoice/${encodeURIComponent(x.name)}" target="_blank" rel="noopener">${esc(x.name)}</a>
+          <small>${fDate(x.posting_date)}${x.return_against ? ' \u00b7 against <a href="/app/sales-invoice/' + encodeURIComponent(x.return_against) + '" target="_blank" rel="noopener">' + esc(x.return_against) + "</a>" : ""}</small></div>
+        <div class="c">${esc(x.customer_name || x.customer)}${x.remarks ? `<small>${esc(x.remarks)}</small>` : ""}</div>
+        <b>${fAmt(x.amount)}</b>
+      </div>`).join("") + "</div>";
+}
+function openCN() { drawCNList(); root.classList.add("cnopen"); $("cnDrawer").setAttribute("aria-hidden", "false"); lockScroll(true); }
+function closeCN() { root.classList.remove("cnopen"); $("cnDrawer").setAttribute("aria-hidden", "true"); if (!st.cur) lockScroll(false); }
+$("cnCard").addEventListener("click", openCN);
+$("cnClose").addEventListener("click", closeCN);
+
+/* ---------------- filters ---------------- */
+$("dMonth").addEventListener("change", (e) => { st.month = e.target.value; render(); });
+$("dType").addEventListener("change", (e) => { st.type = e.target.value; render(); });
+let tmr;
+$("dSearch").addEventListener("input", (e) => { clearTimeout(tmr); tmr = setTimeout(() => { st.q = e.target.value.trim(); render(); }, 150); });
+$("dStatus").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; st.status = b.dataset.s; render(); });
+root.querySelectorAll(".ucd-kpi[data-s]").forEach((k) => k.addEventListener("click", () => { st.status = k.dataset.s; render(); }));
+
+/* ---------------- tooltip ---------------- */
+const tip = $("dTip");
+root.addEventListener("mousemove", (e) => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.textContent = t.dataset.tip;
+  tip.style.display = "block";
+  const w = tip.offsetWidth;
+  tip.style.left = Math.min(window.innerWidth - w - 8, e.clientX + 12) + "px";
+  tip.style.top = (e.clientY - 34) + "px";
+});
+root.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+
+/* ---------------- comments (Sales + Quality) ---------------- */
+const fWhen = (s) => s ? fDate(s) + ", " + fTime(s) : "";
+function drawComments(list) {
+  $("dwCmN").textContent = list.length ? "(" + list.length + ")" : "";
+  $("dwCmList").innerHTML = list.length ? list.map((m) => `
+    <div class="ucd-cm-item${m.user === acc.user ? " me" : ""}">
+      <div class="ucd-cm-av">${esc(String(m.by || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase())}</div>
+      <div class="ucd-cm-b"><div class="ucd-cm-h"><b>${esc(m.by)}</b><span>${fWhen(m.on)} &middot; ${ago(m.on)}</span></div>
+      <div class="ucd-cm-t">${esc(m.text)}</div></div>
+    </div>`).join("") : '<div class="ucd-cm-none">No comments yet.</div>';
+}
+async function loadComments(name) {
+  $("dwCmN").textContent = "";
+  $("dwCmList").innerHTML = '<div class="ucd-cm-none">Loading comments&hellip;</div>';
+  try {
+    const j = await api(ACCESS_API + "?action=comments&name=" + encodeURIComponent(name));
+    if (st.cur && st.cur.name === name) drawComments((j && j.message && j.message.comments) || []);
+  } catch (e) { $("dwCmList").innerHTML = '<div class="ucd-cm-none">Could not load comments: ' + esc(e.message) + "</div>"; }
+}
+$("dwCmSend").addEventListener("click", async () => {
+  const c = st.cur, t = $("dwCmText").value.trim(), b = $("dwCmSend");
+  if (!c) return;
+  if (t.length < 2) { msg($("dwMsg"), "Write a comment first."); return; }
+  b.disabled = true;
+  try {
+    const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify({ action: "comment", name: c.name, text: t }) });
+    $("dwCmText").value = "";
+    msg($("dwMsg"), "");
+    if (st.cur && st.cur.name === c.name) drawComments((j && j.message && j.message.comments) || []);
+  } catch (e) { msg($("dwMsg"), "Comment not posted: " + e.message); }
+  b.disabled = false;
+});
+
+/* ---------------- ⚙️ access settings (System Manager) ---------------- */
+const LV = { admin: "System Manager", full: "Full", quality: "Quality", log: "Log \u00b7 Sales", view: "View" };
+const sv = { users: [], cand: [], pick: null };
+function openSettings() { $("sBg").hidden = false; lockScroll(true); msg($("sMsg"), ""); loadSettings(); }
+function closeSettings() { if ($("sBg").hidden) return; $("sBg").hidden = true; if (!st.cur) lockScroll(false); }
+async function loadSettings(body) {
+  try {
+    const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify(body || { action: "list" }) });
+    const m = (j && j.message) || {};
+    sv.users = m.users || []; sv.cand = m.candidates || [];
+    drawSettings();
+    return true;
+  } catch (e) { msg($("sMsg"), (body ? "Not saved: " : "Could not load users: ") + e.message); return false; }
+}
+function drawSettings() {
+  const lvSel = (u) => `<select class="ucd-lv ${u.level}" data-u="${esc(u.user)}">` +
+    ["view", "log", "quality", "full"].map((k) => `<option value="${k}"${u.level === k ? " selected" : ""}>${LV[k]}</option>`).join("") + "</select>";
+  $("sList").innerHTML = sv.users.length ? sv.users.map((u) => `
+    <div class="ucd-urow${u.enabled ? "" : " off"}">
+      <div class="ucd-uav">${esc(String(u.full_name || u.user).trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase())}</div>
+      <div class="ucd-un"><b>${esc(u.full_name)}</b><small>${esc(u.user)}${u.enabled ? "" : " \u00b7 disabled"}</small></div>
+      ${u.level === "admin" ? '<span class="ucd-lvtag admin">System Manager</span><span class="ucd-urm"></span>'
+        : lvSel(u) + `<button class="ucd-urm" type="button" data-rm="${esc(u.user)}" title="Remove access">&times;</button>`}
+    </div>`).join("") : '<div class="ucd-none">No users yet</div>';
+}
+function pickList() {
+  const q = $("sUser").value.trim().toLowerCase(), have = {};
+  sv.users.forEach((u) => (have[u.user] = 1));
+  const list = sv.cand.filter((c) => !have[c.user] && (!q || (c.full_name + " " + c.user).toLowerCase().includes(q))).slice(0, 8);
+  const box = $("sUserList");
+  box.innerHTML = list.length ? list.map((c) => `<button type="button" data-u="${esc(c.user)}"><b>${esc(c.full_name)}</b><small>${esc(c.user)}</small></button>`).join("")
+    : '<div class="ucd-none">No user found</div>';
+  box.hidden = false;
+}
+$("sUser").addEventListener("focus", pickList);
+$("sUser").addEventListener("input", () => { sv.pick = null; pickList(); });
+$("sUserList").addEventListener("mousedown", (e) => {
+  const b = e.target.closest("button[data-u]"); if (!b) return;
+  e.preventDefault();
+  const c = sv.cand.find((x) => x.user === b.dataset.u);
+  sv.pick = c ? c.user : null; $("sUser").value = c ? c.full_name + " (" + c.user + ")" : "";
+  $("sUserList").hidden = true;
+});
+$("sUser").addEventListener("blur", () => setTimeout(() => ($("sUserList").hidden = true), 120));
+$("sGrant").addEventListener("click", async () => {
+  if (!sv.pick) { msg($("sMsg"), "Pick a user from the list first."); return; }
+  const b = $("sGrant"); b.disabled = true;
+  const who = sv.pick;
+  if (await loadSettings({ action: "set", user: who, level: $("sLevel").value })) {
+    sv.pick = null; $("sUser").value = "";
+    msg($("sMsg"), "Access given to " + who + ".", "ok");
+  }
+  b.disabled = false;
+});
+$("sList").addEventListener("change", async (e) => {
+  const s = e.target.closest("select[data-u]"); if (!s) return;
+  s.disabled = true;
+  if (await loadSettings({ action: "set", user: s.dataset.u, level: s.value })) msg($("sMsg"), "Access updated for " + s.dataset.u + ".", "ok");
+  else s.disabled = false;
+});
+$("sList").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-rm]"); if (!b) return;
+  if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(() => { b.classList.remove("arm"); b.innerHTML = "&times;"; }, 3000); return; }
+  b.disabled = true;
+  if (await loadSettings({ action: "set", user: b.dataset.rm, level: "none" })) msg($("sMsg"), "Access removed for " + b.dataset.rm + ".", "ok");
+});
+$("dGear").addEventListener("click", openSettings);
+$("sClose").addEventListener("click", closeSettings);
+$("sBg").addEventListener("mousedown", (e) => { if (e.target === $("sBg")) closeSettings(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSettings(); });
+
+/* ---------------- start: access check, then dashboard ---------------- */
+async function boot() {
+  try {
+    const j = await api(ACCESS_API + "?action=me");
+    acc = Object.assign(acc, (j && j.message) || {});
+  } catch (e) {
+    $("dGate").innerHTML = `<div class="ucd-gate-card"><div class="ico">!</div><h3>Could not check access</h3><p>${esc(e.message)}</p><p class="s">Check that the <b>ucm_complaint_access</b> Server Script is saved and enabled.</p></div>`;
+    return;
+  }
+  if (!acc.can_view) {
+    $("dGate").innerHTML = `<div class="ucd-gate-card"><div class="ico lock">&#128274;</div><h3>You do not have access</h3>
+      <p>The complaint portal is open only to users given access by a System Manager.</p>
+      <p class="s">Signed in as <b>${esc(acc.full_name || acc.user || "")}</b></p></div>`;
+    return;
+  }
+  $("dGate").hidden = true;
+  $("dMain").hidden = false;
+  $("dLog").hidden = !acc.can_log;
+  $("dGear").hidden = !acc.is_admin;
+  const tag = { view: "View only", quality: "Quality", log: "Sales" }[acc.level];
+  if (tag) { $("dRole").hidden = false; $("dRole").textContent = tag; $("dRole").className = "ucd-role " + acc.level; }
+  load();
+}
+boot();
+})();
