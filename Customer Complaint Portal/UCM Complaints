@@ -1,0 +1,95 @@
+# ============================================================
+# UCMPL - Complaints list API for the dashboard (Server Script)
+# ------------------------------------------------------------
+# Setup in ERPNext:  Server Script -> New
+#   Name          : UCM Complaints API
+#   Script Type   : API
+#   API Method    : ucm_complaints
+#   Allow Guest   : No (unchecked)
+#   Enabled       : Yes
+#
+# Test URL:
+#   https://ultracraft-staging.m.frappe.cloud/api/method/ucm_complaints
+#
+# Returns every complaint the user is allowed to read, newest first,
+# with full names for Logged By / Replied By.
+# ============================================================
+# ═══════════════════════════════════════════════════════════════════════════
+# Purane Server Script "ucm_complaints" (API) ke SABSE UPAR ye lines paste karein.
+# Iske baad complaints ka data sirf unhe milega jinke paas access hai
+# (View / Log / Quality / Full, ya System Manager). Baaki code waisa hi rahega.
+# ═══════════════════════════════════════════════════════════════════════════
+access_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": frappe.session.user, "parenttype": "User",
+             "role": ["in", ["System Manager", "UCM Complaint Viewer", "UCM Complaint Logger", "UCM Complaint Quality"]]},
+    pluck="role"
+)
+if frappe.session.user != "Administrator" and not access_roles:
+    frappe.throw("You do not have access to the complaint portal.")
+# ───────────────────────── purana code yahan se ─────────────────────────────
+rows = frappe.get_list(
+    "Customer Complaint",
+    fields=[
+        "name", "creation", "owner", "invoice_no", "invoice_date",
+        "customer", "customer_name", "item_code", "item_qty",
+        "complaint_type", "complaint", "status",
+        "quality_reply", "replied_by", "replied_on"
+    ],
+    order_by="creation desc",
+    limit_page_length=0
+)
+
+users = []
+for r in rows:
+    for u in (r.owner, r.replied_by):
+        if u and u not in users:
+            users.append(u)
+
+names = {}
+if users:
+    for u in frappe.get_all("User", filters={"name": ["in", users]}, fields=["name", "full_name"]):
+        names[u.name] = u.full_name or u.name
+
+# customer name from Sales Invoice for complaints saved without it
+missing = []
+for r in rows:
+    if not r.customer_name and r.invoice_no and r.invoice_no not in missing:
+        missing.append(r.invoice_no)
+cust = {}
+if missing:
+    for si in frappe.get_all("Sales Invoice", filters={"name": ["in", missing]}, fields=["name", "customer", "customer_name"]):
+        cust[si.name] = si
+
+out = []
+for r in rows:
+    if not r.customer_name and cust.get(r.invoice_no):
+        r.customer = cust[r.invoice_no].customer
+        r.customer_name = cust[r.invoice_no].customer_name
+    out.append({
+        "name": r.name,
+        "logged_on": str(r.creation),
+        "logged_by": r.owner,
+        "logged_by_name": names.get(r.owner, r.owner),
+        "invoice_no": r.invoice_no,
+        "invoice_date": str(r.invoice_date) if r.invoice_date else "",
+        "customer": r.customer,
+        "customer_name": r.customer_name,
+        "item_code": r.item_code,
+        "item_qty": r.item_qty,
+        "complaint_type": r.complaint_type,
+        "complaint": r.complaint,
+        "status": r.status,
+        "quality_reply": r.quality_reply,
+        "replied_by": r.replied_by,
+        "replied_by_name": names.get(r.replied_by, r.replied_by) if r.replied_by else "",
+        "replied_on": str(r.replied_on) if r.replied_on else ""
+    })
+
+frappe.response["message"] = out
+# dashboard shows the Delete button only to System Managers
+me = frappe.session.user
+frappe.response["can_delete"] = bool(
+    me == "Administrator" or
+    frappe.db.exists("Has Role", {"parent": me, "parenttype": "User", "role": "System Manager"})
+)
