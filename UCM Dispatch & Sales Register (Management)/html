@@ -35,6 +35,9 @@
         </div>
         <div class="ucmw-search"><input type="search" class="ucmw-search-input" placeholder="Search records — customer, product, document, state…"></div>
         <div class="ucmw-table-info" id="ucmw-info"></div>
+        <button type="button" class="ucmw-icon-btn ucmw-btn-export" id="ucmw-export" title="Export CSV" aria-label="Export CSV">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/></svg>
+        </button>
       </div>
       <div class="report-wrapper frappe-card" id="ucmw-table">
         <div class="ucmw-empty"><span class="ucmw-spin"></span>Loading report…</div>
