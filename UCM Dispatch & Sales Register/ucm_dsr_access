@@ -1,0 +1,120 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_dsr_access
+#   Allow Guest : NO (untick)
+#
+# Web Page ke Settings (gear) icon ke peeche ka API — SIRF System Manager.
+# Access roles ke roop mein User par save hota hai:
+#   "UCM Dispatch Viewer"           → Dispatches
+#   "UCM Invoice Viewer"            → Sales Invoices
+#   dono roles                      → Full access (Dispatches + Sales Invoices)
+# (Roles na hon to ye script khud bana deta hai. Purana "UCM Sales Viewer"
+#  role bhi Full access maana jaata hai, aur level badalne par hata diya jaata hai.)
+#
+# Input : action = "list"  → users + unka access
+#         action = "set", user, level ("dispatch" / "sales" / "full" / "none")
+# Output: {"users": [...], "candidates": [...]}
+# ═══════════════════════════════════════════════════════════════════════════
+
+DISPATCH_ROLE = "UCM Dispatch Viewer"
+INVOICE_ROLE = "UCM Invoice Viewer"
+LEGACY_FULL_ROLE = "UCM Sales Viewer"
+
+session_user = frappe.session.user
+admin_roles = frappe.get_all(
+    "Has Role",
+    filters={"parent": session_user, "parenttype": "User", "role": "System Manager"},
+    pluck="role"
+)
+if session_user == "Guest" or not admin_roles:
+    frappe.throw("Only a System Manager can change access to this page.")
+
+# Roles na hon to bana do
+for role_name in [DISPATCH_ROLE, INVOICE_ROLE]:
+    if not frappe.db.exists("Role", role_name):
+        frappe.get_doc({"doctype": "Role", "role_name": role_name, "desk_access": 1}).insert(ignore_permissions=True)
+
+action = frappe.form_dict.get("action") or "list"
+
+if action == "set":
+    target = (frappe.form_dict.get("user") or "").strip()
+    level = frappe.form_dict.get("level") or "none"
+    if level not in ["dispatch", "sales", "full", "none"]:
+        frappe.throw("Invalid access level.")
+    if not target or not frappe.db.exists("User", target):
+        frappe.throw("User not found.")
+    if target in ["Administrator", "Guest"]:
+        frappe.throw("This user cannot be changed.")
+    target_is_admin = frappe.get_all(
+        "Has Role",
+        filters={"parent": target, "parenttype": "User", "role": "System Manager"},
+        pluck="role"
+    )
+    if target_is_admin:
+        frappe.throw("System Managers always have full access.")
+
+    user_doc = frappe.get_doc("User", target)
+    current = [r.role for r in user_doc.roles]
+    for role_name in [DISPATCH_ROLE, INVOICE_ROLE, LEGACY_FULL_ROLE]:
+        if role_name in current:
+            user_doc.remove_roles(role_name)
+    if level in ["dispatch", "full"]:
+        user_doc.add_roles(DISPATCH_ROLE)
+    if level in ["sales", "full"]:
+        user_doc.add_roles(INVOICE_ROLE)
+
+# ── List: kis user ko kya access hai ─────────────────────────────────────────
+role_rows = frappe.get_all(
+    "Has Role",
+    filters={"parenttype": "User", "role": ["in", [DISPATCH_ROLE, INVOICE_ROLE, LEGACY_FULL_ROLE, "System Manager"]]},
+    fields=["parent", "role"]
+)
+user_roles = {}
+for row in role_rows:
+    u = row.get("parent")
+    if u in ["Administrator", "Guest"]:
+        continue
+    if u not in user_roles:
+        user_roles[u] = []
+    user_roles[u].append(row.get("role"))
+
+users = []
+if user_roles:
+    user_info = frappe.get_all(
+        "User",
+        filters={"name": ["in", list(user_roles.keys())]},
+        fields=["name", "full_name", "enabled"],
+        limit_page_length=0
+    )
+    for info in user_info:
+        r = user_roles.get(info.get("name")) or []
+        d_ok = DISPATCH_ROLE in r or LEGACY_FULL_ROLE in r
+        i_ok = INVOICE_ROLE in r or LEGACY_FULL_ROLE in r
+        if "System Manager" in r:
+            level = "admin"
+        elif d_ok and i_ok:
+            level = "full"
+        elif d_ok:
+            level = "dispatch"
+        else:
+            level = "sales"
+        users.append({
+            "user": info.get("name"),
+            "full_name": info.get("full_name") or info.get("name"),
+            "enabled": info.get("enabled"),
+            "level": level,
+        })
+users = sorted(users, key=lambda x: ({"admin": 0, "full": 1, "sales": 2, "dispatch": 3}.get(x["level"], 4), (x["full_name"] or "").lower()))
+
+candidates = []
+for info in frappe.get_all(
+    "User",
+    filters={"user_type": "System User", "enabled": 1, "name": ["not in", ["Administrator", "Guest"]]},
+    fields=["name", "full_name"],
+    order_by="full_name asc",
+    limit_page_length=0
+):
+    candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+
+frappe.response["message"] = {"users": users, "candidates": candidates}
