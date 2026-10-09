@@ -13,7 +13,7 @@
 #                          FG "WH7 - UCM" mein · from_date, to_date  (ya month = YYYY-MM / "all")
 #   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
 #   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
-#   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date, warehouse, item_group
+#   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date (WH2 - UCM, Ultra fix)
 #                          (slider: purane API get_item_transactions + get_item_sales_orders)
 #   action = "items"     → Product filter ke liye item search · q
 #   action = "list"/"set"→ ⚙️ Settings (sirf System Manager) · user, reports = "jobcard,daily" / ""
@@ -1263,12 +1263,8 @@ elif pw_action == "nonmoving":
         nm_out.append({"item_code": r.get("item_code"), "item_name": r.get("item_name") or r.get("item_code"),
                        "item_group": r.get("item_group") or "", "inward_qty": inw, "dn_out_qty": dn,
                        "assembly_qty": asm, "other_out_qty": oth, "balance_qty": inw - dn - asm - oth})
-    nm_wh = frappe.get_all("Warehouse", filters={"is_group": 0, "disabled": 0}, pluck="name",
-                           order_by="name asc", limit_page_length=0)
-    nm_ig = frappe.get_all("Item Group", filters={"is_group": 0}, pluck="name", order_by="name asc", limit_page_length=0)
     frappe.response["message"] = {"rows": nm_out, "from_date": str(nm_f["from_date"]), "to_date": str(nm_f["to_date"]),
-                                  "warehouse": nm_f["warehouse"], "item_group": nm_f["item_group"],
-                                  "warehouses": nm_wh, "item_groups": nm_ig}
+                                  "warehouse": nm_f["warehouse"], "item_group": nm_f["item_group"]}
 
 else:
     frappe.throw("Unknown action.")
