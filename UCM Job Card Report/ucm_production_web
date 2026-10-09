@@ -1,0 +1,1179 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Server Script
+#   Script Type : API
+#   API Method  : ucm_production_web
+#   Allow Guest : NO (untick)
+#
+# "Production" web page ka backend (sirf VIEW). Do report ek page par:
+#   action = "me"        → mera access (kaun se tabs)
+#   action = "jobcard"   → UCM Job Card Details        · status_filter, item_code, month (YYYY-MM)
+#   action = "daily"     → UCM Daily Production Report · from_date, to_date, plant, less_than_30
+#   action = "analysis"  → Daily Analysis (ek din + pichla din, plant All + Pending Clear)  · date
+#   action = "largeblow" → Large Blow production: "Manufacture" Stock Entry (BOM se, bina Work Order),
+#                          FG "WH7 - UCM" mein · from_date, to_date  (ya month = YYYY-MM / "all")
+#   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
+#   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
+#   action = "items"     → Product filter ke liye item search · q
+#   action = "list"/"set"→ ⚙️ Settings (sirf System Manager) · user, reports = "jobcard,daily" / ""
+#
+# Access: System Manager ko sab. Baaki user ko har report ka alag role:
+#   UCM Prod Job Card · UCM Prod Daily · UCM Prod Performance · UCM Prod Planning   (sab = Full)
+# Daily Production + Performance ke summary cards sirf System Manager / UCM Admin ko (report jaisa).
+#
+# Slider ke liye pehle se bane API scripts hi use hote hain:
+#   ucm_job_card_detail · ucm_std_vs_actual_ct_detail · ucm_item_history_api
+#
+# SQL dono reports ki .py se BILKUL same hai. Report mein logic badle to yahan bhi badlein.
+# RestrictedPython: function / lambda / comprehension top-level variables nahi dekh sakte —
+# isliye har jagah seedhe loops.
+# ═══════════════════════════════════════════════════════════════════════════
+
+PW_ROLES = {"jobcard": "UCM Prod Job Card", "daily": "UCM Prod Daily", "perf": "UCM Prod Performance", "planning": "UCM Prod Planning"}
+PW_KEYS = ["jobcard", "daily", "perf", "planning"]
+
+pw_user = frappe.session.user
+if pw_user == "Guest":
+    frappe.throw("Please log in.")
+
+pw_role_names = ["System Manager", "UCM Admin"]
+for k in PW_KEYS:
+    pw_role_names.append(PW_ROLES[k])
+pw_my_roles = frappe.get_all("Has Role", filters={"parent": pw_user, "parenttype": "User",
+                                                  "role": ["in", pw_role_names]}, pluck="role")
+pw_is_admin = pw_user == "Administrator" or "System Manager" in pw_my_roles
+pw_show_summary = pw_is_admin or "UCM Admin" in pw_my_roles
+pw_access = {}
+for k in PW_KEYS:
+    pw_access[k] = pw_is_admin or PW_ROLES[k] in pw_my_roles
+
+pw_action = frappe.form_dict.get("action") or "me"
+
+# ── Daily Production SQL (UCM Daily Production Report jaisa) ──────────────
+DAILY_SQL = """
+SELECT
+    'Manufacture' AS entry_type, se.posting_date, se.posting_time, wo.production_plan, se.work_order,
+    CASE WHEN TIMESTAMP(se.posting_date, se.posting_time) > '2026-04-15 19:00:00' THEN se.custom_workstation ELSE NULL END AS workstation,
+    CASE
+        WHEN TIMESTAMP(se.posting_date, se.posting_time) > '2026-04-15 19:00:00' THEN se.posting_date
+        WHEN TIME(se.posting_time) >= '08:01:00' AND TIME(se.posting_time) <= '20:00:00' THEN DATE_SUB(se.posting_date, INTERVAL 1 DAY)
+        WHEN TIME(se.posting_time) > '20:00:00' THEN se.posting_date
+        WHEN TIME(se.posting_time) <= '08:00:00' THEN DATE_SUB(se.posting_date, INTERVAL 1 DAY)
+    END AS production_date,
+    CASE
+        WHEN TIMESTAMP(se.posting_date, se.posting_time) > '2026-04-15 19:00:00' THEN se.custom_shift
+        WHEN TIME(se.posting_time) >= '08:01:00' AND TIME(se.posting_time) <= '20:00:00' THEN 'B'
+        WHEN TIME(se.posting_time) > '20:00:00' THEN 'A'
+        WHEN TIME(se.posting_time) <= '08:00:00' THEN 'A'
+    END AS shift,
+    se.custom_manpower_hours AS manpower_hours,
+    se.custom_electricity_working_hours AS electricity_hours,
+    CASE
+        WHEN qt.name IS NULL THEN NULL
+        WHEN EXISTS (
+            SELECT 1 FROM `tabStock Entry` fs
+            INNER JOIN `tabQuality Inspection` qi ON qi.name = fs.custom_quality_inspection
+            WHERE qi.reference_name = qt.name AND qi.reference_type = 'Stock Entry' AND fs.docstatus = 1
+        ) THEN 'Done'
+        WHEN EXISTS (
+            SELECT 1 FROM `tabQuality Inspection` qi
+            WHERE qi.reference_name = qt.name AND qi.reference_type = 'Stock Entry' AND qi.docstatus = 1
+        ) THEN 'In Progress'
+        ELSE 'Pending'
+    END AS qc_status,
+    CASE WHEN qt.name IS NULL THEN NULL ELSE (
+        SELECT COUNT(*) FROM `tabQuality Inspection` qi WHERE qi.reference_name = qt.name AND qi.reference_type = 'Stock Entry'
+    ) END AS no_of_qc,
+    sed.item_code, sed.item_name, sed.qty, qtd.qty AS transfer_qty, sed.uom,
+    se.name AS stock_entry, qt.name AS qc_stock_entry, u.first_name AS created_by,
+    COALESCE(se.custom_pcs_weight, 0) AS custom_pcs_weight, COALESCE(item.weight_per_unit, 0) AS weight_per_unit
+FROM `tabStock Entry` se
+INNER JOIN `tabStock Entry Detail` sed ON sed.parent = se.name AND sed.is_finished_item = 1
+INNER JOIN `tabWork Order` wo ON wo.name = se.work_order
+INNER JOIN `tabItem` item ON item.name = sed.item_code
+INNER JOIN `tabUser` u ON u.name = se.owner
+LEFT JOIN `tabStock Entry` qt ON qt.custom_reference_stock_entry = se.name AND qt.docstatus = 1
+LEFT JOIN `tabStock Entry Detail` qtd ON qtd.parent = qt.name AND qtd.item_code = sed.item_code
+WHERE
+    se.docstatus = 1 AND se.stock_entry_type = 'Manufacture'
+    AND se.work_order IS NOT NULL AND se.work_order != ''
+    AND item.item_group IN ('ultra')
+    AND sed.item_name NOT LIKE 'MIX%%' AND sed.item_code NOT LIKE 'MIX%%'
+    AND %(plant)s != 'Pending Clear'
+    AND (
+        %(plant)s = 'All'
+        OR (
+            %(plant)s = 'Assembly'
+            AND (
+                (se.posting_date >= %(assembly_cutover_date)s
+                 AND wo.production_plan IN (SELECT name FROM `tabProduction Plan` WHERE custom_ucm_job_card_no = 'ASSEMBLY'))
+                OR (se.posting_date < %(assembly_cutover_date)s AND se.custom_workstation LIKE '%%Assembly%%')
+            )
+        )
+        OR (%(plant)s != 'Assembly' AND se.custom_workstation LIKE CONCAT('%%', %(plant)s, '%%'))
+    )
+    AND (
+        (TIMESTAMP(se.posting_date, se.posting_time) > '2026-04-15 19:00:00' AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s)
+        OR (
+            TIMESTAMP(se.posting_date, se.posting_time) <= '2026-04-15 19:00:00'
+            AND (
+                (TIME(se.posting_time) >= '08:01:00' AND TIME(se.posting_time) <= '20:00:00'
+                 AND DATE_SUB(se.posting_date, INTERVAL 1 DAY) BETWEEN %(from_date)s AND %(to_date)s)
+                OR (TIME(se.posting_time) > '20:00:00' AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s)
+                OR (TIME(se.posting_time) <= '08:00:00' AND DATE_SUB(se.posting_date, INTERVAL 1 DAY) BETWEEN %(from_date)s AND %(to_date)s)
+            )
+        )
+    )
+UNION ALL
+SELECT
+    'Pending Clear' AS entry_type, se.posting_date, se.posting_time, wo.production_plan, se.work_order,
+    se.custom_workstation AS workstation, se.posting_date AS production_date, se.custom_shift AS shift,
+    se.custom_manpower_hours AS manpower_hours, se.custom_electricity_working_hours AS electricity_hours,
+    NULL AS qc_status, NULL AS no_of_qc,
+    sed.item_code, sed.item_name, sed.qty, NULL AS transfer_qty, sed.uom,
+    se.name AS stock_entry, NULL AS qc_stock_entry, u.first_name AS created_by,
+    COALESCE(se.custom_pcs_weight, 0) AS custom_pcs_weight, COALESCE(item.weight_per_unit, 0) AS weight_per_unit
+FROM `tabStock Entry` se
+INNER JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+INNER JOIN `tabWork Order` wo ON wo.name = se.work_order
+INNER JOIN `tabItem` item ON item.name = sed.item_code
+INNER JOIN `tabUser` u ON u.name = se.owner
+WHERE
+    se.docstatus = 1 AND se.stock_entry_type = 'M/C Pending Clear'
+    AND se.work_order IS NOT NULL AND se.work_order != ''
+    AND item.item_group IN ('ultra')
+    AND sed.item_name NOT LIKE 'MIX%%' AND sed.item_code NOT LIKE 'MIX%%'
+    AND %(plant)s = 'Pending Clear'
+    AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s
+ORDER BY
+    production_date,
+    CASE WHEN workstation LIKE '%%New Plant%%' THEN 1 WHEN workstation LIKE '%%Old Plant%%' THEN 2
+         WHEN workstation LIKE '%%Assembly%%' THEN 3 ELSE 4 END,
+    CAST(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(workstation, 'No ', -1), ' ', 1)) AS UNSIGNED)
+"""
+
+DAILY_QI_SQL = """
+SELECT
+    se.custom_reference_stock_entry AS production_stock_entry, qi.name AS quality_inspection, qi.item_code,
+    qi.custom_total_inspection_qty AS total_inspected, qi.custom_pass_qty AS accepted,
+    qi.custom_hold_qty AS hold, qi.custom_rejected_qty AS rejected, qi.status, u.first_name AS inspected_by
+FROM `tabQuality Inspection` qi
+INNER JOIN `tabStock Entry` se ON se.name = qi.reference_name
+INNER JOIN `tabStock Entry` se2 ON se2.name = se.custom_reference_stock_entry
+INNER JOIN `tabWork Order` wo ON wo.name = se2.work_order
+INNER JOIN `tabUser` u ON u.name = qi.inspected_by
+WHERE
+    qi.docstatus = 1 AND qi.reference_type = 'Stock Entry'
+    AND (
+        %(plant)s = 'All'
+        OR (
+            %(plant)s = 'Assembly'
+            AND (
+                (se.posting_date >= %(assembly_cutover_date)s
+                 AND wo.production_plan IN (SELECT name FROM `tabProduction Plan` WHERE custom_ucm_job_card_no = 'ASSEMBLY'))
+                OR (se.posting_date < %(assembly_cutover_date)s AND se2.custom_workstation LIKE '%%Assembly%%')
+            )
+        )
+        OR (%(plant)s != 'Assembly' AND se2.custom_workstation LIKE CONCAT('%%', %(plant)s, '%%'))
+    )
+    AND (
+        (TIMESTAMP(se.posting_date, se.posting_time) > '2026-04-15 19:00:00' AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s)
+        OR (
+            TIMESTAMP(se.posting_date, se.posting_time) <= '2026-04-15 19:00:00'
+            AND (
+                (TIME(se.posting_time) BETWEEN '08:01:00' AND '20:00:00' AND DATE_SUB(se.posting_date, INTERVAL 1 DAY) BETWEEN %(from_date)s AND %(to_date)s)
+                OR (TIME(se.posting_time) > '20:00:00' AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s)
+                OR (TIME(se.posting_time) <= '08:00:00' AND DATE_SUB(se.posting_date, INTERVAL 1 DAY) BETWEEN %(from_date)s AND %(to_date)s)
+            )
+        )
+    )
+"""
+
+
+if pw_action == "me":
+    frappe.response["message"] = {
+        "user": pw_user,
+        "full_name": frappe.db.get_value("User", pw_user, "full_name") or pw_user,
+        "is_admin": pw_is_admin,
+        "show_summary": pw_show_summary,
+        "access": pw_access,
+    }
+
+# ───────────────────────────── SETTINGS ─────────────────────────────
+elif pw_action == "list" or pw_action == "set":
+    if not pw_is_admin:
+        frappe.throw("Only a System Manager can change access to this page.")
+    for k in PW_KEYS:
+        if not frappe.db.exists("Role", PW_ROLES[k]):
+            frappe.get_doc({"doctype": "Role", "role_name": PW_ROLES[k], "desk_access": 1}).insert(ignore_permissions=True)
+    all_pw_roles = []
+    for k in PW_KEYS:
+        all_pw_roles.append(PW_ROLES[k])
+
+    if pw_action == "set":
+        target = (frappe.form_dict.get("user") or "").strip()
+        want_raw = frappe.form_dict.get("reports") or ""
+        if not target or not frappe.db.exists("User", target):
+            frappe.throw("User not found.")
+        if target in ["Administrator", "Guest"]:
+            frappe.throw("This user cannot be changed.")
+        if frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User", "role": "System Manager"}, pluck="role"):
+            frappe.throw("System Managers always have full access.")
+        want = []
+        for x in want_raw.split(","):
+            x = x.strip()
+            if x in PW_ROLES and x not in want:
+                want.append(x)
+        user_doc = frappe.get_doc("User", target)
+        keep = []
+        for r in user_doc.roles:
+            if r.role not in all_pw_roles:
+                keep.append(r)
+        user_doc.set("roles", keep)
+        for k in want:
+            user_doc.append("roles", {"role": PW_ROLES[k]})
+        # Role Profile wale user ke roles normal save par overwrite ho jaate hain — isliye validate skip
+        user_doc.flags.ignore_validate = True
+        user_doc.flags.ignore_permissions = True
+        user_doc.save()
+        if want:
+            saved = frappe.get_all("Has Role", filters={"parent": target, "parenttype": "User",
+                                                        "role": ["in", all_pw_roles]}, pluck="role")
+            if len(saved) < len(want):
+                frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the "
+                             "UCM Prod roles to that Role Profile.")
+
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", all_pw_roles + ["System Manager"]]},
+                               fields=["parent", "role"])
+    user_roles = {}
+    for row in role_rows:
+        u = row.get("parent")
+        if u in ["Administrator", "Guest"]:
+            continue
+        if u not in user_roles:
+            user_roles[u] = []
+        user_roles[u].append(row.get("role"))
+    users = []
+    if user_roles:
+        # Disabled users (System Manager ho ya nahi) list mein nahi dikhte
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
+                                   fields=["name", "full_name"], limit_page_length=0):
+            r = user_roles.get(info.get("name")) or []
+            reps = []
+            for k in PW_KEYS:
+                if PW_ROLES[k] in r:
+                    reps.append(k)
+            users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
+                          "enabled": 1, "admin": 1 if "System Manager" in r else 0, "reports": reps})
+    users = sorted(users, key=lambda x: (0 if x["admin"] else 1, (x["full_name"] or "").lower()))
+    candidates = []
+    for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1,
+                                               "name": ["not in", ["Administrator", "Guest"]]},
+                               fields=["name", "full_name"], order_by="full_name asc", limit_page_length=0):
+        candidates.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name")})
+    frappe.response["message"] = {"users": users, "candidates": candidates}
+
+# ───────────────────────────── ITEM SEARCH ─────────────────────────────
+elif pw_action == "items":
+    if not (pw_access["jobcard"] or pw_access["perf"] or pw_access["planning"]):
+        frappe.throw("You do not have access to this page.")
+    q = (frappe.form_dict.get("q") or "").strip()
+    out = []
+    if len(q) >= 2:
+        like = "%" + q + "%"
+        for it in frappe.db.sql("""
+            SELECT DISTINCT wo.production_item AS item_code, IFNULL(i.item_name, wo.production_item) AS item_name
+            FROM `tabWork Order` wo LEFT JOIN `tabItem` i ON i.name = wo.production_item
+            WHERE wo.docstatus < 2 AND wo.production_item NOT LIKE 'MIX%%'
+              AND (wo.production_item LIKE %(q)s OR i.item_name LIKE %(q)s)
+            ORDER BY i.item_name LIMIT 30
+        """, {"q": like}, as_dict=True):
+            out.append({"item_code": it.item_code, "item_name": it.item_name})
+    frappe.response["message"] = out
+
+# ───────────────────── 1. JOB CARD DETAILS ─────────────────────
+elif pw_action == "jobcard":
+    if not pw_access["jobcard"]:
+        frappe.throw("You do not have access to the Job Card report.")
+    jc_status = frappe.form_dict.get("status_filter") or "All"
+    if jc_status not in ["All", "Production Not Started", "In Progress", "Hold", "Completed", "Assembled"]:
+        jc_status = "All"
+    jc_item = frappe.form_dict.get("item_code") or None
+    jc_month = (frappe.form_dict.get("month") or "").strip()   # "2026-10"
+    jc_ms = None
+    jc_me = None
+    if len(jc_month) == 7 and jc_month[4] == "-":
+        jc_ms = frappe.utils.getdate(jc_month + "-01")
+        jc_me = frappe.utils.get_last_day(jc_ms)
+
+    NOT_SINGLE = """ AND pp.name NOT IN (
+                    SELECT production_plan FROM `tabWork Order`
+                    WHERE production_plan IS NOT NULL AND production_plan != '' AND status != 'Cancelled' AND docstatus < 2
+                    GROUP BY production_plan HAVING COUNT(*) = 1) """
+    jc_rows = frappe.db.sql("""
+    SELECT
+        pp.name AS plan_no, pp.custom_ucm_job_card_no AS job_card_no,
+        IFNULL(cust.customer_name, pp.custom_party_name) AS party_name,
+        pp.status AS pp_status, wo.name AS work_order, wo.status AS wo_status, wo.docstatus AS wo_docstatus,
+        (SELECT MIN(se_first.posting_date) FROM `tabStock Entry` se_first
+          WHERE se_first.work_order = wo.name AND se_first.purpose = 'Manufacture' AND se_first.docstatus = 1) AS start_date,
+        (SELECT MAX(se_last.posting_date) FROM `tabStock Entry` se_last
+          WHERE se_last.work_order = wo.name AND se_last.purpose = 'Manufacture' AND se_last.docstatus = 1) AS end_date,
+        (DATEDIFF(
+            (SELECT MAX(se_last2.posting_date) FROM `tabStock Entry` se_last2
+              WHERE se_last2.work_order = wo.name AND se_last2.purpose = 'Manufacture' AND se_last2.docstatus = 1),
+            (SELECT MIN(se_first2.posting_date) FROM `tabStock Entry` se_first2
+              WHERE se_first2.work_order = wo.name AND se_first2.purpose = 'Manufacture' AND se_first2.docstatus = 1)
+        ) + 1) AS lead_time_days,
+        wo.production_item AS item_code, it.item_name AS item_name,
+        CAST(wo.custom_regular_qty AS UNSIGNED) AS planned_qty,
+        (SELECT SUM(mri.qty) FROM `tabProduction Plan Item` ppi
+          INNER JOIN `tabMaterial Request Item` mri ON mri.name = ppi.material_request_item
+          WHERE ppi.parent = pp.name AND ppi.item_code = wo.production_item) AS mr_planned_qty,
+        CAST(IFNULL((SELECT SUM(sed_m.qty) FROM `tabStock Entry` se_m
+          INNER JOIN `tabStock Entry Detail` sed_m ON sed_m.parent = se_m.name
+          WHERE se_m.work_order = wo.name AND se_m.docstatus = 1 AND se_m.purpose = 'Manufacture'
+            AND sed_m.item_code = wo.production_item), 0) AS UNSIGNED) AS manufactured_qty,
+        CAST(IFNULL((SELECT SUM(qi.custom_pass_qty) FROM `tabStock Entry` se_main
+          INNER JOIN `tabStock Entry` se_qi ON se_qi.custom_reference_stock_entry = se_main.name
+          INNER JOIN `tabQuality Inspection` qi ON qi.reference_name = se_qi.name AND qi.reference_type = 'Stock Entry'
+            AND qi.docstatus = 1 AND qi.item_code = wo.production_item
+          WHERE se_main.work_order = wo.name AND se_main.docstatus = 1 AND se_main.stock_entry_type = 'Manufacture'), 0) AS UNSIGNED)
+        +
+        CAST(IFNULL((SELECT SUM(sed_clear.qty) FROM `tabStock Entry` se_clear
+          INNER JOIN `tabStock Entry Detail` sed_clear ON sed_clear.parent = se_clear.name
+          WHERE se_clear.work_order = wo.name AND se_clear.docstatus = 1
+            AND se_clear.stock_entry_type IN ('M/C Pending Clear', 'Hold Clear')
+            AND sed_clear.item_code = wo.production_item), 0) AS UNSIGNED) AS approved_qty
+    FROM `tabWork Order` wo
+    INNER JOIN `tabProduction Plan` pp ON wo.production_plan = pp.name
+    LEFT JOIN `tabItem` it ON it.name = wo.production_item
+    LEFT JOIN `tabCustomer` cust ON cust.name = pp.custom_party_name
+    LEFT JOIN `tabStock Entry` se ON se.work_order = wo.name AND se.docstatus = 1
+        AND se.purpose IN ('Manufacture', 'Material Consumption for Manufacture')
+    LEFT JOIN `tabStock Entry Detail` sed ON sed.parent = se.name AND sed.item_code = wo.production_item
+    WHERE
+        wo.docstatus IN (0, 1)
+        AND wo.production_item NOT LIKE 'MIX%%'
+        AND INSTR(LOWER(wo.production_item), 'test') = 0
+        AND (
+            (%(item_code)s IS NOT NULL AND %(item_code)s != '' AND wo.production_item = %(item_code)s)
+            OR (
+                (%(item_code)s IS NULL OR %(item_code)s = '') AND %(month_start)s IS NOT NULL
+                AND (SELECT MIN(se_month.posting_date) FROM `tabStock Entry` se_month
+                      WHERE se_month.work_order = wo.name AND se_month.purpose = 'Manufacture' AND se_month.docstatus = 1)
+                    BETWEEN %(month_start)s AND %(month_end)s
+            )
+            OR (
+                (%(item_code)s IS NULL OR %(item_code)s = '') AND %(month_start)s IS NULL
+                AND (
+                    wo.status NOT IN ('Completed', 'Closed', 'Cancelled')
+                    OR se.posting_date >= SUBDATE(CURDATE(), 6)
+                    OR wo.modified >= SUBDATE(CURDATE(), 6)
+                    OR pp.status = 'Completed'
+                    OR (
+                        wo.status IN ('Completed', 'Closed')
+                        AND EXISTS (SELECT 1 FROM `tabWork Order` wo_mix WHERE wo_mix.production_plan = pp.name
+                            AND wo_mix.production_item LIKE 'MIX%%' AND wo_mix.docstatus < 2
+                            AND wo_mix.status NOT IN ('Completed', 'Closed', 'Cancelled'))
+                    )
+                )
+            )
+        )
+        AND (
+            (%(status_filter)s = 'All' AND IFNULL(pp.custom_ucm_job_card_no, '') NOT LIKE '%%ASSEMBLY%%' """ + NOT_SINGLE + """)
+            OR (%(status_filter)s = 'Completed' AND wo.status IN ('Completed', 'Closed')
+                AND IFNULL(pp.custom_ucm_job_card_no, '') NOT LIKE '%%ASSEMBLY%%' """ + NOT_SINGLE + """)
+            OR (
+                %(status_filter)s = 'Production Not Started'
+                AND (wo.docstatus = 0 OR (wo.docstatus = 1 AND wo.status = 'Not Started'))
+                AND EXISTS (SELECT 1 FROM `tabWork Order` wo_rm WHERE wo_rm.production_plan = pp.name
+                    AND wo_rm.production_item LIKE 'MIX%%' AND wo_rm.status = 'In Process' AND wo_rm.docstatus = 1)
+                AND IFNULL(pp.custom_ucm_job_card_no, '') NOT LIKE '%%ASSEMBLY%%' """ + NOT_SINGLE + """
+            )
+            OR (
+                %(status_filter)s = 'In Progress' AND wo.docstatus = 1
+                AND wo.status NOT IN ('Completed', 'Closed', 'Not Started') AND pp.status != 'Submitted'
+                AND IFNULL(pp.custom_ucm_job_card_no, '') NOT LIKE '%%ASSEMBLY%%' """ + NOT_SINGLE + """
+            )
+            OR (%(status_filter)s = 'Hold' AND pp.status = 'In Process' AND wo.status = 'Stopped')
+            OR (
+                %(status_filter)s = 'Assembled'
+                AND (
+                    IFNULL(pp.custom_ucm_job_card_no, '') LIKE '%%ASSEMBLY%%'
+                    OR pp.name IN (SELECT production_plan FROM `tabWork Order`
+                        WHERE production_plan IS NOT NULL AND production_plan != '' AND status != 'Cancelled' AND docstatus < 2
+                        GROUP BY production_plan HAVING COUNT(*) = 1)
+                )
+            )
+        )
+    GROUP BY pp.name, wo.name, wo.production_item
+    ORDER BY wo.production_plan DESC, wo.name ASC
+    """, {"status_filter": jc_status, "item_code": jc_item, "month_start": jc_ms, "month_end": jc_me}, as_dict=True)
+
+    jc_out = []
+    for r in jc_rows:
+        mr = frappe.utils.flt(r.get("mr_planned_qty"))
+        ap = frappe.utils.flt(r.get("approved_qty"))
+        ws = r.get("wo_status")
+        if ws in ["Completed", "Closed"]:
+            rs = "completed"
+        elif r.get("wo_docstatus") == 0 or ws == "Not Started":
+            rs = "not_started"
+        else:
+            rs = "in_progress"
+        jc_out.append({
+            "plan_no": r.get("plan_no"), "job_card_no": r.get("job_card_no") or "", "party_name": r.get("party_name") or "",
+            "work_order": r.get("work_order"), "wo_status": ws or "", "pp_status": r.get("pp_status") or "",
+            "item_code": r.get("item_code"), "item_name": r.get("item_name") or r.get("item_code"),
+            "mr_planned_qty": mr, "manufactured_qty": frappe.utils.flt(r.get("manufactured_qty")), "approved_qty": ap,
+            "pending_qty": ap - mr,
+            "start_date": str(r.get("start_date")) if r.get("start_date") else None,
+            "end_date": str(r.get("end_date")) if r.get("end_date") else None,
+            "lead_time_days": frappe.utils.cint(r.get("lead_time_days")) if r.get("lead_time_days") is not None else None,
+            "row_status": rs,
+        })
+    frappe.response["message"] = {"rows": jc_out, "status_filter": jc_status, "item_code": jc_item or "",
+                                  "month": jc_month if jc_ms else ""}
+
+# ───────────────────── 2. DAILY PRODUCTION (+ Daily Analysis) ─────────────────────
+elif pw_action == "daily" or pw_action == "analysis":
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    today_s = frappe.utils.nowdate()
+    runs = []
+    if pw_action == "daily":
+        dp_plant = frappe.form_dict.get("plant") or "All"
+        if dp_plant not in ["All", "New Plant", "Old Plant", "Assembly", "Pending Clear"]:
+            dp_plant = "All"
+        dp_from = frappe.form_dict.get("from_date") or today_s
+        dp_to = frappe.form_dict.get("to_date") or today_s
+        dp_lt = frappe.utils.cint(frappe.form_dict.get("less_than_30"))
+        runs.append({"key": "main", "from_date": dp_from, "to_date": dp_to, "plant": dp_plant})
+    else:
+        an_date = frappe.form_dict.get("date") or today_s
+        an_prev = str(frappe.utils.add_days(an_date, -1))
+        dp_lt = 0
+        for dd in [["today", an_date], ["prev", an_prev]]:
+            for pl in ["All", "Pending Clear"]:
+                runs.append({"key": dd[0], "from_date": dd[1], "to_date": dd[1], "plant": pl})
+
+    result = {"main": [], "today": [], "prev": []}
+    all_plans = {}
+    for run in runs:
+        f = {"from_date": run["from_date"], "to_date": run["to_date"], "plant": run["plant"],
+             "assembly_cutover_date": "2026-07-02"}
+        rows = frappe.db.sql(DAILY_SQL, f, as_dict=True)
+        qi_map = {}
+        for qr in frappe.db.sql(DAILY_QI_SQL, f, as_dict=True):
+            key = (qr.get("production_stock_entry") or "") + "||" + (qr.get("item_code") or "")
+            if key not in qi_map:
+                qi_map[key] = []
+            qi_map[key].append(qr)
+        plans = {}
+        for r in rows:
+            if r.get("production_plan"):
+                plans[r.get("production_plan")] = 1
+        jc_map = {}
+        if plans:
+            for pr in frappe.get_all("Production Plan", filters={"name": ["in", list(plans.keys())]},
+                                     fields=["name", "custom_ucm_job_card_no", "status"], limit_page_length=0):
+                jc_map[pr.get("name")] = pr.get("custom_ucm_job_card_no") or ""
+                all_plans[pr.get("name")] = pr.get("status") or ""
+        for r in rows:
+            et = r.get("entry_type")
+            ws = r.get("workstation") or ""
+            qcs = r.get("qc_status")
+            if et != "Pending Clear" and not qcs:
+                qcs = "Pending"
+            tot = 0
+            acc = 0
+            hold = 0
+            rej = 0
+            insp_by = ""
+            if et == "Manufacture":
+                matches = qi_map.get((r.get("stock_entry") or "") + "||" + (r.get("item_code") or "")) or []
+                for m in matches:
+                    tot = tot + frappe.utils.flt(m.get("total_inspected"))
+                    acc = acc + frappe.utils.flt(m.get("accepted"))
+                    hold = hold + frappe.utils.flt(m.get("hold"))
+                    rej = rej + frappe.utils.flt(m.get("rejected"))
+                if matches:
+                    insp_by = matches[len(matches) - 1].get("inspected_by") or ""
+            pw = frappe.utils.flt(r.get("custom_pcs_weight")) or frappe.utils.flt(r.get("weight_per_unit"))
+            prod_kg = round(pw * acc / 1000, 3)
+            if dp_lt:
+                if prod_kg >= 30 or prod_kg == 0 or ws == "M/C Pending Clear":
+                    continue
+            result[run["key"]].append({
+                "entry_type": et,
+                "production_date": str(r.get("production_date")) if r.get("production_date") else None,
+                "production_plan": r.get("production_plan") or "",
+                "job_card_no": jc_map.get(r.get("production_plan")) or "",
+                "work_order": r.get("work_order") or "",
+                "workstation": ws,
+                "shift": r.get("shift") or "",
+                "manpower_hours": r.get("manpower_hours"),
+                "electricity_hours": r.get("electricity_hours"),
+                "qc_status": qcs or "",
+                "no_of_qc": r.get("no_of_qc"),
+                "item_code": r.get("item_code"),
+                "item_name": r.get("item_name") or r.get("item_code"),
+                "qty": frappe.utils.flt(r.get("qty")),
+                "qi_total_inspected": tot, "qi_accepted": acc, "qi_hold": hold, "qi_rejected": rej,
+                "pw": pw, "prod_kg": prod_kg,
+                "uom": r.get("uom") or "",
+                "stock_entry": r.get("stock_entry"),
+                "qc_stock_entry": r.get("qc_stock_entry") or "",
+                "inspected_by": insp_by,
+                "created_by": r.get("created_by") or "",
+            })
+    if pw_action == "daily":
+        frappe.response["message"] = {"rows": result["main"], "plant": dp_plant, "from_date": str(dp_from),
+                                      "to_date": str(dp_to), "less_than_30": dp_lt, "show_summary": pw_show_summary}
+    else:
+        frappe.response["message"] = {"today": result["today"], "prev": result["prev"], "date": str(an_date),
+                                      "prev_date": an_prev, "plan_status": all_plans}
+
+# ───────────────────── 2b. LARGE BLOW (daily) ─────────────────────
+# Large Blow ki entry: ek hi "Manufacture" Stock Entry, raw material WH6 se,
+# FG seedha "WH7 - UCM" mein (Quality transfer nahi). Ultra item group yahan nahi aata.
+elif pw_action == "largeblow":
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    lb_today = frappe.utils.nowdate()
+    lb_f = {"from_date": frappe.form_dict.get("from_date") or lb_today,
+            "to_date": frappe.form_dict.get("to_date") or lb_today,
+            "wh": "WH7 - UCM"}
+    # Job Card tab (Large Blow): month = "all" ya "YYYY-MM"
+    lb_month = (frappe.form_dict.get("month") or "").strip()
+    if lb_month == "all":
+        lb_f["from_date"] = "2000-01-01"
+        lb_f["to_date"] = "2099-12-31"
+    elif len(lb_month) == 7:
+        lb_md = frappe.utils.getdate(lb_month + "-01")
+        lb_f["from_date"] = str(frappe.utils.get_first_day(lb_md))
+        lb_f["to_date"] = str(frappe.utils.get_last_day(lb_md))
+    lb_rows = frappe.db.sql("""
+        SELECT se.*, sed.item_code AS lb_item_code, sed.item_name AS lb_item_name,
+               sed.qty AS lb_qty, sed.uom AS lb_uom, u.first_name AS lb_created_by
+        FROM `tabStock Entry` se
+        INNER JOIN `tabStock Entry Detail` sed
+            ON sed.parent = se.name AND sed.t_warehouse = %(wh)s AND IFNULL(sed.s_warehouse, '') = ''
+        INNER JOIN `tabItem` item ON item.name = sed.item_code
+        LEFT JOIN `tabUser` u ON u.name = se.owner
+        WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture'
+          AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s
+          AND IFNULL(item.item_group, '') != 'ultra'
+        ORDER BY se.posting_date, se.posting_time
+    """, lb_f, as_dict=True)
+
+    # Stock Entry ke custom field ke naam: pehli row se dhoondo (machine, shift, hours, manpower)
+    lb_fld = {"machine": "", "shift": "", "elec": "", "man_hrs": "", "manpower": ""}
+    if lb_rows:
+        lb_keys = list(lb_rows[0].keys())
+        for k in ["custom_workstation", "custom_machine_no", "custom_machine"]:
+            if not lb_fld["machine"] and k in lb_keys:
+                lb_fld["machine"] = k
+        if "custom_shift" in lb_keys:
+            lb_fld["shift"] = "custom_shift"
+        for k in ["custom_electricity_working_hours", "custom_electricity_hours"]:
+            if not lb_fld["elec"] and k in lb_keys:
+                lb_fld["elec"] = k
+        for k in ["custom_manpower_hours", "custom_total_working_hours_per_manpower", "custom_man_hours"]:
+            if not lb_fld["man_hrs"] and k in lb_keys:
+                lb_fld["man_hrs"] = k
+        for k in lb_keys:
+            lk = k.lower()
+            if not k.startswith("custom_"):
+                continue
+            if not lb_fld["machine"] and ("machine" in lk or "workstation" in lk):
+                lb_fld["machine"] = k
+            if not lb_fld["elec"] and "electric" in lk:
+                lb_fld["elec"] = k
+            if ("manpower" in lk or "man_power" in lk) and "hour" not in lk and not lb_fld["manpower"]:
+                lb_fld["manpower"] = k
+            if not lb_fld["man_hrs"] and ("manpower" in lk or "man_power" in lk) and "hour" in lk:
+                lb_fld["man_hrs"] = k
+
+    lb_out = []
+    for r in lb_rows:
+        lb_out.append({
+            "stock_entry": r.get("name"),
+            "posting_date": str(r.get("posting_date") or ""),
+            "posting_time": str(r.get("posting_time") or ""),
+            "machine": (r.get(lb_fld["machine"]) if lb_fld["machine"] else "") or "",
+            "shift": (r.get(lb_fld["shift"]) if lb_fld["shift"] else "") or "",
+            "item_code": r.get("lb_item_code") or "",
+            "item_name": r.get("lb_item_name") or r.get("lb_item_code") or "",
+            "qty": frappe.utils.flt(r.get("lb_qty")),
+            "uom": r.get("lb_uom") or "",
+            "electricity_hours": frappe.utils.flt(r.get(lb_fld["elec"])) if lb_fld["elec"] else None,
+            "manpower_hours": frappe.utils.flt(r.get(lb_fld["man_hrs"])) if lb_fld["man_hrs"] else None,
+            "manpower": frappe.utils.flt(r.get(lb_fld["manpower"])) if lb_fld["manpower"] else None,
+            "bom": r.get("bom_no") or "",
+            "created_by": r.get("lb_created_by") or "",
+        })
+    frappe.response["message"] = {"rows": lb_out, "from_date": str(lb_f["from_date"]), "to_date": str(lb_f["to_date"]),
+                                  "month": lb_month, "fields": lb_fld}
+
+# ───────────────────── 3. JOB CARD PERFORMANCE ─────────────────────
+elif pw_action == "performance":
+    if not pw_access["perf"]:
+        frappe.throw("You do not have access to the Performance report.")
+    today_d = frappe.utils.getdate(frappe.utils.nowdate())
+    pf = {
+        "from_date": frappe.form_dict.get("from_date") or str(frappe.utils.get_first_day(today_d)),
+        "to_date": frappe.form_dict.get("to_date") or str(frappe.utils.get_last_day(today_d)),
+        "status_filter": frappe.form_dict.get("status_filter") or "Completed",
+        "item_code": frappe.form_dict.get("item_code") or None,
+    }
+    if pf["status_filter"] not in ["All", "Completed", "In Process"]:
+        pf["status_filter"] = "Completed"
+    PERF_SQL = """
+SELECT
+    wo.name AS work_order,
+    wo.status AS work_order_status,
+    wo.production_plan,
+    pp.status,
+    pp.custom_ucm_job_card_no AS job_card_no,
+
+    (
+        SELECT MIN(se.posting_date)
+        FROM `tabStock Entry` se
+        INNER JOIN `tabWork Order` wo2
+            ON wo2.name = se.work_order
+        WHERE wo2.production_plan = wo.production_plan
+          AND se.stock_entry_type = 'Manufacture'
+          AND se.docstatus = 1
+    ) AS start_date,
+
+    (
+        SELECT MAX(se.posting_date)
+        FROM `tabStock Entry` se
+        INNER JOIN `tabWork Order` wo2
+            ON wo2.name = se.work_order
+        WHERE wo2.production_plan = wo.production_plan
+          AND se.stock_entry_type = 'Manufacture'
+          AND se.docstatus = 1
+    ) AS end_date,
+
+    DATE_FORMAT(
+        (
+            SELECT MIN(se.posting_date)
+            FROM `tabStock Entry` se
+            INNER JOIN `tabWork Order` wo2
+                ON wo2.name = se.work_order
+            WHERE wo2.production_plan = wo.production_plan
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ),
+        '%%M %%Y'
+    ) AS month,
+
+    wo.production_item AS item_code,
+    wo.item_name,
+    item.item_group,
+
+    COALESCE((
+        SELECT SUM(mri.qty)
+        FROM `tabProduction Plan Item` ppi
+        INNER JOIN `tabMaterial Request Item` mri
+            ON mri.parent = ppi.material_request
+            AND mri.item_code = ppi.item_code
+        WHERE ppi.parent = wo.production_plan
+          AND ppi.item_code = wo.production_item
+    ), 0) AS qty_to_manufacture,
+
+    COALESCE((
+        SELECT SUM(qi.custom_pass_qty)
+        FROM `tabStock Entry` se_manufacture
+        INNER JOIN `tabStock Entry` se_quality
+            ON se_quality.custom_reference_stock_entry = se_manufacture.name
+            AND se_quality.docstatus = 1
+        INNER JOIN `tabQuality Inspection` qi
+            ON qi.reference_name = se_quality.name
+            AND qi.reference_type = 'Stock Entry'
+            AND qi.docstatus = 1
+        WHERE se_manufacture.work_order = wo.name
+          AND se_manufacture.stock_entry_type = 'Manufacture'
+          AND se_manufacture.docstatus = 1
+    ), 0) AS approved_qty_total,
+
+    item.weight_per_unit AS pc_weight,
+    item.custom_cycle_time AS std_cycle_time,
+    item.custom_cavity AS std_cavity,
+
+    ROUND(
+        (
+            COALESCE((
+                SELECT SUM(mri.qty)
+                FROM `tabProduction Plan Item` ppi
+                INNER JOIN `tabMaterial Request Item` mri
+                    ON mri.parent = ppi.material_request
+                    AND mri.item_code = ppi.item_code
+                WHERE ppi.parent = wo.production_plan
+                  AND ppi.item_code = wo.production_item
+            ), 0)
+            / NULLIF(item.custom_cavity, 0)
+        ) * COALESCE(item.custom_cycle_time, 0) / 3600.0
+    , 4) AS std_lead_time,
+
+    ROUND(
+        COALESCE((
+            SELECT SUM(se.custom_electricity_working_hours)
+            FROM `tabStock Entry` se
+            WHERE se.work_order = wo.name
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ), 0)
+    , 4) AS actual_lead_time,
+
+    DATEDIFF(
+        (
+            SELECT MAX(se.posting_date)
+            FROM `tabStock Entry` se
+            INNER JOIN `tabWork Order` wo2
+                ON wo2.name = se.work_order
+            WHERE wo2.production_plan = wo.production_plan
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ),
+        (
+            SELECT MIN(se.posting_date)
+            FROM `tabStock Entry` se
+            INNER JOIN `tabWork Order` wo2
+                ON wo2.name = se.work_order
+            WHERE wo2.production_plan = wo.production_plan
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        )
+    ) + 1 AS lead_time_days,
+
+    ROUND(
+        COALESCE((
+            SELECT SUM(se.custom_total_cost)
+            FROM `tabStock Entry` se
+            WHERE se.work_order = wo.name
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ), 0)
+        /
+        NULLIF(COALESCE((
+            SELECT SUM(se.custom_electricity_working_hours)
+            FROM `tabStock Entry` se
+            WHERE se.work_order = wo.name
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ), 0), 0)
+        *
+        ROUND(
+            (
+                COALESCE((
+                    SELECT SUM(mri.qty)
+                    FROM `tabProduction Plan Item` ppi
+                    INNER JOIN `tabMaterial Request Item` mri
+                        ON mri.parent = ppi.material_request
+                        AND mri.item_code = ppi.item_code
+                    WHERE ppi.parent = wo.production_plan
+                      AND ppi.item_code = wo.production_item
+                ), 0)
+                / NULLIF(item.custom_cavity, 0)
+            ) * COALESCE(item.custom_cycle_time, 0) / 3600.0
+        , 4)
+    , 4) AS std_production_cost,
+
+    ROUND(
+        COALESCE((
+            SELECT SUM(se.custom_total_cost)
+            FROM `tabStock Entry` se
+            WHERE se.work_order = wo.name
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ), 0)
+    , 4) AS production_cost,
+
+    ROUND(
+        COALESCE((
+            SELECT SUM(se.custom_total_cost)
+            FROM `tabStock Entry` se
+            WHERE se.work_order = wo.name
+              AND se.stock_entry_type = 'Manufacture'
+              AND se.docstatus = 1
+        ), 0)
+        -
+        (
+            COALESCE((
+                SELECT SUM(se.custom_total_cost)
+                FROM `tabStock Entry` se
+                WHERE se.work_order = wo.name
+                  AND se.stock_entry_type = 'Manufacture'
+                  AND se.docstatus = 1
+            ), 0)
+            /
+            NULLIF(COALESCE((
+                SELECT SUM(se.custom_electricity_working_hours)
+                FROM `tabStock Entry` se
+                WHERE se.work_order = wo.name
+                  AND se.stock_entry_type = 'Manufacture'
+                  AND se.docstatus = 1
+            ), 0), 0)
+            *
+            ROUND(
+                (
+                    COALESCE((
+                        SELECT SUM(mri.qty)
+                        FROM `tabProduction Plan Item` ppi
+                        INNER JOIN `tabMaterial Request Item` mri
+                            ON mri.parent = ppi.material_request
+                            AND mri.item_code = ppi.item_code
+                        WHERE ppi.parent = wo.production_plan
+                          AND ppi.item_code = wo.production_item
+                    ), 0)
+                    / NULLIF(item.custom_cavity, 0)
+                ) * COALESCE(item.custom_cycle_time, 0) / 3600.0
+            , 4)
+        )
+    , 4) AS extra_production_cost,
+
+    ROUND(
+        (
+            ROUND(
+                (
+                    COALESCE((
+                        SELECT SUM(mri.qty)
+                        FROM `tabProduction Plan Item` ppi
+                        INNER JOIN `tabMaterial Request Item` mri
+                            ON mri.parent = ppi.material_request
+                            AND mri.item_code = ppi.item_code
+                        WHERE ppi.parent = wo.production_plan
+                          AND ppi.item_code = wo.production_item
+                    ), 0)
+                    / NULLIF(item.custom_cavity, 0)
+                ) * COALESCE(item.custom_cycle_time, 0) / 3600.0
+            , 4)
+            /
+            NULLIF(
+                COALESCE((
+                    SELECT SUM(se.custom_electricity_working_hours)
+                    FROM `tabStock Entry` se
+                    WHERE se.work_order = wo.name
+                      AND se.stock_entry_type = 'Manufacture'
+                      AND se.docstatus = 1
+                ), 0),
+                0
+            )
+        ) * 100
+    , 2) AS efficiency,
+
+    wo.production_plan AS prod_plan_link
+
+FROM `tabWork Order` wo
+INNER JOIN `tabItem` item
+    ON item.name = wo.production_item
+INNER JOIN `tabProduction Plan` pp
+    ON pp.name = wo.production_plan
+
+WHERE
+    wo.docstatus < 2
+    AND item.item_group IN ('ultra')
+    AND wo.production_plan > 'MFG-PP-2026-00611'
+    AND NOT (wo.docstatus = 0 AND pp.status = 'Closed')
+    AND wo.production_plan IN (
+        SELECT production_plan
+        FROM `tabWork Order`
+        WHERE production_plan IS NOT NULL
+          AND production_plan != ''
+        GROUP BY production_plan
+        HAVING COUNT(*) >= 2
+           AND SUM(CASE WHEN docstatus = 2 THEN 1 ELSE 0 END) = 0
+    )
+    AND (
+        (
+            %(item_code)s IS NOT NULL AND %(item_code)s != ''
+            AND wo.production_item = %(item_code)s
+        )
+        OR
+        (
+            (%(item_code)s IS NULL OR %(item_code)s = '')
+            AND (
+                SELECT MIN(se.posting_date)
+                FROM `tabStock Entry` se
+                INNER JOIN `tabWork Order` wo2
+                    ON wo2.name = se.work_order
+                WHERE wo2.production_plan = wo.production_plan
+                  AND se.stock_entry_type = 'Manufacture'
+                  AND se.docstatus = 1
+            ) BETWEEN %(from_date)s AND %(to_date)s
+        )
+    )
+    AND (
+        %(status_filter)s = 'All'
+        OR (
+            %(status_filter)s = 'Completed'
+            AND wo.production_plan IN (
+                SELECT name
+                FROM `tabProduction Plan`
+                WHERE status IN ('Completed', 'Closed')
+            )
+        )
+        OR (
+            %(status_filter)s = 'In Process'
+            AND wo.production_plan IN (
+                SELECT name
+                FROM `tabProduction Plan`
+                WHERE status = 'In Process'
+            )
+        )
+    )
+
+ORDER BY
+    wo.production_plan DESC,
+    item.item_group ASC,
+    wo.name ASC
+"""
+    PERF_TOTAL_SQL = """
+SELECT DISTINCT wo.production_plan AS production_plan
+FROM `tabWork Order` wo
+INNER JOIN `tabItem` item
+    ON item.name = wo.production_item
+INNER JOIN `tabProduction Plan` pp
+    ON pp.name = wo.production_plan
+
+WHERE
+    wo.docstatus < 2
+    AND item.item_group IN ('ultra')
+    AND wo.production_plan > 'MFG-PP-2026-00611'
+    AND NOT (wo.docstatus = 0 AND pp.status = 'Closed')
+    AND wo.production_plan IN (
+        SELECT production_plan
+        FROM `tabWork Order`
+        WHERE production_plan IS NOT NULL
+          AND production_plan != ''
+        GROUP BY production_plan
+        HAVING COUNT(*) >= 2
+           AND SUM(CASE WHEN docstatus = 2 THEN 1 ELSE 0 END) = 0
+    )
+    AND (
+        (
+            %(item_code)s IS NOT NULL AND %(item_code)s != ''
+            AND wo.production_item = %(item_code)s
+        )
+        OR
+        (
+            (%(item_code)s IS NULL OR %(item_code)s = '')
+            AND (
+                SELECT MIN(se.posting_date)
+                FROM `tabStock Entry` se
+                INNER JOIN `tabWork Order` wo2
+                    ON wo2.name = se.work_order
+                WHERE wo2.production_plan = wo.production_plan
+                  AND se.stock_entry_type = 'Manufacture'
+                  AND se.docstatus = 1
+            ) BETWEEN %(from_date)s AND %(to_date)s
+        )
+    )
+"""
+    pr_rows = frappe.db.sql(PERF_SQL, pf, as_dict=True)
+    pr_out = []
+    plans_all = {}
+    plans_done = {}
+    eff_sum = 0
+    eff_n = 0
+    tot_cost = 0
+    tot_extra = 0
+    for r in pr_rows:
+        eff = r.get("efficiency")
+        qtm = frappe.utils.flt(r.get("qty_to_manufacture"))
+        apq = frappe.utils.flt(r.get("approved_qty_total"))
+        pps = r.get("status") or ""
+        comp = ""
+        comp_pct = None
+        if pps in ["Completed", "Closed"]:
+            if qtm:
+                comp_pct = int(apq / qtm * 100)
+                comp = "COMPLETED" if apq >= qtm * 0.9 else "PARTIALLY COMPLETED"
+                if apq < qtm * 0.9:
+                    scv = frappe.utils.flt(r.get("std_cavity"))
+                    sct = frappe.utils.flt(r.get("std_cycle_time"))
+                    alt = frappe.utils.flt(r.get("actual_lead_time"))
+                    if scv > 0 and sct > 0 and alt > 0:
+                        nslt = (apq / scv) * sct / 3600.0
+                        if nslt > 0:
+                            eff = round((nslt / alt) * 100, 2)
+        plan = r.get("production_plan")
+        if plan:
+            plans_all[plan] = 1
+            if pps in ["Completed", "Closed"]:
+                plans_done[plan] = 1
+        tot_cost = tot_cost + frappe.utils.flt(r.get("production_cost"))
+        tot_extra = tot_extra + frappe.utils.flt(r.get("extra_production_cost"))
+        if eff is not None:
+            eff_sum = eff_sum + frappe.utils.flt(eff)
+            eff_n = eff_n + 1
+        pr_out.append({
+            "work_order": r.get("work_order"), "wo_status": r.get("work_order_status") or "",
+            "production_plan": plan, "pp_status": pps, "job_card_no": r.get("job_card_no") or "",
+            "start_date": str(r.get("start_date")) if r.get("start_date") else None,
+            "end_date": str(r.get("end_date")) if r.get("end_date") else None,
+            "month": r.get("month") or "", "lead_time_days": r.get("lead_time_days"),
+            "item_code": r.get("item_code"), "item_name": r.get("item_name") or r.get("item_code"),
+            "qty_to_manufacture": qtm, "approved_qty": apq,
+            "pc_weight": frappe.utils.flt(r.get("pc_weight")),
+            "std_cycle_time": frappe.utils.flt(r.get("std_cycle_time")), "std_cavity": frappe.utils.flt(r.get("std_cavity")),
+            "std_lead_time": frappe.utils.flt(r.get("std_lead_time")), "actual_lead_time": frappe.utils.flt(r.get("actual_lead_time")),
+            "std_production_cost": frappe.utils.flt(r.get("std_production_cost")),
+            "production_cost": frappe.utils.flt(r.get("production_cost")),
+            "extra_production_cost": frappe.utils.flt(r.get("extra_production_cost")),
+            "efficiency": frappe.utils.flt(eff) if eff is not None else None,
+            "completion": comp, "completion_pct": comp_pct,
+            "zero_std": 0 if (r.get("std_cavity") and r.get("std_cycle_time")) else 1,
+        })
+    summary = None
+    if pw_show_summary:
+        tp = {}
+        for t in frappe.db.sql(PERF_TOTAL_SQL, pf, as_dict=True):
+            if t.get("production_plan"):
+                tp[t.get("production_plan")] = 1
+        summary = {"total_job_card": len(tp), "completed_plans": len(plans_done),
+                   "avg_efficiency": round(eff_sum / eff_n, 2) if eff_n else 0,
+                   "production_cost": tot_cost, "extra_cost": tot_extra}
+    frappe.response["message"] = {"rows": pr_out, "summary": summary, "from_date": str(pf["from_date"]),
+                                  "to_date": str(pf["to_date"]), "status_filter": pf["status_filter"]}
+
+# ───────────────────── 4. PRODUCTION PLANNING ─────────────────────
+elif pw_action == "planning":
+    if not pw_access["planning"]:
+        frappe.throw("You do not have access to the Production Planning report.")
+    pl_month = (frappe.form_dict.get("month") or "").strip()   # "2026-10" ya blank
+    pl_item = (frappe.form_dict.get("item_code") or "").strip()
+    PLAN_SQL = """
+    SELECT
+        pp.name AS pp_name,
+        pp.custom_ucm_job_card_no AS job_card_no,
+        pp.docstatus,
+        wo.status AS wo_status,
+        pp.posting_date,
+        pp.custom_expted_completion_date AS expected_date,
+        IFNULL(cust.customer_name, pp.custom_party_name) AS party_name,
+        wo.production_item,
+        it.item_name AS product_name,
+        wo.name AS wo_name,
+
+        (SELECT MIN(se.posting_date) FROM `tabStock Entry` se
+         WHERE se.work_order = wo.name AND se.purpose = 'Manufacture' AND se.docstatus = 1) AS start_date,
+
+        (SELECT MAX(se.posting_date) FROM `tabStock Entry` se
+         WHERE se.work_order = wo.name AND se.purpose = 'Manufacture' AND se.docstatus = 1) AS end_date,
+
+        (SELECT SUM(mri.qty) FROM `tabProduction Plan Item` ppi
+         INNER JOIN `tabMaterial Request Item` mri ON mri.name = ppi.material_request_item
+         WHERE ppi.parent = pp.name AND ppi.item_code = wo.production_item) AS planned_qty,
+
+        -- Approved Qty:
+        --   1) SUM(Quality Inspection.custom_pass_qty) for QC raised against
+        --      a Stock Entry whose custom_reference_stock_entry points back
+        --      to this Work Order's Manufacture entry, PLUS
+        --   2) SUM(qty) from any 'M/C Pending Clear' / 'Hold Clear' Stock
+        --      Entries for this Work Order (qty cleared but not yet QC'd).
+        CAST(IFNULL((
+            SELECT SUM(qi.custom_pass_qty)
+            FROM `tabStock Entry` se_main
+            INNER JOIN `tabStock Entry` se_qi
+                ON se_qi.custom_reference_stock_entry = se_main.name
+            INNER JOIN `tabQuality Inspection` qi
+                ON qi.reference_name = se_qi.name
+                AND qi.reference_type = 'Stock Entry'
+                AND qi.docstatus = 1
+                AND qi.item_code = wo.production_item
+            WHERE se_main.work_order = wo.name
+              AND se_main.docstatus = 1
+              AND se_main.stock_entry_type = 'Manufacture'
+        ), 0) AS UNSIGNED)
+        +
+        CAST(IFNULL((
+            SELECT SUM(sed_clear.qty)
+            FROM `tabStock Entry` se_clear
+            INNER JOIN `tabStock Entry Detail` sed_clear
+                ON sed_clear.parent = se_clear.name
+            WHERE se_clear.work_order = wo.name
+              AND se_clear.docstatus = 1
+              AND se_clear.stock_entry_type IN ('M/C Pending Clear', 'Hold Clear')
+              AND sed_clear.item_code = wo.production_item
+        ), 0) AS UNSIGNED) AS approved_qty
+
+    FROM `tabWork Order` wo
+    INNER JOIN `tabProduction Plan` pp ON wo.production_plan = pp.name
+    LEFT JOIN `tabItem` it ON it.name = wo.production_item
+    LEFT JOIN `tabCustomer` cust ON cust.name = pp.custom_party_name
+
+    WHERE wo.docstatus IN (0, 1) AND wo.production_item NOT LIKE 'MIX%%'
+    AND (pp.custom_ucm_job_card_no IS NULL OR pp.custom_ucm_job_card_no != 'ASSEMBLY')
+"""
+    pl_vals = {}
+    if len(pl_month) == 7 and pl_month[4] == "-":
+        pl_vals["m"] = frappe.utils.cint(pl_month[5:7])
+        pl_vals["y"] = frappe.utils.cint(pl_month[0:4])
+        PLAN_SQL = PLAN_SQL + """ AND (
+            (pp.custom_ucm_job_card_no IS NOT NULL AND pp.custom_ucm_job_card_no != ''
+             AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pp.custom_ucm_job_card_no, '/', 2), '/', -1) AS UNSIGNED) = %(m)s
+             AND YEAR(pp.posting_date) = %(y)s)
+            OR
+            ((pp.custom_ucm_job_card_no IS NULL OR pp.custom_ucm_job_card_no = '')
+             AND MONTH(pp.posting_date) = %(m)s AND YEAR(pp.posting_date) = %(y)s)
+        )"""
+    if pl_item:
+        pl_vals["item"] = pl_item
+        PLAN_SQL = PLAN_SQL + " AND wo.production_item = %(item)s"
+    PLAN_SQL = PLAN_SQL + " ORDER BY pp.posting_date DESC, wo.name ASC"
+    today_o = frappe.utils.getdate()
+    pl_out = []
+    for r in frappe.db.sql(PLAN_SQL, pl_vals, as_dict=True):
+        st_raw = r.get("start_date")
+        en_raw = r.get("end_date")
+        ex_raw = r.get("expected_date")
+        lead = 0
+        if st_raw and en_raw:
+            lead = (frappe.utils.getdate(en_raw) - frappe.utils.getdate(st_raw)).days + 1
+        ws = r.get("wo_status") or ""
+        exp_o = frappe.utils.getdate(ex_raw) if ex_raw else None
+        end_o = frappe.utils.getdate(en_raw) if en_raw else None
+        if ws == "Cancelled":
+            stv = "CANCELLED"
+        elif ws == "Stopped":
+            stv = "HOLD"
+        elif not st_raw:
+            stv = "DELAYED" if (exp_o and exp_o < today_o) else "NOT STARTED"
+        elif ws in ["Closed", "Completed"]:
+            if not ex_raw:
+                stv = "COMPLETED"
+            elif exp_o and end_o and exp_o < end_o:
+                stv = "DELAY"
+            else:
+                stv = "ON TIME"
+        elif exp_o and exp_o < today_o:
+            stv = "DELAYED"
+        else:
+            stv = "IN PROGRESS"
+        jc = r.get("job_card_no") or "N/A"
+        parts = jc.split("/")
+        k1 = 999
+        k2 = 999
+        if len(parts) >= 3:
+            if parts[1].isdigit():
+                k1 = int(parts[1])
+            if parts[2].isdigit():
+                k2 = int(parts[2])
+        pl_out.append({
+            "pp_name": r.get("pp_name"), "job_card_no": jc, "wo_name": r.get("wo_name"),
+            "wo_status": ws or "Draft", "posting_date": str(r.get("posting_date")) if r.get("posting_date") else None,
+            "expected_date": str(ex_raw) if ex_raw else None, "party_name": r.get("party_name") or "",
+            "item_code": r.get("production_item"), "product_name": r.get("product_name") or r.get("production_item"),
+            "planned_qty": frappe.utils.flt(r.get("planned_qty")), "approved_qty": frappe.utils.flt(r.get("approved_qty")),
+            "start_date": str(st_raw) if st_raw else None, "end_date": str(en_raw) if en_raw else None,
+            "lead_time": lead, "status": stv, "sort_key": k1 * 100000 + k2,
+        })
+    pl_out = sorted(pl_out, key=lambda x: x["sort_key"])
+    frappe.response["message"] = {"rows": pl_out, "month": pl_month, "item_code": pl_item}
+
+else:
+    frappe.throw("Unknown action.")
