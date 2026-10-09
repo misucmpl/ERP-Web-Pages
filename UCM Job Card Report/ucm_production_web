@@ -15,8 +15,11 @@
 #   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
 #   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date (WH2 - UCM, Ultra fix)
 #                          (slider: purane API get_item_transactions + get_item_sales_orders)
+#   action = "close_plan" (POST, "Close Plan" access wale) → Production Plan ke saare submitted Work Orders
+#                          "Closed", phir Production Plan "Closed" · plan
 #   action = "items"     → Product filter ke liye item search · q
 #   action = "list"/"set"→ ⚙️ Settings (sirf System Manager) · user, reports = "jobcard,daily" / ""
+#   action = "set_close" → ⚙️ "Close Plan" access do / hatao (System Manager ko bhi) · user, on = 1 / 0
 #
 # Access: System Manager ko sab. Baaki user ko har report ka alag role:
 #   UCM Prod Job Card · UCM Prod Daily · UCM Prod Performance · UCM Prod Planning · UCM Prod Non Moving  (sab = Full)
@@ -33,12 +36,15 @@
 PW_ROLES = {"jobcard": "UCM Prod Job Card", "daily": "UCM Prod Daily", "perf": "UCM Prod Performance",
             "planning": "UCM Prod Planning", "nonmoving": "UCM Prod Non Moving"}
 PW_KEYS = ["jobcard", "daily", "perf", "planning", "nonmoving"]
+# Job Card ka "Close" button: alag access. System Manager ko bhi apne aap NAHI milta,
+# ⚙️ se "Close Plan" dena padta hai.
+PW_CLOSE_ROLE = "UCM Prod Close Plan"
 
 pw_user = frappe.session.user
 if pw_user == "Guest":
     frappe.throw("Please log in.")
 
-pw_role_names = ["System Manager", "UCM Admin"]
+pw_role_names = ["System Manager", "UCM Admin", PW_CLOSE_ROLE]
 for k in PW_KEYS:
     pw_role_names.append(PW_ROLES[k])
 pw_my_roles = frappe.get_all("Has Role", filters={"parent": pw_user, "parenttype": "User",
@@ -48,6 +54,7 @@ pw_show_summary = pw_is_admin or "UCM Admin" in pw_my_roles
 pw_access = {}
 for k in PW_KEYS:
     pw_access[k] = pw_is_admin or PW_ROLES[k] in pw_my_roles
+pw_can_close = PW_CLOSE_ROLE in pw_my_roles and pw_access["jobcard"]
 
 pw_action = frappe.form_dict.get("action") or "me"
 
@@ -199,15 +206,40 @@ if pw_action == "me":
         "is_admin": pw_is_admin,
         "show_summary": pw_show_summary,
         "access": pw_access,
+        "can_close_plan": pw_can_close,
     }
 
 # ───────────────────────────── SETTINGS ─────────────────────────────
-elif pw_action == "list" or pw_action == "set":
+elif pw_action == "list" or pw_action == "set" or pw_action == "set_close":
     if not pw_is_admin:
         frappe.throw("Only a System Manager can change access to this page.")
     for k in PW_KEYS:
         if not frappe.db.exists("Role", PW_ROLES[k]):
             frappe.get_doc({"doctype": "Role", "role_name": PW_ROLES[k], "desk_access": 1}).insert(ignore_permissions=True)
+    if not frappe.db.exists("Role", PW_CLOSE_ROLE):
+        frappe.get_doc({"doctype": "Role", "role_name": PW_CLOSE_ROLE, "desk_access": 1}).insert(ignore_permissions=True)
+
+    # "Close Plan" access: System Manager ko bhi diya / hataya ja sakta hai
+    if pw_action == "set_close":
+        ct = (frappe.form_dict.get("user") or "").strip()
+        con = frappe.utils.cint(frappe.form_dict.get("on"))
+        if not ct or not frappe.db.exists("User", ct) or ct in ["Administrator", "Guest"]:
+            frappe.throw("User not found.")
+        cdoc = frappe.get_doc("User", ct)
+        ckeep = []
+        for r in cdoc.roles:
+            if r.role != PW_CLOSE_ROLE:
+                ckeep.append(r)
+        cdoc.set("roles", ckeep)
+        if con:
+            cdoc.append("roles", {"role": PW_CLOSE_ROLE})
+        cdoc.flags.ignore_validate = True
+        cdoc.flags.ignore_permissions = True
+        cdoc.save()
+        chas = frappe.get_all("Has Role", filters={"parent": ct, "parenttype": "User", "role": PW_CLOSE_ROLE}, pluck="role")
+        if con and not chas:
+            frappe.throw("Close Plan access could not be saved for " + ct + ". If this user has a Role Profile, add "
+                         + PW_CLOSE_ROLE + " to that Role Profile.")
     all_pw_roles = []
     for k in PW_KEYS:
         all_pw_roles.append(PW_ROLES[k])
@@ -229,7 +261,8 @@ elif pw_action == "list" or pw_action == "set":
         user_doc = frappe.get_doc("User", target)
         keep = []
         for r in user_doc.roles:
-            if r.role not in all_pw_roles:
+            # saara access hataya (✕) to Close Plan bhi hatao
+            if r.role not in all_pw_roles and not (not want and r.role == PW_CLOSE_ROLE):
                 keep.append(r)
         user_doc.set("roles", keep)
         for k in want:
@@ -245,7 +278,7 @@ elif pw_action == "list" or pw_action == "set":
                 frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the "
                              "UCM Prod roles to that Role Profile.")
 
-    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", all_pw_roles + ["System Manager"]]},
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", all_pw_roles + ["System Manager", PW_CLOSE_ROLE]]},
                                fields=["parent", "role"])
     user_roles = {}
     for row in role_rows:
@@ -266,7 +299,8 @@ elif pw_action == "list" or pw_action == "set":
                 if PW_ROLES[k] in r:
                     reps.append(k)
             users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
-                          "enabled": 1, "admin": 1 if "System Manager" in r else 0, "reports": reps})
+                          "enabled": 1, "admin": 1 if "System Manager" in r else 0, "reports": reps,
+                          "close": 1 if PW_CLOSE_ROLE in r else 0})
     users = sorted(users, key=lambda x: (0 if x["admin"] else 1, (x["full_name"] or "").lower()))
     candidates = []
     for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1,
@@ -368,6 +402,9 @@ elif pw_action == "jobcard":
             )
             OR (
                 (%(item_code)s IS NULL OR %(item_code)s = '') AND %(month_start)s IS NULL
+                -- Production Plan Closed / Completed ho gaya par Work Order abhi khula hai: "Currently working" mein nahi
+                AND NOT (IFNULL(pp.status, '') IN ('Closed', 'Completed')
+                         AND IFNULL(wo.status, '') NOT IN ('Completed', 'Closed', 'Cancelled'))
                 AND (
                     wo.status NOT IN ('Completed', 'Closed', 'Cancelled')
                     OR se.posting_date >= SUBDATE(CURDATE(), 6)
@@ -1177,6 +1214,47 @@ elif pw_action == "planning":
         })
     pl_out = sorted(pl_out, key=lambda x: x["sort_key"])
     frappe.response["message"] = {"rows": pl_out, "month": pl_month, "item_code": pl_item}
+
+# ───────────────────── 1b. CLOSE PRODUCTION PLAN ("Close Plan" access) ─────────────────────
+# Pehle plan ke saare submitted Work Orders (Completed / Closed / Cancelled chhod kar) Close,
+# ERPNext ke apne close_work_order se. Sab band ho jaayein tab hi Production Plan Close.
+elif pw_action == "close_plan":
+    if not pw_can_close:
+        frappe.throw("You do not have Close Plan access. Ask a System Manager to give it from the access settings.")
+    cp_name = (frappe.form_dict.get("plan") or "").strip()
+    if not cp_name or not frappe.db.exists("Production Plan", cp_name):
+        frappe.throw("Production Plan not found.")
+    cp_info = frappe.db.get_value("Production Plan", cp_name, ["status", "docstatus"], as_dict=True) or {}
+    if frappe.utils.cint(cp_info.get("docstatus")) != 1:
+        frappe.throw("Only a submitted Production Plan can be closed.")
+    cp_wos = frappe.get_all("Work Order",
+                            filters={"production_plan": cp_name, "docstatus": 1,
+                                     "status": ["not in", ["Completed", "Closed", "Cancelled"]]},
+                            pluck="name", limit_page_length=0)
+    cp_drafts = frappe.get_all("Work Order", filters={"production_plan": cp_name, "docstatus": 0},
+                               pluck="name", limit_page_length=0)
+    cp_closed = []
+    cp_failed = []
+    for wo in cp_wos:
+        try:
+            frappe.call("erpnext.manufacturing.doctype.work_order.work_order.close_work_order",
+                        work_order=wo, status="Closed")
+            cp_closed.append(wo)
+        except Exception as e:
+            cp_failed.append({"work_order": wo, "error": str(e)})
+    cp_plan_closed = False
+    if not cp_failed:
+        if (cp_info.get("status") or "") == "Closed":
+            cp_plan_closed = True
+        else:
+            try:
+                cp_doc = frappe.get_doc("Production Plan", cp_name)
+                cp_doc.set_status(close=True)
+            except Exception:
+                frappe.db.set_value("Production Plan", cp_name, "status", "Closed")
+            cp_plan_closed = (frappe.db.get_value("Production Plan", cp_name, "status") == "Closed")
+    frappe.response["message"] = {"plan": cp_name, "closed_work_orders": cp_closed, "failed": cp_failed,
+                                  "draft_work_orders": cp_drafts, "plan_closed": cp_plan_closed}
 
 # ───────────────────── 5. NON MOVING FG ITEM ─────────────────────
 # SQL "UCM Non Moving FG Item" report se BILKUL same hai.
