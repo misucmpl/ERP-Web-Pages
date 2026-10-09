@@ -402,7 +402,6 @@ elif pw_action == "jobcard":
             )
             OR (
                 (%(item_code)s IS NULL OR %(item_code)s = '') AND %(month_start)s IS NULL
-                -- Production Plan Closed / Completed ho gaya par Work Order abhi khula hai: "Currently working" mein nahi
                 AND NOT (IFNULL(pp.status, '') IN ('Closed', 'Completed')
                          AND IFNULL(wo.status, '') NOT IN ('Completed', 'Closed', 'Cancelled'))
                 AND (
