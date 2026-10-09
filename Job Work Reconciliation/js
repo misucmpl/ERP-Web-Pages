@@ -1,519 +1,797 @@
 /* ============================================================
-   UCMPL · AG Job Work Reconciliation — Web Page CSS
-   Web Page → Style → CSS box mein poora paste karein.
-   Theme: charcoal + saffron (warm paper background)
+   UCMPL \u00b7 AG Job Work Reconciliation \u2014 Web Page JS
+   Web Page \u2192 Javascript box mein poora paste karein.
+   API (Server Script): ucm_ag_recon   (data + access + settings)
    ============================================================ */
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+(function () {
+  "use strict";
+  var d = document, w = window;
+  var API = "/api/method/ucm_ag_recon";
+  var DEFAULT_CUSTOMER = "C00001";
 
-.navbar > .container, .navbar .container-fluid, header .navbar .container,
-.web-footer .container, footer .container { max-width: none !important; width: 100% !important; padding-left: 24px !important; padding-right: 24px !important; box-sizing: border-box !important; }
-.page-content-wrapper, .page_content, main .container { max-width: none !important; }
+  var root = d.getElementById("ucm-agr");
+  if (!root) return;
+  /* version check: browser console mein UCM_AGR_VERSION likhne par dikhta hai */
+  var AGR_VER = "09-Oct-2026 \u00b7 v3.2";
+  w.UCM_AGR_VERSION = AGR_VER;
+  try { console.info("[UCM AG] JS version: " + AGR_VER); } catch (e) { }
 
-#ucm-agr {
-  --bg: #f6f4ef; --card: #ffffff; --line: #e7e2d8; --line2: #d9d2c4;
-  --ink: #1d2330; --ink2: #4a5162; --mut: #878c99; --mut2: #a9adb7;
-  --char: #222935; --char2: #313a4a;
-  --pri: #c0620c; --pri-d: #9a4c06; --pri-l: #fff3e3; --pri-b: #f3d2a8; --sun: #f2a03a;
-  --in: #2f7a4d; --in-l: #e9f5ee; --out: #b2433a; --out-l: #fbecea;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: var(--ink); background: var(--bg); font-size: 14px; line-height: 1.45;
-  min-height: 100vh; width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);
-  -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
-}
-#ucm-agr *, #ucm-agr *::before, #ucm-agr *::after { box-sizing: border-box; }
-#ucm-agr [hidden] { display: none !important; }
-#ucm-agr button { font: inherit; }
+  /* --------- helpers --------- */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONF = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function $(s, el) { return (el || d).querySelector(s); }
+  function $$(s, el) { return Array.prototype.slice.call((el || d).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var nfQ = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 3 });
+  var nf2 = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function q(n) { n = +n || 0; return nfQ.format(Math.abs(n) < 5e-4 ? 0 : n); }
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  /* Raw Material Reconciliation table: bina decimal (poore number) */
+  function qi(n) { n = Math.round(+n || 0); return nf0.format(n === 0 ? 0 : n); }
+  function inr(n) { return "\u20b9" + nf2.format(+n || 0); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
+  function parseIso(s) { var p = String(s || "").split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+  function dmy(s) { var m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + "-" + m[2] + "-" + m[1] : esc(s || ""); }
+  function longDate(s) { var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
+  function monthStart(dt) { return new Date(dt.getFullYear(), dt.getMonth(), 1); }
+  function monthEnd(dt) { return new Date(dt.getFullYear(), dt.getMonth() + 1, 0); }
+  function initials(s) { var p = String(s || "?").trim().split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+  /* "CHAIN SET" / "chain set" -> "Chain Set" (codes jaise WH1 / UCM / PCS waise hi) */
+  function tc(t) {
+    return String(t || "").toLowerCase().replace(/(^|[\s(\/\-\u00b7])([a-z])/g, function (m, a, b) { return a + b.toUpperCase(); })
+      .replace(/\b(Wh\d|Ucm|Pcs|Gst)\b/g, function (x) { return x.toUpperCase(); });
+  }
+  function cookie(k) { var m = d.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; }
 
-/* gate */
-.agr-gate { display: flex; justify-content: center; padding: 80px 16px; }
-.agr-gate-card { width: 100%; max-width: 440px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 34px 28px; text-align: center; box-shadow: 0 20px 44px -30px rgba(29,35,48,.5); }
-.agr-gate-card .ico { width: 54px; height: 54px; margin: 0 auto 12px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: var(--pri-l); color: var(--pri); }
-.agr-gate-card .ico.warn { background: var(--out-l); color: var(--out); font-size: 24px; font-weight: 800; }
-.agr-gate-card h3 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
-.agr-gate-card p { margin: 0 0 6px; color: var(--ink2); }
-.agr-gate-card p.s { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); font-size: 12.5px; color: var(--mut); }
-.agr-spin { display: inline-block; width: 22px; height: 22px; border: 3px solid #eadfcd; border-top-color: var(--pri); border-radius: 50%; animation: agrSpin .8s linear infinite; vertical-align: middle; }
-@keyframes agrSpin { to { transform: rotate(360deg); } }
+  var I = {
+    gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+    down: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    left: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+    right: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    caret: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+    x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    calc: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h.01M12 19h4"/></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    fender: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a9 9 0 0 1 18 0"/><path d="M6.5 15a5.5 5.5 0 0 1 11 0"/><path d="M3 15h3.5M17.5 15H21"/></svg>',
+    chain: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="3.5"/><rect x="3" y="13" width="18" height="7" rx="3.5"/></svg>',
+    truck: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17h4V5H2v12h3"/><path d="M14 8h4l4 4v5h-3"/><circle cx="7.5" cy="17.5" r="2"/><circle cx="16.5" cy="17.5" r="2"/></svg>',
+    lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+  };
 
-/* header */
-.agr-head { display: flex; align-items: center; gap: 14px; padding: 14px 24px; background: var(--char); color: #fff; position: relative; }
-.agr-head::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, var(--sun), var(--pri)); }
-.agr-title { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; }
-.agr-title > div { min-width: 0; }
-.agr-mark { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; letter-spacing: .04em;
-  background: linear-gradient(135deg, var(--sun), var(--pri)); color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
-.agr-title h1 { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 18px; font-weight: 700; letter-spacing: -.2px; color: #fff; }
-.agr-title p { margin: 1px 0 0; font-size: 12.5px; color: rgba(255,255,255,.66); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-head-act { margin-left: auto; display: flex; gap: 8px; }
-.agr-ibtn { width: 36px; height: 36px; flex: 0 0 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; cursor: pointer;
-  border: 1px solid var(--line2); background: #fff; color: var(--ink2); transition: background .15s, color .15s, transform .3s; }
-.agr-ibtn:hover { background: var(--pri-l); color: var(--pri); border-color: var(--pri-b); }
-.agr-head .agr-ibtn, .agr-ibtn.is-dark { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.18); color: #fff; }
-.agr-head .agr-ibtn:hover, .agr-ibtn.is-dark:hover { background: rgba(255,255,255,.18); color: #fff; }
-.agr-ibtn.is-gear svg { transition: transform .35s; }
-.agr-ibtn.is-gear:hover svg { transform: rotate(45deg); }
-#ucm-agr.is-busy #agr-refresh svg { animation: agrSpin .9s linear infinite; }
+  async function api(params, method) {
+    var token = (w.frappe && w.frappe.csrf_token) || w.csrf_token || "";
+    var url = API, opts = { credentials: "same-origin", headers: { Accept: "application/json", "X-Frappe-CSRF-Token": token } };
+    if (method === "POST") { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(params); }
+    else url += "?" + Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k] == null ? "" : params[k]); }).join("&");
+    var r = await fetch(url, opts);
+    if (r.status === 401 || r.status === 403 && !cookie("user_id")) { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      var reason = "";
+      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script ucm_ag_recon not found";
+      throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+    }
+    return j.message;
+  }
 
-/* filter band */
-.agr-band { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; padding: 12px 24px; background: #fff; border-bottom: 1px solid var(--line); }
-.agr-f { display: flex; flex-direction: column; gap: 4px; }
-.agr-f > span { font-size: 11.5px; font-weight: 500; color: var(--ink2); }
-.agr-f-cust { flex: 0 1 360px; min-width: 220px; }
-.agr-dd { position: relative; }
-.agr-dd-in { width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 12px; border: 1px solid var(--line2); border-radius: 9px; background: #fff; cursor: pointer; text-align: left; color: var(--ink); }
-.agr-dd-in b { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-dd-in b small { font-weight: 500; color: var(--mut); margin-left: 4px; }
-.agr-dd-in svg { color: var(--mut); flex: 0 0 auto; transition: transform .15s; }
-.agr-dd.open .agr-dd-in { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.12); }
-.agr-dd.open .agr-dd-in svg { transform: rotate(180deg); }
-.agr-dd-pop { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; width: max(100%, 320px); background: #fff; border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 18px 36px -16px rgba(29,35,48,.4); padding: 8px; }
-.agr-dd-pop input { width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px; outline: none; background: #faf9f6; }
-.agr-dd-pop input:focus { border-color: var(--pri); background: #fff; }
-.agr-dd-list { max-height: 300px; overflow-y: auto; margin-top: 6px; }
-.agr-dd-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; border: 0; background: none; padding: 7px 10px; border-radius: 7px; cursor: pointer; text-align: left; }
-.agr-dd-list button:hover { background: var(--pri-l); }
-.agr-dd-list button.sel { background: var(--pri-l); box-shadow: inset 3px 0 0 var(--pri); }
-.agr-dd-list b { font-size: 13px; font-weight: 500; }
-.agr-dd-list small { font-size: 11.5px; color: var(--mut); }
-.agr-dd-none { padding: 12px; text-align: center; color: var(--mut); font-size: 12.5px; }
-.agr-mnav { display: flex; align-items: center; height: 36px; border: 1px solid var(--line2); border-radius: 9px; overflow: hidden; background: #fff; }
-.agr-mnav button { width: 34px; height: 100%; border: 0; background: none; color: var(--ink2); cursor: pointer; display: flex; align-items: center; justify-content: center; }
-.agr-mnav button:hover { background: var(--pri-l); color: var(--pri); }
-.agr-mnav b { min-width: 86px; text-align: center; font-size: 13px; font-weight: 700; padding: 0 6px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); line-height: 34px; }
-.agr-range { display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 6px 0 10px; border: 1px solid var(--line2); border-radius: 9px; background: #fff; }
-.agr-range input { border: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); outline: none; width: 128px; }
-.agr-range i { font-style: normal; color: var(--mut2); }
-.agr-band-note { margin-left: auto; align-self: center; font-size: 12px; color: var(--mut); }
+  /* --------- state --------- */
+  var today = new Date();
+  var S = {
+    acc: null,
+    customer: DEFAULT_CUSTOMER, customerName: "",
+    from: iso(monthStart(today)), to: iso(today),
+    rows: [], detail: [], loaded: false
+  };
 
-/* main */
-.agr-main { padding: 16px 24px 32px; display: flex; flex-direction: column; gap: 14px; transition: opacity .2s; }
-.agr-main.is-loading { opacity: .55; pointer-events: none; }
-.agr-empty, .agr-error { padding: 40px; text-align: center; color: var(--mut); background: #fff; border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 10px; align-items: center; justify-content: center; }
-.agr-error { color: var(--out); background: var(--out-l); border-color: #f2cdc8; display: block; }
+  /* Slider config - report ke "ag_clickable_sections" jaisa hi */
+  var CLICK = {
+    "OPENING BALANCE (Raw Materials)": { title: "Opening Balance \u2013 Breakdown", kicker: "Raw Materials", f: function (r) { return r.category === "opening_breakdown"; }, hideVoucher: true, hideAmount: true },
+    "Total In Ward": { title: "Material Received \u2013 Purchase Receipt", kicker: "In Ward \u00b7 WH1 \u2013 UCM", f: function (r) { return r.category === "received"; }, rate: true },
+    "MATERIAL DISPATCHED (Delivery Challan)": { title: "Material Dispatched \u2013 Delivery Challan", kicker: "Dispatched \u00b7 Raw Material", f: function (r) { return r.category === "dispatched" && r.source === "Delivery Note"; } },
+    "DISPATCHED In PCS/SET": { title: "Material Dispatched \u2013 Sales Invoice", kicker: "Dispatched \u00b7 PCS / Set", f: function (r) { return r.category === "dispatched" && r.source === "Sales Invoice"; }, rate: true },
+    "MFG_FENDER": { title: "Fender \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received" && r.mfg_key === "MFG_FENDER"; }, entryType: true, hideAmount: true },
+    "MFG_CHAIN_SET": { title: "Chain Set \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received" && r.mfg_key === "MFG_CHAIN_SET"; }, entryType: true, hideAmount: true },
+    "MFG_ALL": { title: "Manufacturing \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received"; }, entryType: true, hideAmount: true }
+  };
+  var ROUTE = { "Sales Invoice": "sales-invoice", "Delivery Note": "delivery-note", "Purchase Receipt": "purchase-receipt", "Stock Entry": "stock-entry" };
 
-/* links (clickable headings) */
-.agr-link { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 0; cursor: pointer; color: inherit; font-weight: inherit; text-align: left; }
-.agr-link svg { opacity: .55; transition: transform .15s, opacity .15s; }
-.agr-link:hover { color: var(--pri); }
-.agr-link:hover svg { opacity: 1; transform: translateX(2px); }
+  /* --------- shell --------- */
+  root.innerHTML =
+    '<div class="agr-gate" id="agr-gate"><div class="agr-gate-card"><span class="agr-spin"></span><p>Checking access\u2026</p></div></div>' +
+    '<div class="agr-app" id="agr-app" hidden>' +
+      '<header class="agr-head" id="agr-head">' +
+        '<div class="agr-title"><div><h1>Job Work Reconciliation</h1><p class="agr-sub"></p></div></div>' +
+        '<div class="agr-head-act" id="agr-act">' +
+          '<button type="button" class="agr-ibtn" id="agr-print" title="Print">' + I.print + "</button>" +
+          '<button type="button" class="agr-ibtn" id="agr-refresh" title="Refresh">' + I.refresh + "</button>" +
+          '<button type="button" class="agr-ibtn is-gear" id="agr-gear" title="Access settings" hidden>' + I.gear + "</button>" +
+        "</div>" +
+      "</header>" +
+      '<section class="agr-band">' +
+        '<div class="agr-f"><span>Month</span><div class="agr-mnav"><button type="button" id="agr-prev" title="Previous month">' + I.left + '</button><b id="agr-mlbl"></b><button type="button" id="agr-next" title="Next month">' + I.right + "</button></div></div>" +
+        '<div class="agr-f"><span>From \u2013 To</span><div class="agr-range"><input type="date" id="agr-from"><i>\u2192</i><input type="date" id="agr-to"></div></div>' +
+        '<button type="button" class="agr-calc-btn" id="agr-calc" title="Calculate REPOL and Master Batch for Fender / Chain Set and post the dispatch">' + I.calc + "<span>Dispatch Entry</span></button>" +
+      "</section>" +
+      '<main class="agr-main" id="agr-main"><div class="agr-empty"><span class="agr-spin"></span>Loading\u2026</div></main>' +
+    "</div>" +
+    '<div class="agr-scrim" id="agr-scrim"></div>' +
+    '<aside class="agr-drawer" id="agr-drawer" aria-hidden="true"></aside>' +
+    '<div class="agr-modal-bg agr-center" id="agr-calcm" hidden><div class="agr-modal agr-cm" role="dialog" aria-label="Dispatch Entry"></div></div>' +
+    '<div class="agr-modal-bg" id="agr-set" hidden><div class="agr-modal" role="dialog" aria-label="Access settings"></div></div>';
 
-/* 1. reconciliation equation */
-.agr-recon { background: #fff; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 1px 2px rgba(29,35,48,.04); }
-.agr-sec-h { display: flex; align-items: flex-end; gap: 12px; padding: 14px 20px 8px; }
-.agr-sec-h h2 { margin: 0; font-size: 16px; font-weight: 700; }
-.agr-sec-h p { margin: 2px 0 0; font-size: 12.5px; color: var(--mut); }
-.agr-period { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--pri-d); background: var(--pri-l); border: 1px solid var(--pri-b); padding: 4px 10px; border-radius: 99px; white-space: nowrap; }
-.agr-eq { padding: 0 20px 6px; }
-.agr-eq-row { display: grid; grid-template-columns: minmax(130px, 1.2fr) minmax(0,1fr) 24px minmax(0,1fr) 24px minmax(0,1fr) 24px minmax(0,1fr) 24px minmax(0,1.15fr); align-items: center; border-top: 1px solid #f0ece4; }
-.agr-eq-row > div { padding: 9px 6px; }
-.agr-eq-row .c-n { text-align: right; font-size: 20px; font-weight: 700; letter-spacing: -.3px; }
-.agr-eq-row .c-op { text-align: center; color: var(--mut2); font-size: 18px; font-weight: 500; }
-.agr-eq-row .c-item b { font-size: 14px; font-weight: 600; }
-.agr-eq-row .c-n.is-in { color: var(--in); }
-.agr-eq-row .c-n.is-out { color: var(--out); }
-.agr-eq-row .c-bal { background: var(--pri-l); color: var(--pri-d); border-radius: 0; }
-.agr-eq-row .c-bal.is-neg { color: var(--out); background: var(--out-l); }
-.agr-eq-head { border-top: 0; }
-.agr-eq-head > div { padding: 8px 6px; font-size: 12.5px; font-weight: 600; color: var(--mut); }
-.agr-eq-head .c-n { font-size: 12.5px; font-weight: 600; }
-.agr-eq-head .c-n .agr-link { justify-content: flex-end; width: 100%; color: var(--ink2); }
-.agr-eq-head .c-n .agr-link:hover { color: var(--pri); }
-.agr-eq-head .c-bal { background: var(--char); color: #fff; border-radius: 10px 10px 0 0; }
-.agr-eq-tot { border-top: 2px solid var(--line2); }
-.agr-eq-tot .c-item { font-weight: 700; font-size: 14px; color: var(--ink); }
-.agr-eq-tot .c-n { font-size: 24px; font-weight: 800; }
-.agr-eq-tot .c-bal { background: linear-gradient(135deg, var(--sun), var(--pri)); color: #fff; border-radius: 0 0 10px 10px; }
-.agr-eq-tot .c-bal.is-neg { background: var(--out); color: #fff; }
-.agr-foot-note { margin: 0; padding: 10px 20px 14px; font-size: 11.5px; color: var(--mut); }
+  /* --------- data --------- */
+  async function load() {
+    root.classList.add("is-busy"); d.body.classList.add("agr-busy");
+    $("#agr-main").classList.add("is-loading");
+    try {
+      var m = await api({ action: "data", customer: S.customer, from_date: S.from, to_date: S.to });
+      if (!m) return;
+      S.rows = m.rows || []; S.detail = m.detail || [];
+      S.customerName = m.customer_name || S.customer;
+      render();
+    } catch (e) {
+      $("#agr-main").innerHTML = '<div class="agr-error"><b>Could not load the reconciliation.</b> ' + esc(e.message) + "</div>";
+    } finally {
+      root.classList.remove("is-busy"); d.body.classList.remove("agr-busy");
+      $("#agr-main").classList.remove("is-loading");
+    }
+  }
 
-/* 2. cards */
-.agr-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
-.agr-card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 10px; position: relative; overflow: hidden; display: flex; flex-direction: column; }
-.agr-card .agr-line.is-tot { margin-top: auto; }
-.agr-card .agr-docs { flex: 1; align-content: stretch; }
-.agr-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--line2); }
-.agr-card.is-mfg::before { background: var(--in); }
-.agr-card.is-si::before { background: var(--pri); }
-.agr-card.is-docs::before { background: var(--char); }
-.agr-card-h { display: flex; flex-direction: column; gap: 1px; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid #f0ece4; }
-.agr-card-h span, .agr-card-h .agr-link { font-size: 15px; font-weight: 700; }
-.agr-card-h em { font-style: normal; font-size: 11.5px; color: var(--mut); }
-.agr-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px dashed #efebe3; font-size: 13.5px; }
-.agr-line:last-child { border-bottom: 0; }
-.agr-line > span, .agr-line .agr-link { min-width: 0; color: var(--ink2); }
-.agr-line .agr-link.is-row { color: var(--ink); font-weight: 500; }
-.agr-line b { font-size: 15px; font-weight: 700; }
-.agr-line.is-tot { border-top: 1px solid var(--line2); border-bottom: 0; margin-top: 2px; }
-.agr-line.is-tot span { font-weight: 700; color: var(--ink); }
-.agr-line.is-tot b { font-size: 17px; color: var(--pri-d); }
-.agr-none { padding: 14px 0; text-align: center; color: var(--mut); font-size: 12.5px; }
-.agr-none.big { padding: 48px 0; }
-.agr-docs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 6px 0 6px; }
-.agr-doc { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfaf7; cursor: pointer; text-align: left; transition: border-color .15s, background .15s; }
-.agr-doc:hover { border-color: var(--pri-b); background: var(--pri-l); }
-.agr-doc b { font-size: 20px; font-weight: 800; letter-spacing: -.3px; color: var(--ink); }
-.agr-doc span { font-size: 12px; color: var(--ink2); }
+  function blocksOf(rows) {
+    var blocks = [], cur = null;
+    rows.forEach(function (r) {
+      var t = String(r.section || "").trim();
+      if (!t) { cur = null; return; }
+      if (r.qty === null || r.qty === undefined) { cur = { title: t, key: r.click_key || t, rows: [] }; blocks.push(cur); return; }
+      if (!cur) { cur = { title: "", key: "", rows: [] }; blocks.push(cur); }
+      cur.rows.push(r);
+    });
+    return blocks;
+  }
+  function isTotal(r) { return String(r.section || "").indexOf("Total") === 0; }
+  function findBlock(blocks, prefix) {
+    for (var i = 0; i < blocks.length; i++) if (blocks[i].title.toUpperCase().indexOf(prefix.toUpperCase()) === 0) { blocks[i].used = true; return blocks[i]; }
+    return null;
+  }
+  function lineMap(b) {
+    var m = {}, tot = null;
+    if (!b) return { m: m, tot: null };
+    b.rows.forEach(function (r) { if (isTotal(r)) tot = r.qty; else m[r.section] = r.qty; });
+    return { m: m, tot: tot };
+  }
+  function link(key, html, cls) {
+    return CLICK[key] ? '<button type="button" class="agr-link ' + (cls || "") + '" data-k="' + esc(key) + '">' + html + "</button>" : html;
+  }
+  function neg(n) { return (+n || 0) < -5e-4 ? " is-neg" : ""; }
 
-/* slider */
-.agr-scrim { position: fixed; inset: 0; background: rgba(29,35,48,.32); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 1040; }
-.agr-scrim.on { opacity: 1; pointer-events: auto; }
-.agr-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(900px, 96vw); background: #fff; z-index: 1050; display: flex; flex-direction: column;
-  transform: translateX(100%); transition: transform .25s ease; box-shadow: -18px 0 40px -20px rgba(29,35,48,.4); font-family: "Inter", system-ui, sans-serif; color: var(--ink); }
-.agr-drawer.on { transform: none; }
-.agr-dr-h { display: flex; align-items: flex-start; gap: 12px; padding: 18px 22px 16px; background: var(--char); color: #fff; position: relative; }
-.agr-dr-h::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, var(--sun), var(--pri)); }
-.agr-dr-h .k { font-size: 12px; font-weight: 600; color: var(--sun); }
-.agr-dr-h h3 { margin: 2px 0 2px; font-size: 18px; font-weight: 700; color: #fff; }
-.agr-dr-h .s { font-size: 12.5px; color: rgba(255,255,255,.66); }
-.agr-dr-act { margin-left: auto; display: flex; gap: 8px; }
-.agr-dr-b { flex: 1; overflow-y: auto; padding: 16px 22px; overscroll-behavior: contain; }
-.agr-grp { margin-bottom: 18px; }
-.agr-grp-h { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 8px; }
-.agr-grp-h span { font-size: 14px; font-weight: 700; }
-.agr-grp-h em { font-style: normal; font-size: 11.5px; color: var(--mut); }
-.agr-tw { border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
-.agr-t { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.agr-t th { position: sticky; top: 0; background: #faf8f4; text-align: left; font-size: 12px; font-weight: 600; color: var(--mut); padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.agr-t td { padding: 8px 10px; border-bottom: 1px solid #f2efe8; white-space: nowrap; }
-.agr-t td.it { white-space: normal; min-width: 160px; }
-.agr-t td.basis { white-space: normal; color: var(--ink2); }
-.agr-t .n { text-align: right; }
-.agr-t a { color: var(--pri-d); font-weight: 600; text-decoration: none; }
-.agr-t a:hover { text-decoration: underline; }
-.agr-t tbody tr:hover td { background: #fffaf2; }
-.agr-t tr.sub td { background: #fbfaf7; color: var(--ink2); font-weight: 600; font-size: 12px; }
-.agr-t tr.tot td { background: var(--pri-l); font-weight: 700; border-bottom: 0; border-top: 1px solid var(--pri-b); }
-.agr-dr-f { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 22px; border-top: 1px solid var(--line); background: #faf8f4; font-size: 13px; }
-.agr-dr-f span { color: var(--ink2); font-weight: 500; }
-.agr-dr-f b { font-size: 15px; }
+  function render() {
+    var blocks = blocksOf(S.rows);
+    var bOpen = findBlock(blocks, "OPENING BALANCE"), bIn = findBlock(blocks, "Total In Ward"),
+      bDc = findBlock(blocks, "MATERIAL DISPATCHED"), bBal = findBlock(blocks, "CURRENT STOCK BALANCE"),
+      bMfg = findBlock(blocks, "MANUFACTURING"), bSi = findBlock(blocks, "DISPATCHED In PCS");
+    /* Burning Loss: abhi sirf jagah rakhi hai. Report mein "BURNING LOSS" block aate hi uske numbers yahan dikhenge. */
+    var bLoss = findBlock(blocks, "BURNING LOSS");
+    var O = lineMap(bOpen), N = lineMap(bIn), X = lineMap(bDc), B = lineMap(bBal), L = lineMap(bLoss);
+    function lossTxt(v) { return v == null ? '<span class="dash">\u2014</span>' : qi(v); }
+    var items = Object.keys(O.m);
+    [N.m, X.m, B.m].forEach(function (m) { Object.keys(m).forEach(function (k) { if (items.indexOf(k) < 0) items.push(k); }); });
 
-/* settings modal */
-.agr-modal-bg { position: fixed; inset: 0; z-index: 1070; background: rgba(29,35,48,.4); display: flex; align-items: flex-start; justify-content: center; padding: 7vh 16px 16px; overflow-y: auto; font-family: "Inter", system-ui, sans-serif; }
-.agr-modal { width: 100%; max-width: 560px; background: #fff; border-radius: 16px; box-shadow: 0 30px 60px -20px rgba(29,35,48,.5); color: var(--ink); }
-.agr-mh { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, var(--pri-l), #fff); border-radius: 16px 16px 0 0; }
-.agr-mh h3 { margin: 0; font-size: 17px; font-weight: 700; }
-.agr-mh p { margin: 3px 0 0; font-size: 12.5px; color: var(--ink2); }
-.agr-mh .agr-ibtn { margin-left: auto; }
-.agr-mb { padding: 16px 20px 20px; }
-.agr-msg { display: none; padding: 10px 12px; border-radius: 10px; font-size: 13px; margin-bottom: 12px; background: var(--out-l); color: var(--out); }
-.agr-msg.show { display: block; }
-.agr-msg.ok { background: var(--in-l); color: var(--in); }
-.agr-add { display: flex; gap: 8px; margin-bottom: 14px; }
-.agr-pick { position: relative; flex: 1; min-width: 0; }
-.agr-pick input { width: 100%; height: 38px; border: 1px solid var(--line2); border-radius: 9px; padding: 0 12px; font: inherit; outline: none; }
-.agr-pick input:focus { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.12); }
-.agr-pick-l { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 5; background: #fff; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 14px 30px -14px rgba(29,35,48,.4); max-height: 260px; overflow-y: auto; padding: 4px; }
-.agr-pick-l button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; border: 0; background: none; padding: 7px 10px; border-radius: 7px; cursor: pointer; text-align: left; }
-.agr-pick-l button:hover { background: var(--pri-l); }
-.agr-pick-l b { font-size: 13px; font-weight: 500; }
-.agr-pick-l small { font-size: 11.5px; color: var(--mut); }
-.agr-btn { height: 38px; padding: 0 16px; border: 0; border-radius: 9px; background: var(--pri); color: #fff; font-weight: 600; cursor: pointer; white-space: nowrap; }
-.agr-btn:hover { background: var(--pri-d); }
-.agr-btn:disabled { opacity: .6; cursor: wait; }
-.agr-ulist { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.agr-urow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid #f2efe8; }
-.agr-urow:last-child { border-bottom: 0; }
-.agr-urow.off { opacity: .55; }
-.agr-urow .av { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; background: #f1ede5; color: var(--ink2); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.agr-urow .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.agr-urow .nm b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-urow .nm small { font-size: 11.5px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-urow .tag { font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 99px; background: var(--pri-l); color: var(--pri-d); border: 1px solid var(--pri-b); white-space: nowrap; }
-.agr-urow .tag.admin { background: var(--char); color: #fff; border-color: var(--char); }
-.agr-urow .rm { flex: 0 0 auto; min-width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--mut); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.agr-urow button.rm:hover { background: var(--out-l); color: var(--out); }
-.agr-urow button.rm.arm { background: var(--out); color: #fff; font-size: 12px; font-weight: 600; padding: 0 8px; }
+    /* -- 1. Raw material reconciliation: Opening + In ward - Dispatched = Current stock -- */
+    var recon =
+      '<section class="agr-recon">' +
+        '<div class="agr-sec-h"><div><h2>Raw Material Reconciliation</h2><p>WH1 \u2013 UCM \u00b7 Opening + In Ward \u2212 Dispatched (Challan) \u2212 Burning Loss = Current Stock</p></div>' +
+          '<div class="agr-period">' + esc(longDate(S.from)) + " \u2013 " + esc(longDate(S.to)) + "</div></div>" +
+        '<div class="agr-eq">' +
+          '<div class="agr-eq-row agr-eq-head"><div class="c-item">Material</div>' +
+            '<div class="c-n">' + link("OPENING BALANCE (Raw Materials)", "Opening" + I.chev) + "</div>" +
+            '<div class="c-op">+</div><div class="c-n">' + link("Total In Ward", "In Ward" + I.chev) + "</div>" +
+            '<div class="c-op">\u2212</div><div class="c-n">' + link("MATERIAL DISPATCHED (Delivery Challan)", "Dispatched" + I.chev) + "</div>" +
+            '<div class="c-op">\u2212</div><div class="c-n c-loss">Burning Loss</div>' +
+            '<div class="c-op">=</div><div class="c-n c-bal">Current Stock</div></div>' +
+          items.map(function (it) {
+            return '<div class="agr-eq-row"><div class="c-item"><b>' + esc(tc(it)) + "</b></div>" +
+              '<div class="c-n">' + qi(O.m[it]) + '</div><div class="c-op">+</div>' +
+              '<div class="c-n is-in">' + qi(N.m[it]) + '</div><div class="c-op">\u2212</div>' +
+              '<div class="c-n is-out">' + qi(X.m[it]) + '</div><div class="c-op">\u2212</div>' +
+              '<div class="c-n c-loss">' + lossTxt(L.m[it]) + '</div><div class="c-op">=</div>' +
+              '<div class="c-n c-bal' + neg(B.m[it]) + '">' + qi(B.m[it]) + "</div></div>";
+          }).join("") +
+          '<div class="agr-eq-row agr-eq-tot"><div class="c-item">Total (All Items)</div>' +
+            '<div class="c-n">' + qi(O.tot) + '</div><div class="c-op">+</div>' +
+            '<div class="c-n is-in">' + qi(N.tot) + '</div><div class="c-op">\u2212</div>' +
+            '<div class="c-n is-out">' + qi(X.tot) + '</div><div class="c-op">\u2212</div>' +
+            '<div class="c-n c-loss">' + lossTxt(L.tot) + '</div><div class="c-op">=</div>' +
+            '<div class="c-n c-bal' + neg(B.tot) + '">' + qi(B.tot) + "</div></div>" +
+        "</div>" +
+        '<p class="agr-foot-note">Opening = closing of the day before ' + esc(longDate(S.from)) + " (carried forward from the 31 Jul 2026 anchor). Click a column heading to see the vouchers.</p>" +
+      "</section>";
 
-/* responsive */
-@media (max-width: 1100px) {
-  .agr-cards { grid-template-columns: 1fr 1fr; }
-  .agr-card.is-docs { grid-column: 1 / -1; }
-  .agr-card.is-docs .agr-docs { grid-template-columns: repeat(4, minmax(0,1fr)); }
-}
-@media (max-width: 760px) {
-  .agr-head { padding: 12px 14px; }
-  .agr-title h1 { font-size: 16px; }
-  .agr-band { padding: 12px 14px; gap: 10px; }
-  .agr-f-cust { flex: 1 0 100%; }
-  .agr-f { flex: 1 1 auto; }
-  .agr-range { width: 100%; }
-  .agr-range input { flex: 1 1 0; width: auto; min-width: 0; }
-  .agr-band-note { display: none; }
-  .agr-main { padding: 12px 12px 32px; gap: 12px; }
-  .agr-sec-h { flex-wrap: wrap; padding: 14px 14px 10px; }
-  .agr-period { margin-left: 0; }
-  .agr-eq { padding: 0 8px 4px; }
-  .agr-eq-row { grid-template-columns: repeat(4, minmax(0,1fr)) minmax(0,1.15fr); }
-  .agr-eq-row:not(.agr-eq-head) .c-n.c-loss::before { content: "\2212 Loss"; }
-  .agr-eq-row .c-op { display: none; }
-  .agr-eq-row .c-item { grid-column: 1 / -1; padding: 10px 6px 0; }
-  .agr-eq-head .c-item { display: none; }
-  .agr-eq-row > div { padding: 8px 5px; }
-  .agr-eq-row .c-n { font-size: 15px; }
-  .agr-eq-tot .c-n { font-size: 15.5px; }
-  .agr-head-act { gap: 6px; }
-  .agr-head .agr-ibtn { width: 32px; height: 32px; flex-basis: 32px; }
-  .agr-mark { width: 34px; height: 34px; flex-basis: 34px; font-size: 12px; }
-  .agr-eq-head > div, .agr-eq-head .c-n { font-size: 10px; letter-spacing: .03em; }
-  .agr-eq-row:not(.agr-eq-head) .c-n:nth-of-type(2)::before { content: "Opening"; }
-  .agr-eq-row:not(.agr-eq-head) .c-n::before { display: block; font-size: 10.5px; font-weight: 600; color: var(--mut2); }
-  .agr-eq-row:not(.agr-eq-head) .c-n.is-in::before { content: "+ In"; }
-  .agr-eq-row:not(.agr-eq-head) .c-n.is-out::before { content: "\2212 Out"; }
-  .agr-eq-row:not(.agr-eq-head) .c-n.c-bal::before { content: "= Stock"; color: inherit; opacity: .7; }
-  .agr-eq-head { display: none; }
-  .agr-eq-tot .c-item { grid-column: 1 / -1; }
-  .agr-cards { grid-template-columns: 1fr; }
-  .agr-card.is-docs .agr-docs { grid-template-columns: 1fr 1fr; }
-  .agr-foot-note { padding: 8px 14px 12px; }
-  .agr-drawer { width: 100vw; }
-  .agr-dr-h, .agr-dr-b, .agr-dr-f { padding-left: 14px; padding-right: 14px; }
-  .agr-add { flex-wrap: wrap; }
-  .agr-add .agr-btn { width: 100%; }
-}
+    /* -- 2. Manufacturing + Dispatched PCS/SET + Documents -- */
+    /* dono cards mein ek hi order: pehle Fender, phir Chain Set, phir baaki */
+    function rank(t) { t = String(t || "").toLowerCase(); return t.indexOf("fender") >= 0 ? 0 : t.indexOf("chain") >= 0 ? 1 : 2; }
+    function byRank(list) { return list.slice().sort(function (x, y) { return rank(x.section) - rank(y.section); }); }
+    var mfgRows = byRank(bMfg ? bMfg.rows : []), mfgTot = 0;
+    mfgRows.forEach(function (r) { mfgTot += +r.qty || 0; });
+    var cMfg = '<article class="agr-card is-mfg"><div class="agr-card-h">' + link("MFG_ALL", "<span>Manufacturing</span>" + I.chev) + "<em>In Ward \u00b7 WH2 \u2013 UCM</em></div>" +
+      (mfgRows.length ? mfgRows.map(function (r) {
+        var lbl = String(r.section || "").replace(/\s*Total In Ward$/i, "");
+        return '<div class="agr-line">' + link(r.click_key, esc(tc(lbl)) + I.chev, "is-row") + "<b>" + q(r.qty) + "</b></div>";
+      }).join("")
+        : '<div class="agr-none">No manufacturing entries</div>') + "</article>";
 
-/* print: sirf report */
-@media print {
-  .navbar, footer, .web-footer, .agr-band, .agr-head-act, .agr-scrim, .agr-drawer, .agr-modal-bg { display: none !important; }
-  #ucm-agr { background: #fff; width: auto; margin: 0; min-height: 0; }
-  .agr-head { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .agr-eq-row .c-bal, .agr-eq-head .c-bal, .agr-eq-tot .c-bal, .agr-period, .agr-card::before { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .agr-main { padding: 12px 0; }
-  .agr-cards { grid-template-columns: repeat(3, minmax(0,1fr)); }
-  .agr-recon, .agr-card { break-inside: avoid; box-shadow: none; }
-}
-@media (max-width: 760px) {
-  .navbar > .container, .navbar .container-fluid, header .navbar .container,
-  .web-footer .container, footer .container { padding-left: 14px !important; padding-right: 14px !important; }
-}
+    var siRows = byRank(bSi ? bSi.rows : []), siTot = 0, siAmt = 0;
+    siRows.forEach(function (r) { siTot += +r.qty || 0; });
+    S.detail.forEach(function (r) { if (r.category === "dispatched" && r.source === "Sales Invoice") siAmt += +r.amount || 0; });
+    var cSi = '<article class="agr-card is-si"><div class="agr-card-h">' + link("DISPATCHED In PCS/SET", "<span>Dispatched In PCS / Set</span>" + I.chev) + "<em>Sales Invoice \u00b7 " + esc(S.customer) + "</em></div>" +
+      (siRows.length ? siRows.map(function (r) { return '<div class="agr-line"><span>' + esc(tc(r.section)) + "</span><b>" + q(r.qty) + "</b></div>"; }).join("") +
+        '<div class="agr-line is-tot"><span>Total \u00b7 ' + inr(siAmt) + "</span><b>" + q(siTot) + "</b></div>"
+        : '<div class="agr-none">No invoices in this period</div>') + "</article>";
 
-/* ═════ Title + buttons ERP ke top header mein — UCM STANDARD HEADER ═════
-   Management report (UCM Dispatch & Sales Register) jaisa hi:
-   logo 34px · beech mein patli line · title 15px bold · neeche 11px grey line
-   navbar aur page dono 24px se shuru — logo aur "Month" ek seedh mein.        */
-body.agr-nav-merged nav.navbar { border-bottom: 1px solid #e5e7eb; background: #fff !important; }
-body.agr-nav-merged nav.navbar .navbar-brand { display: flex; align-items: center; padding-top: 6px; padding-bottom: 6px; margin-right: 0; }
-body.agr-nav-merged nav.navbar .navbar-brand img,
-body.agr-nav-merged nav.navbar .navbar-brand svg { height: 34px !important; max-height: 34px !important; width: auto !important; }
-.agr-nav-title { display: flex; flex-direction: column; justify-content: center; margin: 0 20px 0 14px; padding-left: 14px; border-left: 1px solid #e5e7eb; min-width: 0; font-family: "Inter", system-ui, sans-serif; }
-.agr-nav-title h1 { margin: 0; font-size: 15px; font-weight: 700; color: #0f172a; white-space: nowrap; line-height: 1.25; letter-spacing: -0.01em; }
-.agr-nav-title p { margin: 1px 0 0; font-size: 11px; color: #64748b; white-space: nowrap; line-height: 1.3; }
-.agr-nav-li { display: flex; align-items: center; margin-right: 10px; list-style: none; }
-.agr-nav-act { display: flex; align-items: center; gap: 8px; }
-.agr-nav-act.is-end { margin-left: auto; }
-.agr-nav-act .agr-ibtn { width: 34px; height: 34px; flex: 0 0 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer;
-  border: 1px solid #e5e7eb; background: #fff; color: #334155; transition: background .15s, color .15s, border-color .15s; font: inherit; padding: 0; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
-.agr-nav-act .agr-ibtn:hover { background: #fff3e3; color: #c0620c; border-color: #f3d2a8; }
-.agr-nav-act .agr-ibtn.is-gear { background: #fff3e3; color: #c0620c; border-color: #f3d2a8; }
-.agr-nav-act .agr-ibtn.is-gear svg { transition: transform .35s; }
-.agr-nav-act .agr-ibtn.is-gear:hover svg { transform: rotate(45deg); }
-.agr-nav-act [hidden] { display: none !important; }
-body.agr-busy #agr-refresh svg { animation: agrSpin .9s linear infinite; }
-@media (max-width: 1100px) { .agr-nav-title p { display: none; } }
-@media (max-width: 760px) {
-  .agr-nav-title { margin: 0 8px 0 10px; padding-left: 10px; }
-  .agr-nav-title h1 { font-size: 14px; }
-  body.agr-nav-merged nav.navbar .navbar-brand img, body.agr-nav-merged nav.navbar .navbar-brand svg { height: 30px !important; max-height: 30px !important; }
-  .agr-nav-act { gap: 5px; }
-  .agr-nav-act .agr-ibtn { width: 32px; height: 32px; flex-basis: 32px; }
-  .agr-nav-li { margin-right: 4px; }
-}
-@media print {
-  #ucm-agr header.agr-head[hidden] { display: flex !important; }
-}
+    function docs(cat, src) { var u = {}; S.detail.forEach(function (r) { if (r.category === cat && (!src || r.source === src) && r.voucher) u[r.voucher] = 1; }); return Object.keys(u).length; }
+    var cDocs = '<article class="agr-card is-docs"><div class="agr-card-h"><span>Documents In Period</span><em>Click to open the list</em></div>' +
+      '<div class="agr-docs">' +
+        '<button type="button" class="agr-doc" data-k="Total In Ward"><b>' + docs("received") + "</b><span>Purchase Receipts</span></button>" +
+        '<button type="button" class="agr-doc" data-k="MATERIAL DISPATCHED (Delivery Challan)"><b>' + docs("dispatched", "Delivery Note") + "</b><span>Delivery Challans</span></button>" +
+        '<button type="button" class="agr-doc" data-k="DISPATCHED In PCS/SET"><b>' + docs("dispatched", "Sales Invoice") + "</b><span>Sales Invoices</span></button>" +
+        '<button type="button" class="agr-doc" data-k="MFG_ALL"><b>' + docs("mfg_received") + "</b><span>Stock Entries</span></button>" +
+      "</div></article>";
 
-/* Burning Loss column (logic baad mein) */
-.agr-eq-row .c-n.c-loss { color: #8a6d3b; }
-.agr-eq-row .c-n.c-loss .dash { color: #c9c3b6; font-weight: 500; }
+    /* report mein koi naya block aaye to woh bhi dikhe */
+    var extra = blocks.filter(function (b) { return !b.used; }).map(function (b) {
+      return '<article class="agr-card"><div class="agr-card-h">' + link(b.key, "<span>" + esc(tc(b.title || "Other")) + "</span>" + (CLICK[b.key] ? I.chev : "")) + "</div>" +
+        b.rows.map(function (r) {
+          var lbl = r.click_key && CLICK[r.click_key] ? link(r.click_key, esc(tc(r.section)) + I.chev, "is-row") : "<span>" + esc(tc(r.section)) + "</span>";
+          return '<div class="agr-line' + (isTotal(r) ? " is-tot" : "") + '">' + lbl + "<b>" + q(r.qty) + "</b></div>";
+        }).join("") + "</article>";
+    }).join("");
 
-/* Symmetry: page ka left/right margin = ERP logo ka left margin (JS --agr-pad set karta hai) */
-#ucm-agr .agr-band { padding-left: var(--agr-pad, 24px); padding-right: var(--agr-pad, 24px); }
-#ucm-agr .agr-main { padding-left: var(--agr-pad, 24px); padding-right: var(--agr-pad, 24px); }
+    $("#agr-main").innerHTML = recon + '<section class="agr-cards">' + cMfg + cSi + cDocs + extra + "</section>";
+    $$(".agr-sub").forEach(function (el) { el.textContent = (S.customerName || S.customer) + " \u00b7 " + longDate(S.from) + " \u2013 " + longDate(S.to); });
+  }
 
-/* ===== Job Work Calculator (filter row ke right mein button + beech mein popup) ===== */
-.agr-calc-btn { margin-left: auto; align-self: flex-end; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--pri-b); background: var(--pri-l); color: var(--pri-d); font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s; }
-.agr-calc-btn:hover { background: var(--pri); border-color: var(--pri); color: #fff; }
-.agr-modal-bg.agr-center { align-items: center; padding: 16px; }
-.agr-modal.agr-cm { max-width: 900px; }
-.agr-cin { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 14px; }
-.agr-cin label { display: flex; flex-direction: column; gap: 5px; }
-.agr-cin span { font-size: 12px; font-weight: 600; color: var(--ink2); }
-.agr-cin select, .agr-cin input { height: 42px; border: 1px solid var(--line2); border-radius: 10px; padding: 0 12px; font: inherit; font-size: 15px; font-weight: 600; color: var(--ink); background: #fff; outline: none; width: 100%; }
-.agr-cin input { font-size: 18px; font-weight: 700; }
-.agr-cin select:focus, .agr-cin input:focus { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.14); }
-.agr-cres { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-bottom: 12px; }
-.agr-cres .c { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: #fbfaf7; min-width: 0; }
-.agr-cres .c em { display: block; font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--mut); }
-.agr-cres .c b { display: block; font-size: 20px; font-weight: 800; letter-spacing: -.3px; margin-top: 2px; color: var(--ink); white-space: nowrap; }
-.agr-cres .c b i { font-style: normal; font-size: 12px; font-weight: 600; color: var(--mut); }
-.agr-cres .c small { display: block; font-size: 11.5px; color: var(--ink2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-cres .c.tot { background: var(--char); border-color: var(--char); }
-.agr-cres .c.tot em, .agr-cres .c.tot small { color: rgba(255,255,255,.7); }
-.agr-cres .c.tot b { color: #fff; }
-.agr-cm .agr-tw { border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; margin-bottom: 10px; }
-.agr-ct td small.g { display: block; font-size: 11px; color: var(--mut); }
-.agr-cnote { margin: 4px 0 0; font-size: 12px; color: var(--mut); text-align: center; }
-@media (max-width: 760px) {
-  .agr-calc-btn { margin-left: 0; width: 100%; justify-content: center; }
-  .agr-cin { grid-template-columns: 1fr; }
-  .agr-cres { grid-template-columns: 1fr 1fr; }
-  .agr-modal-bg.agr-center { align-items: flex-start; }
-}
-@media print { .agr-calc-btn { display: none !important; } }
-/* Dispatch Entry: WH2 stock check — qty <= stock hara, warna laal */
-.agr-cres { grid-template-columns: repeat(5, minmax(0,1fr)); }
-.agr-cres .c.tot.is-ok { background: var(--in); border-color: var(--in); }
-.agr-cres .c.tot.is-short { background: var(--out); border-color: var(--out); }
-.agr-cres .c.av.is-ok { background: var(--in-l); border-color: #b9dcc6; }
-.agr-cres .c.av.is-ok b, .agr-cres .c.av.is-ok small { color: var(--in); }
-.agr-cres .c.av.is-short { background: var(--out-l); border-color: #f0c4bf; }
-.agr-cres .c.av.is-short b, .agr-cres .c.av.is-short small { color: var(--out); font-weight: 700; }
-.agr-cres .c.av small { white-space: normal; }
-.agr-spin.sm { width: 16px; height: 16px; border-width: 2px; }
-@media (max-width: 760px) { .agr-cres { grid-template-columns: 1fr 1fr; } .agr-cres .c:last-child { grid-column: 1 / -1; } }
+  /* --------- slider --------- */
+  var DR = { key: null, rows: [] };
+  function openSlider(key) {
+    var cfg = CLICK[key]; if (!cfg) return;
+    var rows = S.detail.filter(cfg.f);
+    DR = { key: key, rows: rows };
+    var groups = {}, order = [];
+    rows.forEach(function (r) { var g = r.source || "Records"; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(r); });
+    var gq = 0, ga = 0;
+    var body = order.map(function (src) {
+      var list = groups[src], it = {}, itOrder = [], tq = 0, ta = 0;
+      list.forEach(function (r) {
+        var k = r.item_code || "\u2014";
+        if (!it[k]) { it[k] = { q: 0, a: 0 }; itOrder.push(k); }
+        it[k].q += +r.qty || 0; it[k].a += +r.amount || 0; tq += +r.qty || 0; ta += +r.amount || 0;
+      });
+      gq += tq; ga += ta;
+      var head = "<th>Date</th>" + (cfg.hideVoucher ? "<th>Basis</th>" : "<th>Voucher</th>") + (cfg.entryType ? "<th>Entry Type</th>" : "") +
+        "<th>Item</th><th>Warehouse</th><th class=\"n\">Qty</th>" + (cfg.rate ? '<th class="n">Rate</th>' : "") + (cfg.hideAmount ? "" : '<th class="n">Amount</th>');
+      var lead = 4 + (cfg.entryType ? 1 : 0);
+      var trs = list.map(function (r) {
+        var v = r.voucher || "", route = ROUTE[r.source];
+        var vCell = cfg.hideVoucher ? '<td class="basis">' + esc(v) + "</td>"
+          : "<td>" + (route && v ? '<a href="/app/' + route + "/" + encodeURIComponent(v) + '" target="_blank" rel="noopener">' + esc(v) + "</a>" : esc(v)) + "</td>";
+        return "<tr><td>" + dmy(r.posting_date) + "</td>" + vCell + (cfg.entryType ? "<td>" + esc(r.stock_entry_type || "") + "</td>" : "") +
+          '<td class="it">' + esc(r.item_code || "") + "</td><td>" + esc(r.warehouse || "") + '</td><td class="n"><b>' + q(r.qty) + "</b></td>" +
+          (cfg.rate ? '<td class="n">' + (r.rate != null ? inr(r.rate) : "") + "</td>" : "") +
+          (cfg.hideAmount ? "" : '<td class="n">' + (r.amount != null ? inr(r.amount) : "") + "</td>") + "</tr>";
+      }).join("");
+      var itTr = itOrder.length > 1 || cfg.rate ? itOrder.map(function (k) {
+        return '<tr class="sub"><td colspan="' + lead + '">Total \u00b7 ' + esc(k) + '</td><td class="n">' + q(it[k].q) + "</td>" + (cfg.rate ? "<td></td>" : "") + (cfg.hideAmount ? "" : '<td class="n">' + inr(it[k].a) + "</td>") + "</tr>";
+      }).join("") : "";
+      return '<div class="agr-grp"><div class="agr-grp-h"><span>' + esc(src) + "</span><em>" + list.length + " line" + (list.length === 1 ? "" : "s") + "</em></div>" +
+        '<div class="agr-tw"><table class="agr-t"><thead><tr>' + head + "</tr></thead><tbody>" + trs + itTr +
+        '<tr class="tot"><td colspan="' + lead + '">Total \u00b7 ' + esc(src) + '</td><td class="n">' + q(tq) + "</td>" + (cfg.rate ? "<td></td>" : "") + (cfg.hideAmount ? "" : '<td class="n">' + inr(ta) + "</td>") + "</tr>" +
+        "</tbody></table></div></div>";
+    }).join("");
+    var dr = $("#agr-drawer");
+    dr.innerHTML =
+      '<header class="agr-dr-h"><div><div class="k">' + esc(cfg.kicker) + "</div><h3>" + esc(cfg.title) + '</h3><div class="s">' + esc(S.customer) + " \u00b7 " + esc(longDate(S.from)) + " \u2013 " + esc(longDate(S.to)) + "</div></div>" +
+        '<div class="agr-dr-act"><button type="button" class="agr-ibtn is-dark" id="agr-dr-csv" title="Download CSV">' + I.down + '</button><button type="button" class="agr-ibtn is-dark" id="agr-dr-x" title="Close">' + I.x + "</button></div></header>" +
+      '<div class="agr-dr-b">' + (rows.length ? body : '<div class="agr-none big">No records for this period</div>') + "</div>" +
+      (rows.length ? '<footer class="agr-dr-f"><span>' + (order.length > 1 ? "Grand Total \u00b7 All Sources" : "Total \u00b7 " + rows.length + " line" + (rows.length === 1 ? "" : "s")) + "</span><b>Qty " + q(gq) + (cfg.hideAmount ? "" : " \u00b7 " + inr(ga)) + "</b></footer>" : "");
+    dr.classList.add("on"); dr.setAttribute("aria-hidden", "false"); $("#agr-scrim").classList.add("on");
+    lock(true);
+    $("#agr-dr-x").addEventListener("click", closeSlider);
+    $("#agr-dr-csv").addEventListener("click", sliderCSV);
+  }
+  function closeSlider() { var dr = $("#agr-drawer"); dr.classList.remove("on"); dr.setAttribute("aria-hidden", "true"); $("#agr-scrim").classList.remove("on"); lock(false); }
+  function sliderCSV() {
+    var cfg = CLICK[DR.key]; if (!cfg || !DR.rows.length) return;
+    var cols = [["posting_date", "Date"], ["voucher", cfg.hideVoucher ? "Basis" : "Voucher"], ["source", "Source"], ["stock_entry_type", "Entry Type"], ["item_code", "Item"], ["warehouse", "Warehouse"], ["qty", "Qty"], ["rate", "Rate"], ["amount", "Amount"]];
+    var qq = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var out = [cols.map(function (c) { return qq(c[1]); }).join(",")];
+    DR.rows.forEach(function (r) { out.push(cols.map(function (c) { return qq(r[c[0]]); }).join(",")); });
+    var blob = new Blob(["\ufeff" + out.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "ag-" + cfg.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-" + S.from + "-to-" + S.to + ".csv";
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+  function lock(on) { d.documentElement.style.overflow = on ? "hidden" : ""; d.body.style.overflow = on ? "hidden" : ""; }
 
-/* ===== Dispatch Entry v2: product tiles + submit ===== */
-.agr-cin { grid-template-columns: minmax(0,1.7fr) minmax(0,1fr); align-items: end; }
-.agr-cpick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.agr-cpick button { position: relative; display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 10px 12px; border: 1.5px solid var(--line2); border-radius: 12px; background: #fff; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s, background .15s; }
-.agr-cpick button:hover { border-color: var(--pri-b); background: #fffaf3; }
-.agr-cpick button .ic { flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: #f3efe8; color: var(--ink2); }
-.agr-cpick button .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.agr-cpick button .tx b { font-size: 15px; font-weight: 700; color: var(--ink); }
-.agr-cpick button .tx small { font-size: 11.5px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agr-cpick button .tx small.st { color: var(--ink2); font-weight: 600; }
-.agr-cpick button .ck { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%; display: none; align-items: center; justify-content: center; background: var(--pri); color: #fff; }
-.agr-cpick button .ck svg { width: 12px; height: 12px; }
-.agr-cpick button.on { border-color: var(--pri); background: var(--pri-l); box-shadow: 0 0 0 3px rgba(192,98,12,.12); }
-.agr-cpick button.on .ic { background: var(--pri); color: #fff; }
-.agr-cpick button.on .ck { display: flex; }
-.agr-cqty { display: flex; flex-direction: column; gap: 5px; }
-.agr-cqty span { font-size: 12px; font-weight: 600; color: var(--ink2); }
-.agr-cqty input { height: 64px; border: 1.5px solid var(--line2); border-radius: 12px; padding: 0 14px; font: inherit; font-size: 24px; font-weight: 800; color: var(--ink); outline: none; width: 100%; background: #fff; }
-.agr-cqty input:focus { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.14); }
-.agr-cqty input:disabled { background: #f5f3ef; color: var(--mut); }
+  /* --------- period --------- */
+  function syncPeriod() {
+    $("#agr-from").value = S.from; $("#agr-to").value = S.to;
+    var f = parseIso(S.from), t = parseIso(S.to);
+    var fullMonth = f.getDate() === 1 && f.getFullYear() === t.getFullYear() && f.getMonth() === t.getMonth();
+    $("#agr-mlbl").textContent = fullMonth ? MON[f.getMonth()] + " " + f.getFullYear() : "Custom";
+    $("#agr-prev").title = "Previous month \u00b7 " + MONF[(f.getMonth() + 11) % 12];
+    $("#agr-next").title = "Next month \u00b7 " + MONF[(f.getMonth() + 1) % 12];
+  }
+  function shift(delta) {
+    var f = parseIso(S.from), base = new Date(f.getFullYear(), f.getMonth() + delta, 1);
+    S.from = iso(base); S.to = iso(monthEnd(base));
+    syncPeriod(); load();
+  }
+  $("#agr-prev").addEventListener("click", function () { shift(-1); });
+  $("#agr-next").addEventListener("click", function () { shift(1); });
+  ["#agr-from", "#agr-to"].forEach(function (id) {
+    $(id).addEventListener("change", function () {
+      var a = $("#agr-from").value, b = $("#agr-to").value;
+      if (!a || !b) return;
+      if (a > b) { var t = a; a = b; b = t; }
+      S.from = a; S.to = b; syncPeriod(); load();
+    });
+  });
+  $("#agr-refresh").addEventListener("click", load);
+  $("#agr-print").addEventListener("click", function () { w.print(); });
 
-.agr-csub { border-top: 1px dashed var(--line2); margin-top: 6px; padding-top: 12px; }
-.agr-cplan { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: #fbfaf7; margin-bottom: 12px; }
-.agr-cplan .h { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
-.agr-cplan .h em { font-style: normal; font-weight: 500; color: var(--mut); }
-.agr-cplan .none { font-size: 12.5px; color: var(--mut); }
-.agr-cplan .row { display: grid; grid-template-columns: 24px minmax(0,1fr) 24px minmax(0,1fr); align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid #efebe3; }
-.agr-cplan .row:first-of-type { border-top: 0; }
-.agr-cplan .row .n { width: 22px; height: 22px; border-radius: 50%; background: var(--char); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.agr-cplan .row small { display: block; font-size: 10.5px; color: var(--mut); }
-.agr-cplan .row b { font-size: 15px; font-weight: 800; margin-right: 6px; }
-.agr-cplan .row em { font-style: normal; font-size: 11.5px; color: var(--ink2); word-break: break-all; }
-.agr-cplan .row .arr { color: var(--pri); font-size: 18px; font-weight: 700; text-align: center; }
-.agr-cact { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
-.agr-cact .why { margin-right: auto; font-size: 12.5px; color: var(--mut); }
-.agr-cact .why.bad { color: var(--out); font-weight: 600; }
-.agr-btn.go { display: inline-flex; align-items: center; gap: 8px; height: 42px; padding: 0 22px; background: var(--in); font-size: 14px; }
-.agr-btn.go:hover { background: #256640; }
-.agr-btn.go:disabled { background: #c9c3b6; cursor: not-allowed; opacity: 1; }
-.agr-btn.ghost { background: #fff; color: var(--ink2); border: 1px solid var(--line2); height: 42px; }
-.agr-btn.ghost:hover { background: #f5f3ef; }
-.agr-cconf { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; background: var(--in-l); border: 1px solid #b9dcc6; color: var(--ink); font-size: 13px; }
-.agr-csub .agr-msg { margin-bottom: 10px; }
-.agr-csub.is-done { border-top: 0; }
-.agr-cdone { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; background: var(--in-l); border: 1px solid #b9dcc6; margin-bottom: 10px; }
-.agr-cdone .ok { width: 36px; height: 36px; border-radius: 50%; background: var(--in); color: #fff; display: flex; align-items: center; justify-content: center; flex: 0 0 36px; }
-.agr-cdone b { display: block; font-size: 14px; color: var(--in); }
-.agr-cdone small { font-size: 12.5px; color: var(--ink2); }
-.agr-cents { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-.agr-cents a { display: block; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; text-decoration: none; background: #fff; }
-.agr-cents a:hover { border-color: var(--pri-b); background: var(--pri-l); }
-.agr-cents a b { display: block; color: var(--pri-d); font-size: 13.5px; }
-.agr-cents a small { font-size: 11.5px; color: var(--ink2); }
-.agr-lv { height: 38px; border: 1px solid var(--line2); border-radius: 9px; padding: 0 8px; font: inherit; font-size: 13px; background: #fff; color: var(--ink); }
-.agr-lv.sm { height: 30px; font-size: 12px; }
-@media (max-width: 760px) {
-  .agr-cin { grid-template-columns: 1fr; }
-  .agr-cpick button { min-height: 58px; }
-  .agr-cqty input { height: 54px; }
-  .agr-cents { grid-template-columns: 1fr; }
-  .agr-cact .why { flex-basis: 100%; }
-  .agr-btn.go { flex: 1; justify-content: center; }
-  .agr-add .agr-lv { flex: 1 1 100%; }
-}
+  /* clicks: headings / rows / document tiles -> slider */
+  root.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-k]");
+    if (b && root.contains(b) && !b.closest(".agr-drawer")) openSlider(b.getAttribute("data-k"));
+  });
+  $("#agr-scrim").addEventListener("click", closeSlider);
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeSlider(); closeSettings(); closeCalc(); } });
 
-/* ===== Dispatch Entry: compact (chhota text, popup mein scroll nahi) ===== */
-.agr-modal.agr-cm { font-size: 12.5px; }
-.agr-cm .agr-mh { padding: 12px 18px; }
-.agr-cm .agr-mh h3 { font-size: 15px; }
-.agr-cm .agr-mh p { font-size: 11.5px; margin-top: 1px; }
-.agr-cm .agr-mh .agr-ibtn { width: 30px; height: 30px; flex-basis: 30px; }
-.agr-cm .agr-mb { padding: 12px 18px 14px; }
-.agr-cm .agr-cin { gap: 10px; margin-bottom: 10px; }
-.agr-cm .agr-cpick { gap: 8px; }
-.agr-cm .agr-cpick button { min-height: 52px; padding: 7px 10px; gap: 8px; border-radius: 10px; }
-.agr-cm .agr-cpick button .ic { flex-basis: 32px; width: 32px; height: 32px; border-radius: 8px; }
-.agr-cm .agr-cpick button .ic svg { width: 18px; height: 18px; }
-.agr-cm .agr-cpick button .tx b { font-size: 13.5px; }
-.agr-cm .agr-cpick button .tx small { font-size: 10.5px; line-height: 1.3; }
-.agr-cm .agr-cqty span { font-size: 11px; }
-.agr-cm .agr-cqty input { height: 52px; font-size: 20px; border-radius: 10px; }
-.agr-cm .agr-cres { gap: 8px; margin-bottom: 8px; }
-.agr-cm .agr-cres .c { padding: 7px 10px; border-radius: 10px; }
-.agr-cm .agr-cres .c em { font-size: 10.5px; }
-.agr-cm .agr-cres .c b { font-size: 17px; margin-top: 0; }
-.agr-cm .agr-cres .c small { font-size: 10.5px; margin-top: 0; }
-.agr-cm .agr-tw { margin-bottom: 8px; }
-.agr-cm .agr-ct { font-size: 11.5px; }
-.agr-cm .agr-ct th { padding: 5px 10px; font-size: 11px; }
-.agr-cm .agr-ct td { padding: 4px 10px; }
-.agr-cm .agr-ct td small.g { font-size: 10px; display: inline; margin-left: 6px; }
-.agr-cm .agr-csub { margin-top: 4px; padding-top: 8px; }
-.agr-cm .agr-cplan { padding: 6px 10px; margin-bottom: 8px; border-radius: 10px; }
-.agr-cm .agr-cplan .h { font-size: 11.5px; margin-bottom: 2px; }
-.agr-cm .agr-cplan .row { padding: 3px 0; gap: 6px; }
-.agr-cm .agr-cplan .row small { display: inline; font-size: 10px; margin-right: 6px; }
-.agr-cm .agr-cplan .row b { font-size: 13px; }
-.agr-cm .agr-cplan .row em { font-size: 10.5px; }
-.agr-cm .agr-cplan .row .n { width: 18px; height: 18px; font-size: 10px; }
-.agr-cm .agr-cact .why { font-size: 11.5px; }
-.agr-cm .agr-btn.go, .agr-cm .agr-btn.ghost { height: 36px; font-size: 13px; padding: 0 18px; }
-.agr-cm .agr-cconf { padding: 6px 10px; font-size: 12px; border-radius: 10px; }
-.agr-cm .agr-cdone { padding: 8px 10px; margin-bottom: 8px; }
-.agr-cm .agr-cdone .ok { width: 30px; height: 30px; flex-basis: 30px; }
-.agr-cm .agr-cdone b { font-size: 13px; }
-.agr-cm .agr-cdone small { font-size: 11.5px; }
-.agr-cm .agr-cents { gap: 8px; margin-bottom: 8px; }
-.agr-cm .agr-cents a { padding: 7px 10px; }
-.agr-cm .agr-cents a b { font-size: 12.5px; }
-.agr-cm .agr-cents a small { font-size: 10.5px; }
-.agr-modal-bg.agr-center { padding: 10px 16px; }
-.agr-modal-bg.agr-center { padding: 6px 16px; }
-.agr-cm .agr-mh { padding: 10px 18px; }
-.agr-cm .agr-mb { padding: 10px 18px 12px; }
-.agr-cm .agr-tw, .agr-cm .agr-cres { margin-bottom: 6px; }
-.agr-cm .agr-ct td { padding: 3px 10px; }
-.agr-cm .agr-csub { padding-top: 6px; }
-/* Dispatch Entry: Vehicle No + Distance (Delivery Note ke liye) */
-.agr-cm .agr-cin { grid-template-columns: minmax(0,2fr) minmax(0,.8fr) minmax(0,.95fr) minmax(0,.6fr); }
-.agr-cm .agr-cveh input { font-size: 15px; letter-spacing: .03em; text-transform: uppercase; }
-.agr-cm .agr-cveh input::placeholder { text-transform: none; letter-spacing: 0; font-weight: 500; color: #c3bdb1; }
-.agr-cm .agr-cdist input { font-size: 17px; }
-.agr-cplan .row.dn { border-top: 1px dashed var(--line2); }
-.agr-cplan .row.dn .n { background: var(--pri); }
-.agr-cdn { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 8px; background: #fff; }
-.agr-cdn .t { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 10px; background: var(--pri-l); border-bottom: 1px solid var(--pri-b); }
-.agr-cdn .t a { text-decoration: none; }
-.agr-cdn .t a b { color: var(--pri-d); font-size: 13px; }
-.agr-cdn .t .pill { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--in); color: #fff; }
-.agr-cdn .t em { font-style: normal; font-size: 11.5px; color: var(--ink2); margin-left: auto; }
-.agr-cdn .agr-ct { border: 0; }
-@media (max-width: 760px) {
-  .agr-cm .agr-cin { grid-template-columns: 1fr 1fr; }
-  .agr-cm .agr-cpick { grid-column: 1 / -1; }
-  .agr-cdn .t em { margin-left: 0; flex-basis: 100%; }
-}
-#ucm-agr ~ .agr-modal-bg [hidden], .agr-cm [hidden] { display: none !important; }
-@media (max-height: 720px) { .agr-cm .agr-mh p { display: none; } .agr-cm .agr-mh { padding: 8px 18px; } }
-/* Dispatch Entry: Delete Entries (submit ke baad) */
-.agr-btn.danger { background: var(--out); height: 36px; padding: 0 18px; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
-.agr-btn.danger:hover { background: #8f342c; }
-.agr-btn.ghost.del { color: var(--out); border-color: #f0c4bf; display: inline-flex; align-items: center; gap: 6px; }
-.agr-btn.ghost.del:hover { background: var(--out-l); }
-.agr-btn.ghost.del svg { width: 13px; height: 13px; }
-.agr-cconf.is-del { background: var(--out-l); border-color: #f0c4bf; }
-.agr-csub.is-done .agr-cact .why { margin-right: auto; margin-left: 4px; }
+  /* --------- Dispatch Entry (AG_JOB_WORK_CALCULATION.xlsx jaisa) ---------
+     kg          = pcs x gram / 1000
+     repack pcs  = us material ka kg x 1000 / ek piece ka poora wazan (round)
+     Chain Set   = 1 set = 1 Upper + 1 Lower (dono alag round hokar judte hain)  */
+  var JW = {
+    rates: { repol: 85.13, mb: 77 },
+    items: { repol: "RM-GR-PP-REPOL-BLACK-AG", mb: "RM-MB-PP-BLACK-AG" },
+    products: {
+      fender: { label: "Fender", item: "CUST-FG-REAR FENDER-AG", unit: "pcs", parts: [{ name: "Fender", repol: 577, mb: 23 }] },
+      chain: { label: "Chain Set", item: "CUST-FG-CHAIN SET-AG", unit: "sets", parts: [{ name: "Chain Set Upper", repol: 225.6, mb: 9.4 }, { name: "Chain Set Lower", repol: 236.16, mb: 9.84 }] }
+    }
+  };
+  var nf3 = { format: function (v) { return qi(v); } };   /* bina decimal */
+  var JWS = { stock: null, rate: {}, err: "", wh: "WH2 - UCM" };
+  /* vehicle list: 2 default + pichhle Delivery Notes se (server) + is browser mein naye add kiye */
+  var VEH = { list: ["UK08CA9773", "UK08CB7855"], loaded: false };
+  function vehExtra() { try { return JSON.parse(w.localStorage.getItem("agr-veh-extra") || "[]") || []; } catch (e) { return []; } }
+  function vehMerge(arr) { (arr || []).forEach(function (v) { v = String(v || "").toUpperCase().replace(/\s+/g, ""); if (v && VEH.list.indexOf(v) < 0) VEH.list.push(v); }); }
+  async function loadVehicles() {
+    vehMerge(vehExtra());
+    try { var m = await api({ action: "vehicles" }); if (m) vehMerge(m.vehicles); VEH.loaded = true; } catch (e) { }
+  }
+  function inr0(v) { return "\u20b9" + qi(v); }
+  async function loadJwStock() {
+    JWS.stock = null; JWS.err = "";
+    try { var m = await api({ action: "stock" }); if (m) { JWS.stock = m.stock || {}; JWS.rate = m.rate || {}; JWS.wh = m.warehouse || JWS.wh; } }
+    catch (e) { JWS.err = e.message; }
+  }
+  function jwCalc(key, qty) {
+    var p = JW.products[key], out = { lines: [], pcs: 0, repolKg: 0, mbKg: 0, repolPcs: 0, mbPcs: 0 };
+    qty = Math.max(0, Math.floor(+qty || 0));
+    p.parts.forEach(function (pt) {
+      var wt = pt.repol + pt.mb, rk = qty * pt.repol / 1000, mk = qty * pt.mb / 1000;
+      var rp = Math.round(rk * 1000 / wt), mp = Math.round(mk * 1000 / wt);
+      out.lines.push({ name: pt.name, pcs: qty, wt: wt, g1: pt.repol, g2: pt.mb, rk: rk, mk: mk, rp: rp, mp: mp });
+      out.pcs += qty; out.repolKg += rk; out.mbKg += mk; out.repolPcs += rp; out.mbPcs += mp;
+    });
+    out.repolKgR = Math.round(out.repolKg); out.mbKgR = Math.round(out.mbKg);
+    out.need = Math.max(out.pcs, out.repolPcs + out.mbPcs);   /* WH2 se kitne pcs niklenge (server jaisa) */
+    out.repolAmt = out.repolKgR * JW.rates.repol; out.mbAmt = out.mbKgR * JW.rates.mb;
+    return out;
+  }
+  /* Dispatch Entry v3: Fender + Chain Set EK SAATH
+     har product (qty > 0) ke 2 Repack + dono ka EK Delivery Note */
+  var PK = ["fender", "chain"];
+  var CALC = { q: { fender: 0, chain: 0 }, busy: false, arm: false, done: null, err: "", vehicle: "", dist: 12 };
+  function openCalc() {
+    var m = $("#agr-calcm");
+    CALC.q = { fender: 0, chain: 0 };
+    CALC.arm = false; CALC.done = null; CALC.busy = false; CALC.err = ""; CALC.vehicle = ""; CALC.dist = 12; CALC.delArm = false; CALC.delBusy = false; CALC.delErr = ""; CALC.info = "";
+    $(".agr-modal", m).innerHTML =
+      '<div class="agr-mh"><div><h3>Dispatch Entry <small class="agr-ver">' + esc(AGR_VER) + "</small></h3>" + "<p>Enter Fender and / or Chain Set quantity. Each product gets 2 Repack entries (REPOL + Master Batch); one Delivery Note is made for both.</p></div>" +
+        '<button type="button" class="agr-ibtn" id="agr-calc-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="agr-mb" id="agr-calc-body">' +
+        '<div class="agr-cin agr-cin2">' +
+          '<div class="agr-cpick agr-cpick2">' +
+            PK.map(function (k) {
+              var p = JW.products[k], g = 0; p.parts.forEach(function (pt) { g += pt.repol + pt.mb; });
+              return '<label class="agr-cp" data-p="' + k + '"><span class="ic">' + (k === "fender" ? I.fender : I.chain) + "</span>" +
+                '<span class="tx"><b>' + esc(p.label) + "</b><small>" + (k === "chain" ? "Upper + Lower · " + qi(g) + " g / set" : qi(g) + " g / pc") + "</small>" +
+                '<small class="st" data-st="' + k + '"></small></span>' +
+                '<span class="qb"><input type="number" min="0" step="1" inputmode="numeric" placeholder="0" data-q="' + k + '"><i>' + esc(p.unit) + "</i></span></label>";
+            }).join("") +
+          "</div>" +
+          '<div class="agr-cqty agr-cveh"><span>Vehicle No</span><div class="agr-vdd" id="agr-calc-vdd">' +
+            '<button type="button" class="agr-vbtn" id="agr-calc-vs" aria-haspopup="listbox"><span class="vi">' + I.truck + '</span><b id="agr-calc-vl"></b><span class="cr">' + I.caret + "</span></button>" +
+            '<div class="agr-vpop" id="agr-calc-vp" hidden><div class="agr-vlist" id="agr-calc-vlist" role="listbox"></div>' +
+            '<div class="agr-vadd"><input type="text" id="agr-calc-v" maxlength="15" autocomplete="off" placeholder="+ New vehicle no"><button type="button" class="agr-btn" id="agr-calc-va">Add</button></div></div></div></div>' +
+          '<label class="agr-cqty agr-cdist"><span>Distance (km)</span><input type="number" id="agr-calc-d" min="1" step="1" inputmode="numeric"></label>' +
+        "</div>" +
+        '<div id="agr-calc-out"></div>' +
+        '<div class="agr-csub" id="agr-calc-sub"></div>' +
+      "</div>";
+    m.hidden = false; lock(true);
+    var qIns = $$("[data-q]", m);
+    function qLock(on) { qIns.forEach(function (x) { x.disabled = on; }); }
+    qIns.forEach(function (x) {
+      x.addEventListener("input", function () {
+        CALC.q[x.getAttribute("data-q")] = Math.max(0, Math.floor(+x.value || 0));
+        CALC.arm = false; CALC.err = ""; CALC.info = ""; draw();
+      });
+    });
+    var vIn = $("#agr-calc-v"), vSel = $("#agr-calc-vs"), vPop = $("#agr-calc-vp"), vList = $("#agr-calc-vlist"), dIn = $("#agr-calc-d");
+    dIn.value = CALC.dist || "";
+    function vOpen(on) { vPop.hidden = !on; $("#agr-calc-vdd").classList.toggle("open", on); }
+    function drawVeh() {
+      $("#agr-calc-vl").textContent = CALC.vehicle || "Select vehicle";
+      $("#agr-calc-vl").classList.toggle("ph", !CALC.vehicle);
+      vList.innerHTML = VEH.list.map(function (v) {
+        var on = v === CALC.vehicle;
+        return '<button type="button" role="option" data-v="' + esc(v) + '" class="' + (on ? "on" : "") + '"><span class="vi">' + I.truck + "</span><b>" + esc(v) + "</b>" + (on ? '<span class="ok">' + I.check + "</span>" : "") + "</button>";
+      }).join("");
+    }
+    function addVeh() {
+      var v = vIn.value.toUpperCase().replace(/\s+/g, "");
+      if (v.length < 6) { CALC.err = "Enter a valid vehicle number (e.g. UK08CB7855)."; drawSubmit(); vIn.focus(); return; }
+      vehMerge([v]);
+      try { var ex = vehExtra(); if (ex.indexOf(v) < 0) { ex.push(v); w.localStorage.setItem("agr-veh-extra", JSON.stringify(ex)); } } catch (e) { }
+      CALC.vehicle = v; CALC.err = ""; CALC.arm = false; vIn.value = ""; vOpen(false); drawVeh(); drawSubmit();
+    }
+    drawVeh();
+    loadVehicles().then(function () { if (!$("#agr-calcm").hidden && vSel.isConnected) drawVeh(); });
+    vSel.addEventListener("click", function () { if (vSel.disabled) return; vOpen(vPop.hidden); });
+    vList.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-v]"); if (!b) return;
+      CALC.vehicle = b.getAttribute("data-v"); CALC.arm = false; CALC.err = ""; vOpen(false); drawVeh(); drawSubmit();
+    });
+    m.addEventListener("mousedown", function (e) { if (!vPop.hidden && !e.target.closest("#agr-calc-vdd")) vOpen(false); });
+    vIn.addEventListener("input", function () { var pos = this.selectionStart; this.value = this.value.toUpperCase().replace(/\s+/g, ""); try { this.setSelectionRange(pos, pos); } catch (e) { } });
+    vIn.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addVeh(); } else if (e.key === "Escape") { e.stopPropagation(); vOpen(false); } });
+    $("#agr-calc-va").addEventListener("click", addVeh);
+    dIn.addEventListener("input", function () { CALC.dist = Math.floor(+this.value || 0); CALC.arm = false; drawSubmit(); });
+    $("#agr-calc-x").addEventListener("click", closeCalc);
+    $("#agr-calc-sub").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-act]"); if (!b) return;
+      var act = b.getAttribute("data-act");
+      if (act === "arm") { CALC.arm = true; CALC.err = ""; drawSubmit(); }
+      else if (act === "cancel") { CALC.arm = false; drawSubmit(); }
+      else if (act === "go") submitRepack();
+      else if (act === "del") { CALC.delArm = true; CALC.delErr = ""; drawSubmit(); }
+      else if (act === "del-no") { CALC.delArm = false; drawSubmit(); }
+      else if (act === "del-go") deleteDone();
+      else if (act === "new") {
+        var oe = $("#agr-calc-out"); if (oe) oe.hidden = false;
+        CALC.done = null; CALC.info = ""; CALC.delArm = false; CALC.arm = false;
+        CALC.q = { fender: 0, chain: 0 }; qIns.forEach(function (x) { x.value = ""; }); qLock(false);
+        vSel.disabled = false; dIn.disabled = false; CALC.vehicle = ""; drawVeh(); draw(); qIns[0].focus();
+      }
+    });
+
+    /* dono products ki calculation + stock check */
+    function state() {
+      var parts = {}, any = false, pending = false, rateMiss = [];
+      PK.forEach(function (k) {
+        var p = JW.products[k], qty = CALC.q[k] || 0, r = jwCalc(k, qty);
+        var avail = JWS.stock ? (+JWS.stock[p.item] || 0) : null;
+        var short = qty > 0 && avail !== null ? Math.max(0, r.need - Math.max(0, avail)) : 0;
+        var rate = +(JWS.rate || {})[p.item] || 0;
+        if (qty > 0) { any = true; if (avail === null) pending = true; if (short > 0 && !rate) rateMiss.push(p.item); }
+        parts[k] = { key: k, p: p, qty: qty, r: r, avail: avail, short: short, rate: rate };
+      });
+      var active = PK.filter(function (k) { return parts[k].qty > 0; });
+      var t = { repolKg: 0, mbKg: 0, repolKgR: 0, mbKgR: 0, repolPcs: 0, mbPcs: 0, pcs: 0 };
+      active.forEach(function (k) {
+        var r = parts[k].r;
+        t.repolKg += r.repolKg; t.mbKg += r.mbKg; t.repolPcs += r.repolPcs; t.mbPcs += r.mbPcs; t.pcs += r.pcs;
+        /* server jaisa: har product ka kg alag round, phir DN mein jodo */
+        if (r.repolPcs > 0) t.repolKgR += r.repolKgR;
+        if (r.mbPcs > 0) t.mbKgR += r.mbKgR;
+      });
+      t.repolAmt = t.repolKgR * JW.rates.repol; t.mbAmt = t.mbKgR * JW.rates.mb;
+      var shortAny = active.some(function (k) { return parts[k].short > 0; });
+      return { parts: parts, active: active, any: any, pending: pending, rateMiss: rateMiss, t: t, shortAny: shortAny,
+        ok: any && !pending && !JWS.err && rateMiss.length === 0 };
+    }
+    function draw() {
+      var st = state(), t = st.t;
+      PK.forEach(function (k) {
+        var x = st.parts[k], tile = $('.agr-cp[data-p="' + k + '"]', m), s = $('[data-st="' + k + '"]', m);
+        if (tile) tile.classList.toggle("on", x.qty > 0);
+        if (s) s.textContent = JWS.stock ? "Stock " + qi(x.avail) + " pcs" : (JWS.err ? "" : "Stock…");
+      });
+      function prodCard(k) {
+        var x = st.parts[k], cls = "", b = "", note = "";
+        if (JWS.err) { b = "–"; note = "Could not load stock: " + esc(JWS.err); }
+        else if (x.avail === null) { b = '<span class="agr-spin sm"></span>'; note = "Checking stock…"; }
+        else if (!x.qty) { b = "0 <i>pcs</i>"; note = "Stock " + qi(x.avail) + " pcs · not in this dispatch"; }
+        else {
+          cls = x.short ? "is-short" : "is-ok"; b = qi(x.r.need) + " <i>pcs</i>";
+          note = x.short ? "Stock " + qi(x.avail) + " · short " + qi(x.short) + " → Receipt"
+            : "Stock " + qi(x.avail) + " ✔ " + qi(x.avail - x.r.need) + " left";
+        }
+        return '<div class="c av ' + cls + '"><em>' + esc(x.p.label) + " · from " + esc(JWS.wh) + "</em><b>" + b + "</b><small>" + note + "</small></div>";
+      }
+      var lines = [];
+      st.active.forEach(function (k) { st.parts[k].r.lines.forEach(function (l) { lines.push(l); }); });
+      $("#agr-calc-out").innerHTML =
+        '<div class="agr-cres">' + prodCard("fender") + prodCard("chain") +
+          '<div class="c"><em>REPOL</em><b>' + qi(t.repolKg) + ' <i>kg</i></b><small>Repack ' + qi(t.repolPcs) + " pcs</small></div>" +
+          '<div class="c"><em>Master Batch</em><b>' + qi(t.mbKg) + ' <i>kg</i></b><small>Repack ' + qi(t.mbPcs) + " pcs</small></div>" +
+          '<div class="c tot"><em>Total Weight</em><b>' + qi(t.repolKg + t.mbKg) + ' <i>kg</i></b><small>' + qi(t.pcs) + " pcs from WH2</small></div>" +
+        "</div>" +
+        '<div class="agr-ctabs"><div class="agr-tw"><table class="agr-t agr-ct"><thead><tr><th>Part</th><th class="n">Pcs</th><th class="n">Wt / Pc</th><th class="n">REPOL kg</th><th class="n">MB kg</th><th class="n">REPOL Pcs</th><th class="n">MB Pcs</th></tr></thead><tbody>' +
+          (lines.length ? lines.map(function (l) {
+            return "<tr><td><b>" + esc(l.name) + '</b><small class="g">' + l.g1 + " g + " + l.g2 + ' g</small></td><td class="n">' + qi(l.pcs) + '</td><td class="n">' + l.wt + ' g</td><td class="n">' + qi(l.rk) + '</td><td class="n">' + qi(l.mk) + '</td><td class="n">' + qi(l.rp) + '</td><td class="n">' + qi(l.mp) + "</td></tr>";
+          }).join("") : '<tr><td colspan="7" style="text-align:center;color:var(--mut)">Enter Fender and / or Chain Set quantity</td></tr>') +
+          '<tr class="tot"><td>Total</td><td class="n">' + qi(t.pcs) + '</td><td class="n"></td><td class="n">' + qi(t.repolKg) + '</td><td class="n">' + qi(t.mbKg) + '</td><td class="n">' + qi(t.repolPcs) + '</td><td class="n">' + qi(t.mbPcs) + "</td></tr>" +
+        "</tbody></table></div>" +
+        '<div class="agr-tw"><table class="agr-t agr-ct"><thead><tr><th>Delivery Challan · 1 DN (rounded kg)</th><th class="n">Kg</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead><tbody>' +
+          "<tr><td>REPOL<small class=\"g\">" + esc(JW.items.repol) + '</small></td><td class="n">' + qi(t.repolKgR) + '</td><td class="n">' + inr(JW.rates.repol) + '</td><td class="n">' + inr(t.repolAmt) + "</td></tr>" +
+          "<tr><td>Master Batch<small class=\"g\">" + esc(JW.items.mb) + '</small></td><td class="n">' + qi(t.mbKgR) + '</td><td class="n">' + inr(JW.rates.mb) + '</td><td class="n">' + inr(t.mbAmt) + "</td></tr>" +
+          '<tr class="tot"><td>Total</td><td class="n">' + qi(t.repolKgR + t.mbKgR) + '</td><td class="n"></td><td class="n">' + inr(t.repolAmt + t.mbAmt) + "</td></tr>" +
+        "</tbody></table></div></div>";
+      drawSubmit();
+    }
+    function seNames(d0) {
+      return (d0.entries || []).map(function (e) { return e.name; }).concat((d0.receipts || []).map(function (e) { return e.name; }));
+    }
+    function docNames(d0) { var n = seNames(d0); if (d0.delivery_note) n.unshift(d0.delivery_note.name); return n; }
+    async function deleteDone() {
+      var d0 = CALC.done; if (!d0 || CALC.delBusy) return;
+      CALC.delBusy = true; CALC.delErr = ""; drawSubmit();
+      try {
+        var res = await api({ action: "undo", delivery_note: d0.delivery_note ? d0.delivery_note.name : "", stock_entries: seNames(d0).join(",") }, "POST");
+        CALC.delBusy = false; CALC.delArm = false; CALC.done = null;
+        CALC.info = "Deleted " + (((res && res.deleted) || []).length) + " entries (" + docNames(d0).join(", ") + "). Correct the details and submit again.";
+        var oe = $("#agr-calc-out"); if (oe) oe.hidden = false;
+        qLock(false); vSel.disabled = false; dIn.disabled = false;
+        draw();
+        loadJwStock().then(function () { if (!$("#agr-calcm").hidden && !CALC.done) draw(); });
+        load();
+      } catch (e) {
+        CALC.delBusy = false; CALC.delErr = e.message; drawSubmit();
+      }
+    }
+    function dnCard(dn) {
+      if (!dn) return "";
+      return '<div class="agr-cdn"><div class="t"><a href="/app/delivery-note/' + encodeURIComponent(dn.name) + '" target="_blank" rel="noopener"><b>' + esc(dn.name) + "</b></a>" +
+        '<span class="pill">Delivery Note · ' + esc(dn.status || "Submitted") + "</span>" +
+        "<em>" + esc(dn.customer) + (dn.customer_name && dn.customer_name !== dn.customer ? " · " + esc(dn.customer_name) : "") + " · " + dmy(dn.posting_date) + " · " + esc(dn.vehicle_no) + " · " + qi(dn.distance) + " km</em></div>" +
+        '<table class="agr-t agr-ct"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead><tbody>' +
+        (dn.items || []).map(function (it) { return "<tr><td>" + esc(it.item_code) + '</td><td class="n">' + qi(it.qty) + " " + esc(it.uom || "") + '</td><td class="n">' + inr(it.rate) + '</td><td class="n">' + inr(it.amount) + "</td></tr>"; }).join("") +
+        '<tr class="tot"><td>Net Total' + (dn.total_taxes ? " + Tax " + inr(dn.total_taxes) : "") + '</td><td></td><td></td><td class="n">' + inr(dn.grand_total) + "</td></tr></tbody></table></div>";
+    }
+    function drawSubmit() {
+      var box = $("#agr-calc-sub"); if (!box) return;
+      if (CALC.done) {
+        var d0 = CALC.done;
+        box.className = "agr-csub is-done";
+        var outEl = $("#agr-calc-out"); if (outEl) outEl.hidden = true;
+        var sum = (d0.products || []).map(function (p) { return esc(p.label) + " " + qi(p.qty) + " " + esc(p.unit) + (p.unit === "sets" ? " (" + qi(p.total_pcs) + " pcs)" : ""); }).join(" + ");
+        box.innerHTML = '<div class="agr-cdone"><span class="ok">' + I.check + "</span><div><b>Dispatch Entry submitted</b><small>" + sum + " · " + (d0.entries || []).length + " Repack + 1 Delivery Note</small></div></div>" +
+          '<div class="agr-cents">' +
+            (d0.receipts || []).map(function (r) {
+              return '<a class="mr" href="/app/stock-entry/' + encodeURIComponent(r.name) + '" target="_blank" rel="noopener"><b>' + esc(r.name) + "</b><small>Material Receipt · " + esc(r.product || "") + " · " + qi(r.qty) + " pcs → " + esc(r.warehouse) + " @ " + inr(r.rate) + "</small></a>";
+            }).join("") +
+            (d0.entries || []).map(function (e) {
+              return '<a href="/app/stock-entry/' + encodeURIComponent(e.name) + '" target="_blank" rel="noopener"><b>' + esc(e.name) + "</b><small>Repack · " + esc(e.product || "") + " · " + qi(e.fg_pcs) + " pcs → " + qi(e.rm_qty) + " kg " + esc(e.rm_item) + "</small></a>";
+            }).join("") +
+          "</div>" + dnCard(d0.delivery_note) +
+          (CALC.delErr ? '<div class="agr-msg show">Delete failed: ' + esc(CALC.delErr) + "</div>" : "") +
+          (CALC.delArm
+            ? '<div class="agr-cconf is-del"><span>Cancel and delete <b>' + esc(docNames(d0).join(", ")) + "</b>? Stock will go back to how it was.</span>" +
+                '<div class="agr-cact"><button type="button" class="agr-btn ghost" data-act="del-no"' + (CALC.delBusy ? " disabled" : "") + ">Keep</button>" +
+                '<button type="button" class="agr-btn danger" data-act="del-go"' + (CALC.delBusy ? " disabled" : "") + ">" + (CALC.delBusy ? '<span class="agr-spin sm"></span> Deleting…' : "Yes, Delete All") + "</button></div></div>"
+            : '<div class="agr-cact"><button type="button" class="agr-btn ghost del" data-act="del">' + I.x + ' Delete Entries</button><span class="why">Something wrong? Delete these entries and create a new one.</span>' +
+                '<button type="button" class="agr-btn" data-act="new">New Dispatch Entry</button></div>');
+        return;
+      }
+      var st = state(), t = st.t, n = 0, rows = "", mrCnt = 0, rpCnt = 0;
+      st.active.forEach(function (k) {
+        var x = st.parts[k]; if (x.short <= 0) return;
+        n++; mrCnt++;
+        rows += '<div class="row mr"><span class="n">' + n + '</span><span class="src"><small>Material Receipt · ' + esc(x.p.label) + " short</small><b>" + qi(x.short) + " pcs</b><em>" + esc(x.p.item) + '</em></span><span class="arr">→</span><span class="tgt"><small>To WH2 - UCM</small><b>' + (x.rate ? inr0(x.short * x.rate) : "rate ?") + "</b><em>@ " + (x.rate ? inr(x.rate) : "–") + " / pc</em></span></div>";
+      });
+      st.active.forEach(function (k) {
+        var x = st.parts[k], r = x.r;
+        [[r.repolPcs, JW.items.repol, r.repolKgR, "REPOL"], [r.mbPcs, JW.items.mb, r.mbKgR, "MB"]].forEach(function (y) {
+          if (!(y[0] > 0 && y[2] > 0)) return;
+          n++; rpCnt++;
+          rows += '<div class="row"><span class="n">' + n + '</span><span class="src"><small>Repack · ' + esc(x.p.label) + " · from WH2 - UCM</small><b>" + qi(y[0]) + " pcs</b><em>" + esc(x.p.item) + '</em></span><span class="arr">→</span><span class="tgt"><small>To WH1 - UCM · ' + y[3] + "</small><b>" + qi(y[2]) + " kg</b><em>" + esc(y[1]) + "</em></span></div>";
+        });
+      });
+      if (rpCnt) {
+        n++;
+        rows += '<div class="row dn"><span class="n">' + n + '</span><span class="src"><small>1 Delivery Note · from WH1 - UCM</small><b>' + qi(t.repolKgR + t.mbKgR) + " kg</b><em>REPOL " + qi(t.repolKgR) + " + MB " + qi(t.mbKgR) + '</em></span><span class="arr">→</span><span class="tgt"><small>' + esc(DEFAULT_CUSTOMER) + (S.customerName && S.customerName !== DEFAULT_CUSTOMER ? " · " + esc(S.customerName) : "") + "</small><b>" + inr(t.repolAmt + t.mbAmt) + "</b><em>" + (CALC.vehicle ? esc(CALC.vehicle) : "vehicle ?") + " · " + (CALC.dist > 0 ? qi(CALC.dist) + " km" : "km ?") + "</em></span></div>";
+      }
+      var countTxt = (mrCnt ? mrCnt + " Material Receipt + " : "") + rpCnt + " Repack + 1 Delivery Note";
+      var planHtml = '<div class="agr-cplan"><div class="h">Entries to be created in ERP <em>(' + (rpCnt ? countTxt : "2 Repack per product + 1 Delivery Note") + " · all submitted)</em></div>" +
+        (rpCnt ? rows : '<div class="none">Entries will appear here once you enter a quantity.</div>') + "</div>";
+      var why = "";
+      if (!S.acc || !S.acc.can_entry) why = "You do not have access to submit Dispatch Entry.";
+      else if (!st.any) why = "Enter Fender and / or Chain Set quantity.";
+      else if (JWS.err) why = "Could not check stock.";
+      else if (st.pending) why = "Checking stock…";
+      else if (st.rateMiss.length) why = "Stock is short and no valuation rate was found for " + st.rateMiss.join(", ") + ", so the Material Receipt cannot be made.";
+      else if (!rpCnt) why = "Quantity is too small for a Repack.";
+      else if (!CALC.vehicle || CALC.vehicle.length < 6) why = "Enter the vehicle number for the Delivery Note.";
+      else if (!(CALC.dist > 0)) why = "Enter the distance (km).";
+      var ready = st.ok && !why;
+      box.className = "agr-csub" + (ready ? " is-ok" : "");
+      var errHtml = (CALC.info ? '<div class="agr-msg show ok">' + esc(CALC.info) + "</div>" : "") + (CALC.err ? '<div class="agr-msg show">Submission failed: ' + esc(CALC.err) + "</div>" : "");
+      if (CALC.arm && ready) {
+        var shortBox = "";
+        if (st.shortAny) {
+          shortBox = '<div class="agr-cshort"><b>Stock is short in WH2 - UCM</b><table>' +
+            st.active.filter(function (k) { return st.parts[k].short > 0; }).map(function (k) {
+              var x = st.parts[k];
+              return "<tr><td>" + esc(x.p.label) + " · needed / available</td><td>" + qi(x.r.need) + " / " + qi(x.avail) + ' pcs</td></tr><tr class="hl"><td>' + esc(x.p.label) + " · short (Material Receipt @ " + inr(x.rate) + ")</td><td>" + qi(x.short) + " pcs = " + inr0(x.short * x.rate) + "</td></tr>";
+            }).join("") +
+            "</table><p>First the <b>Material Receipt</b> will be submitted into <b>WH2 - UCM</b>, then the Repack entries and the Delivery Note.</p></div>";
+        }
+        box.innerHTML = errHtml + planHtml + shortBox + '<div class="agr-cconf"><span>' + countTxt + " will be <b>submitted</b>. Stock will update immediately.</span>" +
+          '<div class="agr-cact"><button type="button" class="agr-btn ghost" data-act="cancel"' + (CALC.busy ? " disabled" : "") + ">Cancel</button>" +
+          '<button type="button" class="agr-btn go" data-act="go"' + (CALC.busy ? " disabled" : "") + ">" + (CALC.busy ? '<span class="agr-spin sm"></span> Submitting…' : (st.shortAny ? "Add Stock & Submit" : "Confirm & Submit")) + "</button></div></div>";
+      } else {
+        box.innerHTML = errHtml + planHtml + '<div class="agr-cact"><span class="why' + (st.rateMiss.length || JWS.err ? " bad" : "") + '">' + esc(why) + "</span>" +
+          '<button type="button" class="agr-btn go" data-act="arm"' + (ready ? "" : " disabled") + ">" + I.check + (st.shortAny && ready ? " Review & Submit" : " Submit") + "</button></div>";
+      }
+    }
+    async function submitRepack() {
+      if (CALC.busy) return;
+      var st = state(); if (!st.ok || !CALC.vehicle || !(CALC.dist > 0)) return;
+      CALC.busy = true; drawSubmit(); qLock(true); vSel.disabled = true; dIn.disabled = true;
+      try {
+        var res = await api({ action: "repack", qty_fender: CALC.q.fender || 0, qty_chain: CALC.q.chain || 0, vehicle_no: CALC.vehicle, distance: CALC.dist, make_receipt: st.shortAny ? 1 : 0 }, "POST");
+        CALC.busy = false; CALC.done = res; CALC.arm = false; CALC.delArm = false; CALC.delErr = ""; CALC.info = "";
+        drawSubmit();
+        loadJwStock().then(function () {
+          if ($("#agr-calcm").hidden) return;
+          if (!CALC.done) draw();
+          else $$(".agr-cpick [data-st]", m).forEach(function (s) { var it = JW.products[s.getAttribute("data-st")].item; s.textContent = JWS.stock ? "Stock " + qi(+JWS.stock[it] || 0) + " pcs" : ""; });
+        });
+        load();
+      } catch (e) {
+        CALC.busy = false; CALC.arm = false; CALC.err = e.message; qLock(false); vSel.disabled = false; dIn.disabled = false;
+        drawSubmit();
+        loadJwStock().then(function () { if (!$("#agr-calcm").hidden && !CALC.done) draw(); });
+      } finally { CALC.busy = false; }
+    }
+    draw(); setTimeout(function () { qIns[0].focus(); }, 30);
+    loadJwStock().then(function () { if (!$("#agr-calcm").hidden && $("#agr-calc-out") && !CALC.done) draw(); });
+  }
+  function closeCalc() { var m = $("#agr-calcm"); if (!m || m.hidden) return; m.hidden = true; lock(false); }
+  $("#agr-calc").addEventListener("click", openCalc);
+  $("#agr-calcm").addEventListener("mousedown", function (e) { if (e.target === this) closeCalc(); });
+
+  /* --------- settings settings (System Manager) --------- */
+  var SV = { users: [], cand: [], pick: null };
+  function openSettings() {
+    var m = $("#agr-set");
+    $(".agr-modal", m).innerHTML =
+      '<div class="agr-mh"><div><h3>Report access</h3><p><b>View</b>: can view the report only. <b>View + Dispatch Entry</b>: can also submit entries from the Dispatch Entry popup. System Managers always have full access.</p></div>' +
+        '<button type="button" class="agr-ibtn" id="agr-set-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="agr-mb"><div class="agr-msg" id="agr-set-msg"></div>' +
+        '<div class="agr-add"><div class="agr-pick"><input type="text" id="agr-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="agr-pick-l" id="agr-set-l" hidden></div></div>' +
+        '<select id="agr-set-lv" class="agr-lv"><option value="view">View</option><option value="entry">View + Dispatch Entry</option></select>' +
+        '<button type="button" class="agr-btn" id="agr-set-go">Give access</button></div>' +
+        '<div class="agr-ulist" id="agr-set-list"><div class="agr-none">Loading\u2026</div></div></div>';
+    m.hidden = false; lock(true);
+    $("#agr-set-x").addEventListener("click", closeSettings);
+    var inp = $("#agr-set-u"), lst = $("#agr-set-l");
+    function pick() {
+      var qs = inp.value.trim().toLowerCase(), have = {};
+      SV.users.forEach(function (u) { have[u.user] = 1; });
+      var list = SV.cand.filter(function (c) { return !have[c.user] && (!qs || (c.full_name + " " + c.user).toLowerCase().indexOf(qs) >= 0); }).slice(0, 8);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-u="' + esc(c.user) + '"><b>' + esc(c.full_name) + "</b><small>" + esc(c.user) + "</small></button>"; }).join("") : '<div class="agr-none">No user found</div>';
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", pick);
+    inp.addEventListener("input", function () { SV.pick = null; pick(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; }, 120); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b) return; e.preventDefault();
+      var c = SV.cand.filter(function (x) { return x.user === b.getAttribute("data-u"); })[0];
+      SV.pick = c ? c.user : null; inp.value = c ? c.full_name + " (" + c.user + ")" : ""; lst.hidden = true;
+    });
+    $("#agr-set-go").addEventListener("click", async function () {
+      if (!SV.pick) { setMsg("Pick a user from the list first."); return; }
+      this.disabled = true; var who = SV.pick;
+      var lv = $("#agr-set-lv").value;
+      if (await settingsCall({ action: "set", user: who, level: lv })) { SV.pick = null; inp.value = ""; setMsg((lv === "entry" ? "View + Dispatch Entry" : "View") + " access given to " + who + ".", true); }
+      this.disabled = false;
+    });
+    $("#agr-set-list").addEventListener("change", async function (e) {
+      var sl = e.target.closest("select[data-lv]"); if (!sl) return;
+      sl.disabled = true;
+      if (await settingsCall({ action: "set", user: sl.getAttribute("data-lv"), level: sl.value })) setMsg("Access updated for " + sl.getAttribute("data-lv") + ".", true);
+      else sl.disabled = false;
+    });
+    $("#agr-set-list").addEventListener("click", async function (e) {
+      var b = e.target.closest("button[data-rm]"); if (!b) return;
+      if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(function () { b.classList.remove("arm"); b.innerHTML = I.x; }, 3000); return; }
+      b.disabled = true;
+      if (await settingsCall({ action: "set", user: b.getAttribute("data-rm"), level: "none" })) setMsg("Access removed for " + b.getAttribute("data-rm") + ".", true);
+    });
+    settingsCall({ action: "list" });
+  }
+  function setMsg(t, ok) { var el = $("#agr-set-msg"); if (!el) return; el.className = "agr-msg" + (t ? " show" + (ok ? " ok" : "") : ""); el.textContent = t || ""; }
+  async function settingsCall(body) {
+    try {
+      var m = await api(body, "POST"); if (!m) return false;
+      SV.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); SV.cand = m.candidates || [];
+      $("#agr-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
+        return '<div class="agr-urow' + (u.enabled ? "" : " off") + '"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + (u.enabled ? "" : " \u00b7 disabled") + "</small></div>" +
+          (u.level === "admin" ? '<span class="tag admin">System Manager</span><span class="rm"></span>' : '<select class="agr-lv sm" data-lv="' + esc(u.user) + '"><option value="view"' + (u.level === "view" ? " selected" : "") + '>View</option><option value="entry"' + (u.level === "entry" ? " selected" : "") + '>View + Dispatch Entry</option></select><button type="button" class="rm" data-rm="' + esc(u.user) + '" title="Remove access">' + I.x + "</button>") + "</div>";
+      }).join("") : '<div class="agr-none">No users yet</div>';
+      return true;
+    } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
+  }
+  function closeSettings() { var m = $("#agr-set"); if (m.hidden) return; m.hidden = true; lock(false); }
+  $("#agr-gear").addEventListener("click", openSettings);
+  $("#agr-set").addEventListener("mousedown", function (e) { if (e.target === this) closeSettings(); });
+
+  /* --------- title + buttons ERP ke top header (navbar) mein --------- */
+  function mergeNav() {
+    var nav = d.querySelector("nav.navbar"), brand = nav && nav.querySelector(".navbar-brand");
+    if (!nav || !brand) return;                       // navbar na mile to page ka apna header hi rahega
+    var t = d.createElement("div"); t.className = "agr-nav-title";
+    t.innerHTML = '<h1>Job Work Reconciliation</h1><p class="agr-sub"></p>';
+    brand.insertAdjacentElement("afterend", t);
+    var act = $("#agr-act"); act.classList.add("agr-nav-act");
+    var login = nav.querySelector("#website-post-login");
+    if (login && login.parentNode) {
+      var li = d.createElement("li"); li.className = "nav-item agr-nav-li"; li.appendChild(act);
+      login.parentNode.insertBefore(li, login);
+    } else {
+      (brand.parentElement || nav).appendChild(act);
+      act.classList.add("is-end");
+    }
+    $("#agr-head").hidden = true;
+    d.body.classList.add("agr-nav-merged");
+    alignToLogo();
+    w.addEventListener("resize", alignToLogo);
+    w.addEventListener("load", alignToLogo);
+  }
+  /* page ka left margin bilkul logo ki seedh mein (har screen size par) */
+  function alignToLogo() {
+    var brand = d.querySelector("nav.navbar .navbar-brand");
+    if (!brand) return;
+    var img = brand.querySelector("img, svg") || brand;
+    var left = Math.round(img.getBoundingClientRect().left - root.getBoundingClientRect().left);
+    if (left >= 8 && left <= 120) root.style.setProperty("--agr-pad", left + "px");
+  }
+
+  /* --------- start --------- */
+  async function boot() {
+    if (!cookie("user_id") || cookie("user_id") === "Guest") { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return; }
+    try { S.acc = await api({ action: "me" }); }
+    catch (e) {
+      $("#agr-gate").innerHTML = '<div class="agr-gate-card"><div class="ico warn">!</div><h3>Could not check access</h3><p>' + esc(e.message) + '</p><p class="s">Check that the <b>ucm_ag_recon</b> Server Script is saved and enabled.</p></div>';
+      return;
+    }
+    if (!S.acc || !S.acc.can_view) {
+      $("#agr-gate").innerHTML = '<div class="agr-gate-card"><div class="ico">' + I.lock + '</div><h3>You do not have access</h3><p>This report is open only to System Managers and users given access by them.</p><p class="s">Signed in as <b>' + esc((S.acc && (S.acc.full_name || S.acc.user)) || "") + "</b></p></div>";
+      return;
+    }
+    $("#agr-gate").hidden = true; $("#agr-app").hidden = false;
+    $("#agr-gear").hidden = !S.acc.is_admin;
+    mergeNav();
+    syncPeriod(); load();
+  }
+  boot();
+})();
