@@ -13,11 +13,13 @@
 #                          FG "WH7 - UCM" mein · from_date, to_date  (ya month = YYYY-MM / "all")
 #   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
 #   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
+#   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date, warehouse, item_group
+#                          (slider: purane API get_item_transactions + get_item_sales_orders)
 #   action = "items"     → Product filter ke liye item search · q
 #   action = "list"/"set"→ ⚙️ Settings (sirf System Manager) · user, reports = "jobcard,daily" / ""
 #
 # Access: System Manager ko sab. Baaki user ko har report ka alag role:
-#   UCM Prod Job Card · UCM Prod Daily · UCM Prod Performance · UCM Prod Planning   (sab = Full)
+#   UCM Prod Job Card · UCM Prod Daily · UCM Prod Performance · UCM Prod Planning · UCM Prod Non Moving  (sab = Full)
 # Daily Production + Performance ke summary cards sirf System Manager / UCM Admin ko (report jaisa).
 #
 # Slider ke liye pehle se bane API scripts hi use hote hain:
@@ -28,8 +30,9 @@
 # isliye har jagah seedhe loops.
 # ═══════════════════════════════════════════════════════════════════════════
 
-PW_ROLES = {"jobcard": "UCM Prod Job Card", "daily": "UCM Prod Daily", "perf": "UCM Prod Performance", "planning": "UCM Prod Planning"}
-PW_KEYS = ["jobcard", "daily", "perf", "planning"]
+PW_ROLES = {"jobcard": "UCM Prod Job Card", "daily": "UCM Prod Daily", "perf": "UCM Prod Performance",
+            "planning": "UCM Prod Planning", "nonmoving": "UCM Prod Non Moving"}
+PW_KEYS = ["jobcard", "daily", "perf", "planning", "nonmoving"]
 
 pw_user = frappe.session.user
 if pw_user == "Guest":
@@ -1174,6 +1177,98 @@ elif pw_action == "planning":
         })
     pl_out = sorted(pl_out, key=lambda x: x["sort_key"])
     frappe.response["message"] = {"rows": pl_out, "month": pl_month, "item_code": pl_item}
+
+# ───────────────────── 5. NON MOVING FG ITEM ─────────────────────
+# SQL "UCM Non Moving FG Item" report se BILKUL same hai.
+# Inward = (a) Material Transfer jisme Quality Inspection bhara ho + (b) Purchase Receipt, is warehouse mein.
+# Sirf wo items jinka koi bhi out (DN / Manufacture / other) is period mein nahi hua.
+elif pw_action == "nonmoving":
+    if not pw_access["nonmoving"]:
+        frappe.throw("You do not have access to the Non Moving report.")
+    nm_today = frappe.utils.getdate(frappe.utils.nowdate())
+    nm_f = {
+        "from_date": frappe.form_dict.get("from_date") or str(frappe.utils.get_first_day(nm_today)),
+        "to_date": frappe.form_dict.get("to_date") or str(frappe.utils.get_last_day(nm_today)),
+        "warehouse": frappe.form_dict.get("warehouse") or "WH2 - UCM",
+        "item_group": frappe.form_dict.get("item_group") or "Ultra",
+    }
+    nm_rows = frappe.db.sql("""
+        SELECT
+            inbound.item_code,
+            i.item_name,
+            i.item_group,
+            inbound.inward_qty,
+            IFNULL((
+                SELECT SUM(ABS(sle.actual_qty))
+                FROM `tabStock Ledger Entry` sle
+                WHERE sle.item_code = inbound.item_code AND sle.warehouse = %(warehouse)s
+                AND sle.voucher_type = 'Delivery Note' AND sle.actual_qty < 0
+                AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            ), 0) AS dn_out_qty,
+            IFNULL((
+                SELECT SUM(ABS(sle.actual_qty))
+                FROM `tabStock Ledger Entry` sle
+                INNER JOIN `tabStock Entry` ste ON ste.name = sle.voucher_no
+                WHERE sle.item_code = inbound.item_code AND sle.warehouse = %(warehouse)s
+                AND sle.voucher_type = 'Stock Entry' AND ste.stock_entry_type = 'Manufacture'
+                AND sle.actual_qty < 0 AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            ), 0) AS assembly_qty,
+            IFNULL((
+                SELECT SUM(ABS(sle.actual_qty))
+                FROM `tabStock Ledger Entry` sle
+                LEFT JOIN `tabStock Entry` ste ON ste.name = sle.voucher_no AND sle.voucher_type = 'Stock Entry'
+                WHERE sle.item_code = inbound.item_code AND sle.warehouse = %(warehouse)s AND sle.actual_qty < 0
+                AND sle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+                AND sle.voucher_type <> 'Delivery Note'
+                AND (ste.stock_entry_type IS NULL OR ste.stock_entry_type <> 'Manufacture')
+            ), 0) AS other_out_qty
+        FROM (
+            SELECT item_code, SUM(qty) AS inward_qty
+            FROM (
+                SELECT sed.item_code AS item_code, sed.qty AS qty
+                FROM `tabStock Entry Detail` sed
+                INNER JOIN `tabStock Entry` se ON se.name = sed.parent
+                WHERE se.docstatus = 1
+                AND sed.t_warehouse = %(warehouse)s
+                AND se.stock_entry_type = 'Material Transfer'
+                AND se.custom_quality_inspection IS NOT NULL
+                AND se.custom_quality_inspection != ''
+                AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s
+
+                UNION ALL
+
+                SELECT pri.item_code AS item_code, pri.qty AS qty
+                FROM `tabPurchase Receipt Item` pri
+                INNER JOIN `tabPurchase Receipt` pr ON pr.name = pri.parent
+                WHERE pr.docstatus = 1
+                AND pri.warehouse = %(warehouse)s
+                AND pr.posting_date BETWEEN %(from_date)s AND %(to_date)s
+            ) combined_inward
+            GROUP BY item_code
+        ) inbound
+        INNER JOIN `tabItem` i ON i.item_code = inbound.item_code
+        WHERE i.item_group = %(item_group)s
+        AND inbound.item_code NOT LIKE 'FG-BLO%%' AND inbound.item_code NOT LIKE 'FG-ECOBASE%%'
+        AND i.item_name NOT LIKE '%%cover plat%%'
+        GROUP BY inbound.item_code, i.item_name, i.item_group, inbound.inward_qty
+        HAVING dn_out_qty = 0 AND assembly_qty = 0 AND other_out_qty = 0
+        ORDER BY inbound.inward_qty DESC
+    """, nm_f, as_dict=True)
+    nm_out = []
+    for r in nm_rows:
+        inw = frappe.utils.flt(r.get("inward_qty"))
+        dn = frappe.utils.flt(r.get("dn_out_qty"))
+        asm = frappe.utils.flt(r.get("assembly_qty"))
+        oth = frappe.utils.flt(r.get("other_out_qty"))
+        nm_out.append({"item_code": r.get("item_code"), "item_name": r.get("item_name") or r.get("item_code"),
+                       "item_group": r.get("item_group") or "", "inward_qty": inw, "dn_out_qty": dn,
+                       "assembly_qty": asm, "other_out_qty": oth, "balance_qty": inw - dn - asm - oth})
+    nm_wh = frappe.get_all("Warehouse", filters={"is_group": 0, "disabled": 0}, pluck="name",
+                           order_by="name asc", limit_page_length=0)
+    nm_ig = frappe.get_all("Item Group", filters={"is_group": 0}, pluck="name", order_by="name asc", limit_page_length=0)
+    frappe.response["message"] = {"rows": nm_out, "from_date": str(nm_f["from_date"]), "to_date": str(nm_f["to_date"]),
+                                  "warehouse": nm_f["warehouse"], "item_group": nm_f["item_group"],
+                                  "warehouses": nm_wh, "item_groups": nm_ig}
 
 else:
     frappe.throw("Unknown action.")
