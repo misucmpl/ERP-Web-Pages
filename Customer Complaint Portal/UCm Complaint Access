@@ -15,7 +15,12 @@
 #
 # action = "me"        → mera access          (koi bhi logged-in user)
 # action = "comments"  → complaint ke comments (View ya upar)      · name
-# action = "comment"   → comment add karo      (Log / Quality / Full) · name, text
+# action = "comment"   → reply add karo        (Log / Quality / Full) · name, text, files
+#                         Complaint log karne wale ke alawa koi aur pehla reply kare to
+#                         status "Open" → "Replied" (status_changed = True)
+#                         files = upload kiye gaye photo / video ke file_url (list)
+# action = "edit_comment" → apna reply badlo, sirf jab tak wo sabse aakhri reply hai · name, comment, text
+# action = "latest"    → mera abhi-abhi log kiya complaint (photo / video upload ke liye)
 # action = "list"      → users + access        (sirf System Manager)
 # action = "set"       → access badlo          (sirf System Manager) · user, level
 #                         level = view / log / quality / full / none
@@ -67,10 +72,11 @@ if action == "me":
         "can_close": can_close, "can_comment": can_comment, "is_admin": is_admin,
     }
 
-elif action == "comments" or action == "comment":
+elif action == "comments" or action == "comment" or action == "edit_comment":
     if not can_view:
         frappe.throw("You do not have access to complaints.")
     complaint = (frappe.form_dict.get("name") or "").strip()
+    status_changed = False
     if not complaint or not frappe.db.exists(DOCTYPE, complaint):
         frappe.throw("Complaint not found.")
 
@@ -78,11 +84,27 @@ elif action == "comments" or action == "comment":
         if not can_comment:
             frappe.throw("You can only view complaints. Ask a System Manager for Log or Quality access to comment.")
         text = (frappe.form_dict.get("text") or "").strip()
-        if len(text) < 2:
+        # photo / video: sirf wahi file jo isi complaint par attach hai
+        want_files = frappe.form_dict.get("files") or []
+        if isinstance(want_files, str):
+            want_files = frappe.parse_json(want_files) if want_files.startswith("[") else [want_files]
+        att_links = []
+        if want_files:
+            have = {}
+            for f in frappe.get_all("File", filters={"attached_to_doctype": DOCTYPE, "attached_to_name": complaint},
+                                    fields=["file_url", "file_name"], limit_page_length=0):
+                have[f.get("file_url")] = f.get("file_name") or f.get("file_url")
+            for u in want_files:
+                if u in have:
+                    fname = str(have[u]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+                    att_links.append('<a href="' + u + '" target="_blank">' + fname + '</a>')
+        if len(text) < 2 and not att_links:
             frappe.throw("Write a comment first.")
         if len(text) > 2000:
             text = text[:2000]
         safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        if att_links:
+            safe = safe + ("<br><br>" if safe else "") + "<br>".join(att_links)
         full_name = frappe.db.get_value("User", session_user, "full_name") or session_user
         frappe.get_doc({
             "doctype": "Comment",
@@ -93,12 +115,59 @@ elif action == "comments" or action == "comment":
             "comment_email": session_user,
             "comment_by": full_name,
         }).insert(ignore_permissions=True)
+        cinfo = frappe.db.get_value(DOCTYPE, complaint, ["owner", "status"], as_dict=True) or {}
+        if (cinfo.get("status") or "Open") == "Open" and cinfo.get("owner") != session_user:
+            frappe.db.set_value(DOCTYPE, complaint, "status", "Replied")
+            status_changed = True
+
+    # ── apna reply edit: sirf likhne wala, aur sirf jab tak uske baad koi naya reply nahi aaya ──
+    if action == "edit_comment":
+        if not can_comment:
+            frappe.throw("You can only view complaints.")
+        ec_name = (frappe.form_dict.get("comment") or "").strip()
+        ec = frappe.db.get_value("Comment", ec_name, ["name", "reference_doctype", "reference_name", "comment_type",
+                                                       "comment_email", "owner", "content"], as_dict=True)
+        if not ec or ec.get("reference_doctype") != DOCTYPE or ec.get("reference_name") != complaint or ec.get("comment_type") != "Comment":
+            frappe.throw("Reply not found.")
+        if (ec.get("comment_email") or ec.get("owner")) != session_user:
+            frappe.throw("You can only edit your own reply.")
+        ec_last = frappe.get_all("Comment", filters={"reference_doctype": DOCTYPE, "reference_name": complaint,
+                                                     "comment_type": "Comment"},
+                                 fields=["name"], order_by="creation desc", limit_page_length=1)
+        if not ec_last or ec_last[0].get("name") != ec_name:
+            frappe.throw("This reply can no longer be edited because a newer reply has been posted.")
+        if (frappe.db.get_value(DOCTYPE, complaint, "status") or "") == "Closed":
+            frappe.throw("The complaint is closed. Reopen it to edit the reply.")
+        et = (frappe.form_dict.get("text") or "").strip()
+        if len(et) > 2000:
+            et = et[:2000]
+        # purani photo / video links waise hi rakho, sirf text badlo
+        eo = ec.get("content") or ""
+        e_links = []
+        epos = 0
+        while True:
+            ei = eo.find("<a ", epos)
+            if ei < 0:
+                break
+            ej = eo.find("</a>", ei)
+            if ej < 0:
+                break
+            ea = eo[ei:ej + 4]
+            if 'href="/private/files/' in ea or 'href="/files/' in ea:
+                e_links.append(ea)
+            epos = ej + 4
+        if len(et) < 2 and not e_links:
+            frappe.throw("Write the reply first.")
+        e_safe = et.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        if e_links:
+            e_safe = e_safe + ("<br><br>" if e_safe else "") + "<br>".join(e_links)
+        frappe.db.set_value("Comment", ec_name, "content", e_safe)
 
     # NOTE: Server Script mein function (def) top-level variables nahi dekh paate, isliye sab inline hai
     c_rows = frappe.get_all(
         "Comment",
         filters={"reference_doctype": DOCTYPE, "reference_name": complaint, "comment_type": "Comment"},
-        fields=["name", "content", "comment_email", "comment_by", "owner", "creation"],
+        fields=["name", "content", "comment_email", "comment_by", "owner", "creation", "modified"],
         order_by="creation asc",
         limit_page_length=500
     )
@@ -108,9 +177,31 @@ elif action == "comments" or action == "comment":
         for u in frappe.get_all("User", filters={"name": ["in", c_emails]}, fields=["name", "full_name"]):
             c_names[u.get("name")] = u.get("full_name") or u.get("name")
     comments = []
+    c_last = c_rows[len(c_rows) - 1].get("name") if c_rows else ""
+    c_closed = (frappe.db.get_value(DOCTYPE, complaint, "status") or "") == "Closed"
     for r in c_rows:
         who = r.get("comment_email") or r.get("owner") or ""
-        raw = (r.get("content") or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").replace("</p>", "\n")
+        raw0 = r.get("content") or ""
+        # comment ke andar photo / video links (href="/files/..." ya "/private/files/...")
+        c_files = []
+        cut = -1
+        pos = 0
+        while True:
+            i = raw0.find('href="', pos)
+            if i < 0:
+                break
+            j = raw0.find('"', i + 6)
+            if j < 0:
+                break
+            u = raw0[i + 6:j]
+            if u.startswith("/private/files/") or u.startswith("/files/"):
+                c_files.append(u)
+                if cut < 0:
+                    cut = raw0.rfind("<a", 0, i)
+            pos = j + 1
+        if cut >= 0:
+            raw0 = raw0[:cut]
+        raw = raw0.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").replace("</p>", "\n")
         plain = ""
         inside = False
         for ch in raw:
@@ -127,8 +218,52 @@ elif action == "comments" or action == "comment":
             "by": r.get("comment_by") or c_names.get(who) or who,
             "user": who,
             "on": str(r.get("creation") or ""),
+            "files": c_files,
+            # 60 sec se zyada baad badla ho to "edited"
+            "edited": 1 if (r.get("modified") and r.get("creation")
+                            and frappe.utils.time_diff_in_seconds(r.get("modified"), r.get("creation")) > 60) else 0,
+            # apna, sabse aakhri reply hi edit ho sakta hai
+            "editable": 1 if (can_comment and not c_closed and r.get("name") == c_last and who == session_user) else 0,
         })
-    frappe.response["message"] = {"comments": comments}
+
+    # is complaint par attach saari files (log ke waqt, reply ke saath, comment ke saath)
+    f_rows = frappe.get_all(
+        "File",
+        filters={"attached_to_doctype": DOCTYPE, "attached_to_name": complaint, "is_folder": 0},
+        fields=["name", "file_name", "file_url", "file_size", "owner", "creation"],
+        order_by="creation asc",
+        limit_page_length=200
+    )
+    f_owners = []
+    for f in f_rows:
+        if f.get("owner") and f.get("owner") not in f_owners and f.get("owner") not in c_names:
+            f_owners.append(f.get("owner"))
+    if f_owners:
+        for u in frappe.get_all("User", filters={"name": ["in", f_owners]}, fields=["name", "full_name"]):
+            c_names[u.get("name")] = u.get("full_name") or u.get("name")
+    files = []
+    for f in f_rows:
+        if not f.get("file_url"):
+            continue
+        files.append({
+            "name": f.get("name"),
+            "file_name": f.get("file_name") or "",
+            "url": f.get("file_url"),
+            "size": f.get("file_size") or 0,
+            "user": f.get("owner") or "",
+            "by": c_names.get(f.get("owner")) or f.get("owner") or "",
+            "on": str(f.get("creation") or ""),
+        })
+    cdoc = frappe.db.get_value(DOCTYPE, complaint, ["owner", "creation"], as_dict=True) or {}
+    frappe.response["message"] = {"comments": comments, "files": files, "status_changed": status_changed,
+                                  "owner": cdoc.get("owner") or "", "created": str(cdoc.get("creation") or "")}
+
+elif action == "latest":
+    # Log Complaint page: complaint save hone ke baad uska naam (agar page ne naam nahi diya)
+    since = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-15)
+    latest = frappe.get_all(DOCTYPE, filters={"owner": session_user, "creation": [">", since]},
+                            fields=["name"], order_by="creation desc", limit_page_length=1)
+    frappe.response["message"] = {"name": latest[0].get("name") if latest else ""}
 
 elif action == "list" or action == "set":
     if not is_admin:
@@ -197,7 +332,7 @@ elif action == "list" or action == "set":
 
     users = []
     if user_roles:
-        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
                                    fields=["name", "full_name", "enabled"], limit_page_length=0):
             r = user_roles.get(info.get("name")) or []
             if "System Manager" in r:
