@@ -1,0 +1,1240 @@
+/* ============================================================
+   UCMPL - Production (Job Card + Daily Production) - Web Page JS
+   Web Page -> Javascript box mein poora paste karein.
+   API (Server Script) : ucm_production_web  (access + dono report + settings)
+   Pehle se bane APIs (report wale, unchanged):
+     ucm_job_card_detail - ucm_std_vs_actual_ct_detail (Job Card slider)
+     ucm_item_history_api (Less than 30 Kg par item history slider)
+   ============================================================ */
+(function () {
+  "use strict";
+  var d = document, w = window;
+  var API = "/api/method/ucm_production_web";
+  var JC_API = "/api/method/ucm_job_card_detail";
+  var CT_API = "/api/method/ucm_std_vs_actual_ct_detail";
+  var IH_API = "/api/method/ucm_item_history_api";
+
+  var root = d.getElementById("ucm-prod");
+  if (!root) return;
+
+  /* --------- helpers --------- */
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  function $(s, el) { return (el || d).querySelector(s); }
+  function $$(s, el) { return Array.prototype.slice.call((el || d).querySelectorAll(s)); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  var nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  var nf2 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 });
+  function n0(v) { return nf0.format(Math.round(+v || 0)); }
+  function nq(v) { return (v === null || v === undefined || v === "") ? "\u2013" : nf2.format(+v || 0); }
+  function inr(v) { return "\u20b9" + nf0.format(Math.round(+v || 0)); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(dt) { return dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate()); }
+  function parseIso(s) { var p = String(s || "").split(" ")[0].split("-"); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+  function addDays(s, n) { var x = parseIso(s); x.setDate(x.getDate() + n); return iso(x); }
+  function nice(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " " + x.getFullYear(); }
+  function short(s) { if (!s) return "\u2013"; var x = parseIso(s); return x.getDate() + " " + MON[x.getMonth()] + " '" + String(x.getFullYear()).slice(2); }
+  function dayName(s) { return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][parseIso(s).getDay()]; }
+  function initials(s) { var p = String(s || "?").trim().split(/\s+/); return ((p[0] || "?")[0] + (p.length > 1 ? p[p.length - 1][0] : "")).toUpperCase(); }
+  function slug(dt) { return String(dt || "").toLowerCase().replace(/ /g, "-"); }
+  function docLink(dt, name, label) {
+    if (!name) return "\u2013";
+    return '<a href="/app/' + slug(dt) + "/" + encodeURIComponent(name) + '" target="_blank" rel="noopener">' + esc(label || name) + "</a>";
+  }
+  function cookie(k) { var m = d.cookie.match(new RegExp("(?:^|; )" + k + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; }
+  function store(k, v) { try { if (v === undefined) return w.localStorage.getItem("ucm-prod-" + k); w.localStorage.setItem("ucm-prod-" + k, v); } catch (e) { return null; } }
+  function lock(on) { d.documentElement.style.overflow = on ? "hidden" : ""; d.body.style.overflow = on ? "hidden" : ""; }
+  function saveFile(text, name, type) {
+    var blob = new Blob([text], { type: type });
+    var a = d.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    d.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400);
+  }
+  function csvCell(v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+  function saveCSV(lines, name) { saveFile("\ufeff" + lines.map(function (r) { return r.map(csvCell).join(","); }).join("\r\n"), name.replace(/[^\w.\-]+/g, "_"), "text/csv;charset=utf-8"); }
+  function shortMachine(v) { return v ? String(v).replace(/^\s*machine\s*no\.?\s*/i, "").trim() : v; }
+  function shiftBadge(s) {
+    if (!s) return '<span class="mut">\u2013</span>';
+    var v = String(s).trim().toUpperCase(), c = v === "A" ? "a" : (v === "B" ? "b" : (v === "A+B" ? "ab" : ""));
+    return '<span class="pr-shift ' + c + '">' + esc(v) + "</span>";
+  }
+
+  var I = {
+    gear: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    refresh: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+    print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+    down: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
+    x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    left: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+    right: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+    lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    card: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/></svg>',
+    factory: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20V9l6 4V9l6 4V4h8v16z"/><path d="M6 17h2M11 17h2M16 17h2"/></svg>',
+    gauge: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></svg>',
+    cal: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>',
+    chart: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>',
+    check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>'
+  };
+
+  async function call(url, params, method) {
+    var token = (w.frappe && w.frappe.csrf_token) || w.csrf_token || "";
+    var opts = { credentials: "same-origin", headers: { Accept: "application/json", "X-Frappe-CSRF-Token": token } };
+    if (method === "POST") { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(params); }
+    else url += "?" + Object.keys(params).filter(function (k) { return params[k] !== undefined; }).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k] == null ? "" : params[k]); }).join("&");
+    var r = await fetch(url, opts);
+    if (r.status === 401 || (r.status === 403 && !cookie("user_id"))) { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return null; }
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      var reason = "";
+      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script not found";
+      throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
+    }
+    return j.message;
+  }
+  function api(params, method) { return call(API, params, method); }
+
+  /* --------- state --------- */
+  var SECS = [
+    { k: "jobcard", label: "Job Card", icon: I.card },
+    { k: "daily", label: "Daily Production", icon: I.factory },
+    { k: "perf", label: "Performance", icon: I.gauge },
+    { k: "planning", label: "Planning", icon: I.cal }
+  ];
+  var REP_KEYS = ["jobcard", "daily", "perf", "planning"];
+  var REP_LABEL = { jobcard: "Job Card", daily: "Daily Production", perf: "Performance", planning: "Planning" };
+  var PL_MONTHS = [];
+  (function () { for (var i = 0; i < 9; i++) { var m = (6 + i) % 12, y = 2026 + (6 + i >= 12 ? 1 : 0); PL_MONTHS.push([y + "-" + pad(m + 1), MONTH[m] + " " + y]); } })();
+  var JC_STATUSES = ["All", "Production Not Started", "In Progress", "Hold", "Completed", "Assembled"];
+  var PLANTS = ["All", "New Plant", "Old Plant", "Assembly", "Pending Clear"];
+  var JC_MONTHS = [];
+  (function () { for (var i = 0; i < 12; i++) { var m = (3 + i) % 12, y = 2026 + (3 + i >= 12 ? 1 : 0); JC_MONTHS.push([y + "-" + pad(m + 1), MONTH[m] + " " + y]); } })();
+  var today = iso(new Date());
+  var thisMonth = today.slice(0, 7);
+  var yday = (function () { var x = new Date(); x.setDate(x.getDate() - 1); return iso(x); })();   /* Daily Production: page khulne par kal ki date */
+  var S = {
+    acc: null, sec: null, secs: [],
+    jc: { status: "In Progress", item: "", itemName: "", month: "", rows: null, card: "all", q: "", seq: 0 },
+    dp: { from: yday, to: yday, plant: "All", lt: 0, rows: null, dates: [], di: 0, q: "", seq: 0, seg: "ultra" },
+    lb: { rows: null, fields: {}, q: "" },
+    jlb: { seg: "ultra", month: thisMonth, rows: null, q: "", seq: 0 },
+    pf: { from: "", to: "", status: "Completed", item: "", itemName: "", rows: null, summary: null, q: "", seq: 0 },
+    pl: { month: "", item: "", itemName: "", rows: null, card: "all", q: "", seq: 0 }
+  };
+  (function restore() {
+    var pl = store("dp-plant"); if (PLANTS.indexOf(pl) >= 0) S.dp.plant = pl;
+    if (store("dp-seg") === "large") S.dp.seg = "large";
+    if (store("jc-seg") === "large") S.jlb.seg = "large";
+  })();
+
+  function secButtons() {
+    return SECS.map(function (s) { return '<button type="button" role="tab" data-sec="' + s.k + '">' + s.icon + "<span>" + esc(s.label) + "</span></button>"; }).join("");
+  }
+  function opts(list, cur) { return list.map(function (o) { var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o; return '<option value="' + esc(v) + '"' + (v === cur ? " selected" : "") + ">" + esc(l) + "</option>"; }).join(""); }
+
+  /* --------- shell --------- */
+  root.innerHTML =
+    '<div class="pr-gate" id="pr-gate"><div class="pr-gate-card"><span class="pr-spin"></span><p>Checking access\u2026</p></div></div>' +
+    '<div class="pr-app" id="pr-app" hidden>' +
+      '<header class="pr-head" id="pr-head">' +
+        '<div class="pr-title"><h1>Production</h1><p class="pr-sub"></p></div>' +
+        '<div class="pr-sec" role="tablist">' + secButtons() + "</div>" +
+        '<div class="pr-head-act" id="pr-act">' +
+          '<button type="button" class="pr-ibtn" id="pr-print" title="Print">' + I.print + "</button>" +
+          '<button type="button" class="pr-ibtn" id="pr-refresh" title="Refresh">' + I.refresh + "</button>" +
+          '<button type="button" class="pr-ibtn is-gear" id="pr-gear" title="Access settings" hidden>' + I.gear + "</button>" +
+        "</div>" +
+      "</header>" +
+      '<div class="pr-secbar"><div class="pr-sec is-bar" role="tablist">' + secButtons() + "</div></div>" +
+
+      /* ---- Job Card ---- */
+      '<section class="pr-band" data-band="jobcard" hidden><div class="pr-filters">' +
+        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-jc-seg"><button type="button" data-jseg="ultra">Ultra</button><button type="button" data-jseg="large">Large Blow</button></div></div>' +
+        '<div class="pr-f pr-jlb-only"><span>Month</span><select id="pr-jlb-month">' + opts([["all", "All months"]].concat(JC_MONTHS), thisMonth) + "</select></div>" +
+        '<div class="pr-f pr-jul-only"><span>Month</span><select id="pr-jc-month">' + opts([["", "Currently working"]].concat(JC_MONTHS), "") + "</select></div>" +
+        '<div class="pr-f pr-jul-only"><span>Status</span><select id="pr-jc-status">' + opts(JC_STATUSES.map(function (s) { return [s, s === "All" ? "All Status" : s]; }), S.jc.status) + "</select></div>" +
+        '<div class="pr-f pr-jul-only"><span>Product</span><div class="pr-pick pr-item"><input type="text" id="pr-jc-item" placeholder="All products \u2013 type to search" autocomplete="off">' +
+          '<button type="button" class="pr-clr" id="pr-jc-item-x" title="Clear product" hidden>' + I.x + '</button><div class="pr-pick-l" id="pr-jc-item-l" hidden></div></div></div>' +
+        '<div class="pr-legend pr-jul-only"><span><i class="c"></i>Completed</span><span><i class="p"></i>In Progress</span><span><i class="n"></i>Not Started / Draft</span></div>' +
+      "</div></section>" +
+      '<main class="pr-main" data-main="jobcard" hidden></main>' +
+
+      /* ---- Daily Production ---- */
+      '<section class="pr-band" data-band="daily" hidden><div class="pr-filters">' +
+        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-dp-seg"><button type="button" data-seg="ultra">Ultra</button><button type="button" data-seg="large">Large Blow</button></div></div>' +
+        '<div class="pr-f"><span>Day</span><div class="pr-nav">' +
+          '<button type="button" class="pr-nbtn" id="pr-dp-prev" title="Previous day">' + I.left + '</button><b id="pr-dp-day"></b>' +
+          '<button type="button" class="pr-nbtn" id="pr-dp-next" title="Next day">' + I.right + "</button></div></div>" +
+        '<div class="pr-f"><span>Period</span><div class="pr-dates"><input type="date" id="pr-dp-from"><i>to</i><input type="date" id="pr-dp-to"></div></div>' +
+        '<div class="pr-f pr-ultra-only"><span>Plant</span><select id="pr-dp-plant">' + opts(PLANTS.map(function (p) { return [p, p === "All" ? "All Plants" : p]; }), S.dp.plant) + "</select></div>" +
+        '<label class="pr-chk pr-ultra-only" title="Only entries with Prod(Kg) below 30 \u2013 click Job Card to see item history"><input type="checkbox" id="pr-dp-lt"><span>Less than 30 Kg</span></label>' +
+        '<button type="button" class="pr-btn is-soft" id="pr-dp-analysis" title="Product change by machine \u2013 single day only">' + I.chart + "<span>Daily Analysis</span></button>" +
+      "</div></section>" +
+      '<main class="pr-main" data-main="daily" hidden></main>' +
+
+      /* ---- Performance ---- */
+      '<section class="pr-band" data-band="perf" hidden><div class="pr-filters">' +
+        '<div class="pr-f"><span>Month</span><div class="pr-nav">' +
+          '<button type="button" class="pr-nbtn" id="pr-pf-prev" title="Previous month">' + I.left + '</button><b id="pr-pf-mon"></b>' +
+          '<button type="button" class="pr-nbtn" id="pr-pf-next" title="Next month">' + I.right + "</button></div></div>" +
+        '<div class="pr-f"><span>Period</span><div class="pr-dates"><input type="date" id="pr-pf-from"><i>to</i><input type="date" id="pr-pf-to"></div></div>' +
+        '<div class="pr-f"><span>Status</span><select id="pr-pf-status">' + opts([["All", "All Status"], ["Completed", "Completed"], ["In Process", "In Process"]], "Completed") + "</select></div>" +
+        '<div class="pr-f"><span>Product</span><div class="pr-pick pr-item"><input type="text" id="pr-pf-item" placeholder="All products \u2013 type to search" autocomplete="off">' +
+          '<button type="button" class="pr-clr" id="pr-pf-item-x" title="Clear product" hidden>' + I.x + '</button><div class="pr-pick-l" id="pr-pf-item-l" hidden></div></div></div>' +
+      "</div></section>" +
+      '<main class="pr-main" data-main="perf" hidden></main>' +
+
+      /* ---- Planning ---- */
+      '<section class="pr-band" data-band="planning" hidden><div class="pr-filters">' +
+        '<div class="pr-f"><span>Month</span><select id="pr-pl-month">' + opts([["", "All months"]].concat(PL_MONTHS), "") + "</select></div>" +
+        '<div class="pr-f"><span>Product</span><div class="pr-pick pr-item"><input type="text" id="pr-pl-item" placeholder="All products \u2013 type to search" autocomplete="off">' +
+          '<button type="button" class="pr-clr" id="pr-pl-item-x" title="Clear product" hidden>' + I.x + '</button><div class="pr-pick-l" id="pr-pl-item-l" hidden></div></div></div>' +
+        '<p class="pr-note">Click Work Order Status for production details \u00b7 Job Card No opens the Production Plan</p>' +
+      "</div></section>" +
+      '<main class="pr-main" data-main="planning" hidden></main>' +
+    "</div>" +
+    '<div class="pr-scrim" id="pr-scrim"></div>' +
+    '<aside class="pr-drawer" id="pr-drawer" aria-hidden="true"></aside>' +
+    '<div class="pr-modal-bg" id="pr-set" hidden><div class="pr-modal" role="dialog" aria-label="Access settings"></div></div>';
+
+  function mainEl(k) { return $('[data-main="' + k + '"]'); }
+  function loadingHTML() { return '<div class="pr-empty"><span class="pr-spin"></span>Loading\u2026</div>'; }
+  function errorHTML(msg) { return '<div class="pr-error"><b>Could not load.</b> ' + esc(msg) + "</div>"; }
+  function kpi(label, val, sub, color, key, on) {
+    return '<button type="button" class="pr-kpi' + (key ? " is-click" : "") + (on ? " on" : "") + '" style="--c:' + color + '"' + (key ? ' data-card="' + key + '"' : " disabled") + ">" +
+      "<span>" + esc(label) + "</span><b>" + val + "</b>" + (sub ? "<small>" + sub + "</small>" : "") + "</button>";
+  }
+
+  /* ===================================================================
+     1. JOB CARD
+     =================================================================== */
+  function syncJcBand() {
+    var ul = S.jlb.seg === "ultra";
+    $$("#pr-jc-seg [data-jseg]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-jseg") === S.jlb.seg); });
+    $$('[data-band="jobcard"] .pr-jul-only').forEach(function (x) { x.hidden = !ul; });
+    $$('[data-band="jobcard"] .pr-jlb-only').forEach(function (x) { x.hidden = ul; });
+    $("#pr-jlb-month").value = S.jlb.month; $("#pr-jlb-month").classList.toggle("is-set", S.jlb.month !== "all");
+    $("#pr-jc-status").value = S.jc.status; $("#pr-jc-status").classList.toggle("is-set", S.jc.status !== "All");
+    $("#pr-jc-month").value = S.jc.month; $("#pr-jc-month").classList.toggle("is-set", !!S.jc.month);
+    $("#pr-jc-item").value = S.jc.item ? (S.jc.itemName || S.jc.item) : "";
+    $("#pr-jc-item").classList.toggle("is-set", !!S.jc.item);
+    $("#pr-jc-item-x").hidden = !S.jc.item;
+  }
+  /* --- Job Card \u00b7 Large Blow: month ke hisaab se product-wise produced qty --- */
+  async function loadJlb() {
+    var my = ++S.jlb.seq, el = mainEl("jobcard");
+    if (!S.jlb.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "largeblow", month: S.jlb.month });
+      if (!m || my !== S.jlb.seq) return;
+      var by = {};
+      (m.rows || []).forEach(function (r) {
+        var k = r.item_code || r.item_name;
+        if (!by[k]) by[k] = { item_code: r.item_code, item_name: r.item_name, uom: r.uom, qty: 0, n: 0, el: 0, mh: 0, mc: {}, days: {}, first: r.posting_date, last: r.posting_date };
+        var p = by[k];
+        p.qty += r.qty || 0; p.n++; p.el += r.electricity_hours || 0; p.mh += r.manpower_hours || 0;
+        if (r.machine) p.mc[shortMachine(r.machine)] = 1;
+        if (r.posting_date) { p.days[r.posting_date] = 1; if (r.posting_date < p.first) p.first = r.posting_date; if (r.posting_date > p.last) p.last = r.posting_date; }
+      });
+      S.jlb.rows = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return b.qty - a.qty; });
+      renderJlb();
+    } catch (e) { if (my !== S.jlb.seq) return; S.jlb.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.jlb.seq) el.classList.remove("is-loading"); }
+  }
+  function jlbLabel() { return S.jlb.month === "all" ? "All months" : ((JC_MONTHS.filter(function (x) { return x[0] === S.jlb.month; })[0] || [0, S.jlb.month])[1]); }
+  function jlbVisible() { var q = S.jlb.q.toLowerCase(); return (S.jlb.rows || []).filter(function (p) { return !q || [p.item_name, p.item_code, Object.keys(p.mc).join(" ")].join(" ").toLowerCase().indexOf(q) >= 0; }); }
+  function renderJlb() {
+    var all = S.jlb.rows || [], tq = 0, tn = 0, mc = {};
+    all.forEach(function (p) { tq += p.qty; tn += p.n; Object.keys(p.mc).forEach(function (x) { mc[x] = 1; }); });
+    var html = '<div class="pr-kpis k3">' +
+      kpi("Products", n0(all.length), jlbLabel(), "#1565a8") +
+      kpi("Produced Qty", nq(tq), n0(tn) + " Manufacture entries", "#1e7e3a") +
+      kpi("Machines", n0(Object.keys(mc).length), "Large Blow machines used", "#6a3fa0") + "</div>" +
+      '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-jlb-title"></h2><p id="pr-jlb-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-jlb-q" placeholder="Search product, machine\u2026" value="' + esc(S.jlb.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-jlb-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-jlb-tw"></div><div class="pr-mlist" id="pr-jlb-ml"></div></section>';
+    mainEl("jobcard").innerHTML = html;
+    renderJlbTable();
+  }
+  function renderJlbTable() {
+    var list = jlbVisible(), tq = 0, tn = 0, te = 0, tm = 0;
+    $("#pr-jlb-title").textContent = "Large Blow \u00b7 product-wise production (" + list.length + ")";
+    $("#pr-jlb-sub").textContent = jlbLabel() + " \u00b7 Manufacture entries, finished goods to WH7 - UCM \u00b7 highest qty first";
+    if (!list.length) { $("#pr-jlb-tw").innerHTML = '<div class="pr-empty">' + ((S.jlb.rows || []).length ? "No product matches the search." : "No Large Blow production for " + esc(jlbLabel()) + ".") + "</div>"; $("#pr-jlb-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t pr-lb-t"><thead><tr><th>#</th><th>Product</th><th>Machines</th><th>Period</th><th class="n">Days</th><th class="n">Entries</th><th class="n">Elec Hrs</th><th class="n">Man Hrs</th><th class="n">Produced Qty</th></tr></thead><tbody>';
+    list.forEach(function (p, i) {
+      tq += p.qty; tn += p.n; te += p.el; tm += p.mh;
+      h += '<tr><td class="mut">' + (i + 1) + '</td><td class="it">' + docLink("Item", p.item_code, p.item_name) + "<small>" + esc(p.item_code) + "</small></td>" +
+        "<td>" + esc(Object.keys(p.mc).sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); }).join(", ") || "\u2013") + "</td>" +
+        '<td class="dt">' + esc(short(p.first)) + (p.last !== p.first ? " \u2013 " + esc(short(p.last)) : "") + "</td>" +
+        '<td class="n">' + n0(Object.keys(p.days).length) + '</td><td class="n">' + n0(p.n) + '</td><td class="n">' + nq(p.el) + '</td><td class="n">' + nq(p.mh) + "</td>" +
+        '<td class="n"><b>' + nq(p.qty) + "</b><small>" + esc(p.uom || "") + "</small></td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="5">Total \u00b7 ' + list.length + ' products</td><td class="n">' + n0(tn) + '</td><td class="n">' + nq(te) + '</td><td class="n">' + nq(tm) + '</td><td class="n">' + nq(tq) + "</td></tr></tfoot></table>";
+    $("#pr-jlb-tw").innerHTML = h;
+    $("#pr-jlb-ml").innerHTML = list.map(function (p) {
+      return '<div class="pr-mcard"><div class="t"><b>' + esc(p.item_name) + "</b></div>" +
+        '<div class="m"><span>' + n0(p.n) + " entries \u00b7 " + esc(Object.keys(p.mc).join(", ") || "\u2013") + "</span><b>" + nq(p.qty) + " " + esc(p.uom || "") + "</b></div></div>";
+    }).join("");
+  }
+  function jlbCSV() {
+    var out = [["Item Code", "Product", "UOM", "Produced Qty", "Entries", "Days", "Machines", "First Date", "Last Date", "Electricity Hours", "Manpower Hours"]];
+    jlbVisible().forEach(function (p) { out.push([p.item_code, p.item_name, p.uom, p.qty, p.n, Object.keys(p.days).length, Object.keys(p.mc).join(", "), p.first, p.last, p.el, p.mh]); });
+    saveCSV(out, "large-blow-products-" + S.jlb.month + ".csv");
+  }
+
+  async function loadJc() {
+    if (S.jlb.seg === "large") return loadJlb();
+    var my = ++S.jc.seq, el = mainEl("jobcard");
+    if (!S.jc.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "jobcard", status_filter: S.jc.status, item_code: S.jc.item, month: S.jc.month });
+      if (!m || my !== S.jc.seq) return;
+      S.jc.rows = m.rows || []; renderJc();
+    } catch (e) { if (my !== S.jc.seq) return; S.jc.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.jc.seq) el.classList.remove("is-loading"); }
+  }
+  var JC_CARDS = { all: "Job cards", in_progress: "In Progress", completed: "Completed", not_started: "Not Started", short: "Short of plan" };
+  function jcVisible() {
+    var q = S.jc.q.toLowerCase(), c = S.jc.card;
+    return (S.jc.rows || []).filter(function (r) {
+      if (c === "short" && !(r.pending_qty < 0)) return false;
+      if (c !== "all" && c !== "short" && r.row_status !== c) return false;
+      if (q && [r.plan_no, r.job_card_no, r.party_name, r.item_name, r.item_code, r.work_order].join(" ").toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+  function jcScope() {
+    if (S.jc.item) return "All job cards of " + (S.jc.itemName || S.jc.item);
+    if (S.jc.month) { var m = JC_MONTHS.filter(function (x) { return x[0] === S.jc.month; })[0]; return "Started in " + (m ? m[1] : S.jc.month); }
+    return "Currently working + finished in the last 7 days";
+  }
+  function renderJc() {
+    var rows = S.jc.rows || [], cnt = { in_progress: 0, completed: 0, not_started: 0, short: 0 }, k = S.jc.card;
+    rows.forEach(function (r) { cnt[r.row_status] = (cnt[r.row_status] || 0) + 1; if (r.pending_qty < 0) cnt.short++; });
+    var html = '<div class="pr-kpis k5">' +
+      kpi("Job Cards", n0(rows.length), esc(S.jc.status === "All" ? "All status" : S.jc.status), "#1565a8", "all", k === "all") +
+      kpi("In Progress", n0(cnt.in_progress), "Work order running", "#b8560c", "in_progress", k === "in_progress") +
+      kpi("Completed", n0(cnt.completed), "Work order completed / closed", "#1e7e3a", "completed", k === "completed") +
+      kpi("Not Started / Draft", n0(cnt.not_started), "Work order not begun", "#1a56db", "not_started", k === "not_started") +
+      kpi("Short of Plan", n0(cnt.short), "Approved below MR planned", "#c62828", "short", k === "short") + "</div>";
+    html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-jc-title"></h2><p id="pr-jc-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-jc-q" placeholder="Search plan, job card, party, item\u2026" value="' + esc(S.jc.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-jc-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-jc-tw"></div><div class="pr-mlist" id="pr-jc-ml"></div></section>';
+    mainEl("jobcard").innerHTML = html;
+    renderJcTable();
+  }
+  function stColor(rs) { return rs === "completed" ? "c" : (rs === "not_started" ? "n" : "p"); }
+  function pendCell(v) { return '<b class="' + (v < 0 ? "neg" : "pos") + '">' + nq(v) + "</b>"; }
+  function jcTrigger(r, label) { return '<button type="button" class="pr-jc ' + stColor(r.row_status) + '" data-pp="' + esc(r.plan_no) + '" data-jc="' + esc(r.job_card_no || r.plan_no) + '">' + esc(label || r.job_card_no || r.plan_no) + "</button>"; }
+  function renderJcTable() {
+    var list = jcVisible();
+    $("#pr-jc-title").textContent = (S.jc.card === "all" ? "Job cards" : JC_CARDS[S.jc.card]) + " (" + list.length + ")";
+    $("#pr-jc-sub").textContent = jcScope() + " \u00b7 click a Job Card No for production details";
+    if (!list.length) { $("#pr-jc-tw").innerHTML = '<div class="pr-empty">' + ((S.jc.rows || []).length ? "No job card matches this filter." : "No job cards for these filters.") + "</div>"; $("#pr-jc-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t"><thead><tr><th>Plan No</th><th>Job Card No</th><th>Party</th><th>Item</th><th class="n">MR Planned</th><th class="n">Manufactured</th><th class="n">Approved</th><th class="n">Pending</th><th>Work Order</th><th>Start</th><th>End</th><th class="n">Lead Time</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      var c = stColor(r.row_status);
+      h += '<tr><td class="nm"><a class="st-' + c + '" href="/app/production-plan/' + encodeURIComponent(r.plan_no) + '" target="_blank" rel="noopener">' + esc(r.plan_no) + "</a></td>" +
+        "<td>" + jcTrigger(r) + "</td>" +
+        '<td class="pt">' + esc(r.party_name || "\u2013") + "</td>" +
+        '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "</td>" +
+        '<td class="n">' + nq(r.mr_planned_qty) + '</td><td class="n">' + nq(r.manufactured_qty) + '</td><td class="n"><b>' + nq(r.approved_qty) + '</b></td><td class="n">' + pendCell(r.pending_qty) + "</td>" +
+        '<td><a class="st-' + c + '" href="/app/work-order/' + encodeURIComponent(r.work_order) + '" target="_blank" rel="noopener">' + esc(r.work_order) + "</a><small>" + esc(r.wo_status) + "</small></td>" +
+        "<td>" + esc(short(r.start_date)) + "</td><td>" + esc(short(r.end_date)) + '</td><td class="n">' + (r.lead_time_days ? r.lead_time_days + "d" : "\u2013") + "</td></tr>";
+    });
+    $("#pr-jc-tw").innerHTML = h + "</tbody></table>";
+    $("#pr-jc-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard st-' + stColor(r.row_status) + '"><div class="t">' + jcTrigger(r) + "<span>" + esc(r.plan_no) + "</span></div>" +
+        '<div class="c">' + esc(r.item_name) + "</div><div class=\"m\"><span>" + esc(r.party_name || "\u2013") + "</span><span>" + esc(short(r.start_date)) + "</span></div>" +
+        '<div class="m"><span>MR ' + nq(r.mr_planned_qty) + " \u00b7 Appr " + nq(r.approved_qty) + "</span><span>Pending " + pendCell(r.pending_qty) + "</span></div></div>";
+    }).join("");
+  }
+  function jcCSV() {
+    var out = [["Plan No", "Job Card No", "Party", "Item Code", "Item", "MR Planned Qty", "Manufactured Qty", "Approved Qty", "Pending Qty", "Work Order", "WO Status", "Start Date", "End Date", "Lead Time (Days)"]];
+    jcVisible().forEach(function (r) { out.push([r.plan_no, r.job_card_no, r.party_name, r.item_code, r.item_name, r.mr_planned_qty, r.manufactured_qty, r.approved_qty, r.pending_qty, r.work_order, r.wo_status, r.start_date || "", r.end_date || "", r.lead_time_days || ""]); });
+    saveCSV(out, "job-cards.csv");
+  }
+  /* product picker */
+  function itemPicker(prefix, st, reload) {
+    var inp = $("#pr-" + prefix + "-item"), lst = $("#pr-" + prefix + "-item-l"), t = null, seq = 0;
+    function sync() { inp.value = st.item ? (st.itemName || st.item) : ""; inp.classList.toggle("is-set", !!st.item); $("#pr-" + prefix + "-item-x").hidden = !st.item; }
+    async function search() {
+      var q = inp.value.trim(), my = ++seq;
+      if (q.length < 2) { lst.innerHTML = '<div class="pr-none">Type at least 2 letters</div>'; lst.hidden = false; return; }
+      lst.innerHTML = '<div class="pr-none">Searching\u2026</div>'; lst.hidden = false;
+      try {
+        var m = await api({ action: "items", q: q }); if (my !== seq) return;
+        lst.innerHTML = (m && m.length) ? m.map(function (it) { return '<button type="button" data-c="' + esc(it.item_code) + '" data-n="' + esc(it.item_name) + '"><b>' + esc(it.item_name) + "</b><small>" + esc(it.item_code) + "</small></button>"; }).join("") : '<div class="pr-none">No product found</div>';
+      } catch (e) { lst.innerHTML = '<div class="pr-none">' + esc(e.message) + "</div>"; }
+    }
+    inp.addEventListener("focus", function () { inp.select(); if (inp.value.trim().length >= 2 && !st.item) search(); });
+    inp.addEventListener("input", function () { clearTimeout(t); t = setTimeout(search, 250); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; sync(); }, 160); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-c]"); if (!b) return; e.preventDefault();
+      st.item = b.getAttribute("data-c"); st.itemName = b.getAttribute("data-n"); st.card = "all"; lst.hidden = true; inp.blur(); sync(); syncSub(); reload();
+    });
+    $("#pr-" + prefix + "-item-x").addEventListener("click", function () { st.item = ""; st.itemName = ""; sync(); syncSub(); reload(); });
+    return sync;
+  }
+  itemPicker("jc", S.jc, function () { loadJc(); });
+
+  /* ===================================================================
+     2. DAILY PRODUCTION
+     =================================================================== */
+  function syncDpBand() {
+    var single = S.dp.from === S.dp.to;
+    $("#pr-dp-day").textContent = single ? dayName(S.dp.from) + ", " + nice(S.dp.from) : "Custom";
+    $("#pr-dp-from").value = S.dp.from; $("#pr-dp-to").value = S.dp.to;
+    $("#pr-dp-plant").value = S.dp.plant; $("#pr-dp-plant").classList.toggle("is-set", S.dp.plant !== "All");
+    $("#pr-dp-lt").checked = !!S.dp.lt; $(".pr-chk").classList.toggle("on", !!S.dp.lt);
+    var ul = S.dp.seg === "ultra";
+    $$("#pr-dp-seg [data-seg]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-seg") === S.dp.seg); });
+    $$('[data-band="daily"] .pr-ultra-only').forEach(function (x) { x.hidden = !ul; });
+    $("#pr-dp-analysis").hidden = !ul;   /* Daily Analysis sirf Ultra ke liye */
+    $("#pr-dp-analysis").disabled = !single;
+    $("#pr-dp-analysis").title = !ul ? "Daily Analysis is for Ultra only" : (single ? "Product change by machine for " + nice(S.dp.from) : "Pick a single day to use Daily Analysis");
+  }
+  function shiftDay(n) { var t = addDays(S.dp.from, n); S.dp.from = t; S.dp.to = t; syncDpBand(); syncSub(); loadDp(); }
+  async function loadDp() {
+    if (S.dp.seg === "large") return loadLb();
+    var my = ++S.dp.seq, el = mainEl("daily");
+    if (!S.dp.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "daily", from_date: S.dp.from, to_date: S.dp.to, plant: S.dp.plant, less_than_30: S.dp.lt ? 1 : 0 });
+      if (!m || my !== S.dp.seq) return;
+      var rows = m.rows || [];
+      /* report jaisa: "All" plant mein Assembly nahi dikhate */
+      if (S.dp.plant === "All") rows = rows.filter(function (r) { return String(r.workstation || "").indexOf("Assembly") === -1; });
+      if (S.dp.lt) rows = rows.filter(function (r) { return (r.prod_kg || 0) < 30; });
+      S.dp.rows = rows;
+      var ds = {}; rows.forEach(function (r) { if (r.production_date) ds[r.production_date] = 1; });
+      S.dp.dates = Object.keys(ds).sort(); S.dp.di = 0;
+      renderDp();
+    } catch (e) { if (my !== S.dp.seq) return; S.dp.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.dp.seq) el.classList.remove("is-loading"); }
+  }
+  function dpStats(rows) {
+    var run = {}, asm = {}, qp = 0, acc = 0, kg = 0, rej = 0, prod = 0;
+    rows.forEach(function (r) {
+      if (r.entry_type === "Manufacture") {
+        var ws = r.workstation || "";
+        if (ws.indexOf("New Plant") >= 0 || ws.indexOf("Old Plant") >= 0) { if (r.item_code) run[r.item_code] = 1; }
+        else if (ws.indexOf("Assembly") >= 0) { if (r.item_code) asm[r.item_code] = 1; }
+        if (r.qc_status === "Pending") qp++;
+      }
+      acc += r.qi_accepted || 0; kg += r.prod_kg || 0; rej += r.qi_rejected || 0; prod += r.qty || 0;
+    });
+    return { run: Object.keys(run).length, asm: Object.keys(asm).length, qp: qp, acc: acc, kg: kg, rej: rej, prod: prod };
+  }
+  function dpRowsForPage() { var dt = S.dp.dates[S.dp.di]; return (S.dp.rows || []).filter(function (r) { return !dt || r.production_date === dt; }); }
+  function renderDp() {
+    var all = S.dp.rows || [], st = dpStats(all), html = "";
+    if (S.acc.show_summary) {
+      html += '<div class="pr-kpis k3">' +
+        kpi("Running Products", n0(st.run), "New + Old Plant", "#b8560c") +
+        kpi("Assembly Production", n0(st.asm), "Products in assembly", "#6a3fa0") +
+        kpi("Quality Pending", n0(st.qp), "Manufacture entries, QC not done", "#c62828") + "</div>";
+    }
+    var pager = "";
+    if (S.dp.dates.length > 1) {
+      pager = '<div class="pr-pager"><button type="button" class="pr-nbtn" data-pg="-1"' + (S.dp.di === 0 ? " disabled" : "") + ">" + I.left + "</button>" +
+        '<div class="pr-pdates">' + S.dp.dates.map(function (dt, i) { return '<button type="button" data-di="' + i + '"' + (i === S.dp.di ? ' class="on"' : "") + ">" + esc(short(dt)) + "</button>"; }).join("") + "</div>" +
+        '<button type="button" class="pr-nbtn" data-pg="1"' + (S.dp.di >= S.dp.dates.length - 1 ? " disabled" : "") + ">" + I.right + "</button>" +
+        '<span class="pr-pinfo">Date ' + (S.dp.di + 1) + " of " + S.dp.dates.length + "</span></div>";
+    }
+    html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-dp-title"></h2><p id="pr-dp-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-dp-q" placeholder="Search machine, item, job card, entry\u2026" value="' + esc(S.dp.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-dp-csv" title="Download CSV">' + I.down + "</button></div></div>" + pager +
+      '<div class="pr-tw" id="pr-dp-tw"></div><div class="pr-mlist" id="pr-dp-ml"></div></section>';
+    mainEl("daily").innerHTML = html;
+    renderDpTable();
+  }
+  function dpVisible() {
+    var q = S.dp.q.toLowerCase();
+    return dpRowsForPage().filter(function (r) { return !q || [r.workstation, r.item_name, r.item_code, r.job_card_no, r.production_plan, r.stock_entry, r.qc_stock_entry, r.created_by, r.inspected_by].join(" ").toLowerCase().indexOf(q) >= 0; });
+  }
+  var QC = { "Done": "ok", "Pending": "hi", "In Progress": "md" };
+  function qcPill(r) {
+    if (r.entry_type === "Pending Clear") return '<span class="mut">\u2013</span>';
+    var s = r.qc_status || "Pending";
+    return '<span class="pr-qc ' + (QC[s] || "") + '"><i></i>' + esc(s) + "</span>" + (r.no_of_qc ? "<small>" + r.no_of_qc + " QC</small>" : "");
+  }
+  function dpTrigger(r) {
+    if (!r.production_plan) return '<span class="mut">\u2013</span>';
+    return '<button type="button" class="pr-jc" data-pp="' + esc(r.production_plan) + '" data-jc="' + esc(r.job_card_no || "") + '" data-ic="' + esc(r.item_code || "") + '" data-in="' + esc(r.item_name || "") + '">' + esc(r.job_card_no || r.production_plan) + "</button>";
+  }
+  function renderDpTable() {
+    var list = dpVisible(), st = dpStats(list), dt = S.dp.dates[S.dp.di];
+    $("#pr-dp-title").textContent = "Production entries (" + list.length + ")";
+    $("#pr-dp-sub").textContent = (dt ? dayName(dt) + ", " + nice(dt) : (S.dp.from === S.dp.to ? nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to))) + " \u00b7 " + (S.dp.plant === "All" ? "All plants (excl. Assembly)" : S.dp.plant) + (S.dp.lt ? " \u00b7 Prod below 30 Kg \u00b7 click Job Card for item history" : " \u00b7 click a Job Card for production details");
+    if (!list.length) { $("#pr-dp-tw").innerHTML = '<div class="pr-empty">' + ((S.dp.rows || []).length ? "No entry matches the search." : "No production entries for these filters.") + "</div>"; $("#pr-dp-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t pr-dp-t"><thead><tr><th>Date / Shift</th><th>Job Card</th><th>M/C No</th><th>Item</th><th class="n">Produced</th><th class="n">Accepted</th><th class="n">Rejected</th><th class="n">Prod (Kg)</th><th>QC Status</th><th class="n">MP / Elec Hrs</th><th>Stock Entry</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      var pc = r.entry_type === "Pending Clear";
+      h += "<tr" + (pc ? ' class="is-pc"' : "") + '><td class="dt">' + esc(short(r.production_date)) + " " + shiftBadge(r.shift) + (pc ? '<small><span class="pr-et pc">Pending Clear</span></small>' : "") + "</td>" +
+        "<td>" + dpTrigger(r) + "<small>" + esc(r.production_plan || "") + "</small></td>" +
+        '<td class="mc">' + (r.workstation ? docLink("Workstation", r.workstation, shortMachine(r.workstation)) : '<span class="mut">\u2013</span>') + "</td>" +
+        '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "<small>PW " + nq(r.pw) + " g \u00b7 " + esc(r.uom || "") + "</small></td>" +
+        '<td class="n">' + nq(r.qty) + "</td>" +
+        '<td class="n"><b>' + (pc ? "\u2013" : nq(r.qi_accepted)) + "</b>" + (pc ? "" : "<small>of " + nq(r.qi_total_inspected) + "</small>") + "</td>" +
+        '<td class="n">' + (r.qi_rejected ? '<b class="neg">' + nq(r.qi_rejected) + "</b>" : (pc ? "\u2013" : "0")) + "</td>" +
+        '<td class="n"><b class="' + ((r.prod_kg || 0) < 30 ? "low" : "") + '">' + nf2.format(r.prod_kg || 0) + "</b></td>" +
+        "<td>" + qcPill(r) + "</td>" +
+        '<td class="n">' + nq(r.manpower_hours) + " / " + nq(r.electricity_hours) + "</td>" +
+        '<td class="se">' + docLink("Stock Entry", r.stock_entry) + "<small>" + (r.qc_stock_entry ? "QC " + docLink("Stock Entry", r.qc_stock_entry) + " \u00b7 " : "") + "by " + esc(r.created_by || "\u2013") + (r.inspected_by ? " / QC " + esc(r.inspected_by) : "") + "</small></td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="4">Total \u00b7 ' + list.length + ' entries</td><td class="n">' + nq(st.prod) + '</td><td class="n">' + nq(st.acc) + '</td><td class="n">' + nq(st.rej) + '</td><td class="n">' + nf2.format(st.kg) + '</td><td colspan="3"></td></tr></tfoot></table>';
+    $("#pr-dp-tw").innerHTML = h;
+    $("#pr-dp-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard"><div class="t">' + dpTrigger(r) + "<span>" + esc(shortMachine(r.workstation) || "\u2013") + " " + shiftBadge(r.shift) + "</span></div>" +
+        '<div class="c">' + esc(r.item_name) + "</div>" +
+        '<div class="m"><span>Prod ' + nq(r.qty) + " \u00b7 Acc " + nq(r.qi_accepted) + " \u00b7 " + nf2.format(r.prod_kg || 0) + " kg</span>" + qcPill(r) + "</div></div>";
+    }).join("");
+  }
+  function dpCSV() {
+    var out = [["Entry Type", "Production Date", "Shift", "Production Plan", "Job Card", "M/C No", "Item Code", "Item", "Produced Qty", "Total Inspected", "Accepted", "Rejected", "PW (gms)", "Prod (Kg)", "QC Status", "No of QC", "Manpower Hours", "Electricity Hours", "Stock Entry", "QC Stock Entry", "UOM", "Inspected By", "Created By"]];
+    dpVisible().forEach(function (r) { out.push([r.entry_type, r.production_date || "", r.shift, r.production_plan, r.job_card_no, r.workstation, r.item_code, r.item_name, r.qty, r.qi_total_inspected, r.qi_accepted, r.qi_rejected, r.pw, r.prod_kg, r.entry_type === "Pending Clear" ? "" : r.qc_status, r.no_of_qc || "", r.manpower_hours, r.electricity_hours, r.stock_entry, r.qc_stock_entry, r.uom, r.inspected_by, r.created_by]); });
+    saveCSV(out, "daily-production-" + S.dp.from + "-to-" + S.dp.to + ".csv");
+  }
+
+  /* --- Large Blow: ek Manufacture entry, FG seedha WH7 - UCM (slider nahi) --- */
+  async function loadLb() {
+    var my = ++S.dp.seq, el = mainEl("daily");
+    if (!S.lb.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "largeblow", from_date: S.dp.from, to_date: S.dp.to });
+      if (!m || my !== S.dp.seq) return;
+      var rows = m.rows || [];
+      rows.sort(function (a, b) {
+        return a.posting_date < b.posting_date ? -1 : a.posting_date > b.posting_date ? 1
+          : String(a.shift).localeCompare(String(b.shift)) || String(shortMachine(a.machine) || "").localeCompare(String(shortMachine(b.machine) || ""), undefined, { numeric: true });
+      });
+      S.lb.rows = rows; S.lb.fields = m.fields || {};
+      renderLb();
+    } catch (e) { if (my !== S.dp.seq) return; S.lb.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.dp.seq) el.classList.remove("is-loading"); }
+  }
+  function lbVisible() {
+    var q = S.lb.q.toLowerCase();
+    return (S.lb.rows || []).filter(function (r) { return !q || [r.machine, r.item_name, r.item_code, r.stock_entry, r.created_by, r.shift].join(" ").toLowerCase().indexOf(q) >= 0; });
+  }
+  function lbStats(rows) {
+    var t = { qty: 0, el: 0, mh: 0, mp: 0, mc: {}, it: {} };
+    rows.forEach(function (r) { t.qty += r.qty || 0; t.el += r.electricity_hours || 0; t.mh += r.manpower_hours || 0; t.mp += r.manpower || 0; if (r.machine) t.mc[r.machine] = 1; if (r.item_code) t.it[r.item_code] = 1; });
+    return t;
+  }
+  function renderLb() {
+    var t = lbStats(S.lb.rows || []), fl = S.lb.fields || {};
+    var html = '<div class="pr-kpis k4">' +
+      kpi("Entries", n0((S.lb.rows || []).length), "Manufacture entries", "#1565a8") +
+      kpi("Machines", n0(Object.keys(t.mc).length), n0(Object.keys(t.it).length) + " products", "#6a3fa0") +
+      kpi("Total Qty", nq(t.qty), "Moved to WH7 - UCM", "#1e7e3a") +
+      kpi("Elec / Man Hrs", nq(t.el) + " / " + nq(t.mh), (fl.manpower ? nq(t.mp) + " manpower" : "Manpower field not found"), "#b8560c") + "</div>";
+    html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-lb-title"></h2><p id="pr-lb-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-lb-q" placeholder="Search machine, product, entry\u2026" value="' + esc(S.lb.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-lb-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-lb-tw"></div><div class="pr-mlist" id="pr-lb-ml"></div></section>';
+    mainEl("daily").innerHTML = html;
+    renderLbTable();
+  }
+  function renderLbTable() {
+    var list = lbVisible(), t = lbStats(list), fl = S.lb.fields || {};
+    $("#pr-lb-title").textContent = "Large Blow production (" + list.length + ")";
+    $("#pr-lb-sub").textContent = (S.dp.from === S.dp.to ? dayName(S.dp.from) + ", " + nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to)) + " \u00b7 Manufacture entries, finished goods to WH7 - UCM";
+    if (!list.length) { $("#pr-lb-tw").innerHTML = '<div class="pr-empty">' + ((S.lb.rows || []).length ? "No entry matches the search." : "No Large Blow entries for these dates.") + "</div>"; $("#pr-lb-ml").innerHTML = ""; return; }
+    function hv(v) { return v == null ? '<span class="mut">\u2013</span>' : nq(v); }
+    var h = '<table class="pr-t pr-lb-t"><thead><tr><th>Date / Shift</th><th>M/C No</th><th>Product</th><th class="n">Qty</th><th class="n">Elec Hrs</th><th class="n">Man Hrs</th><th class="n">Manpower</th><th>Stock Entry</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      h += '<tr><td class="dt">' + esc(short(r.posting_date)) + " " + (r.shift ? shiftBadge(r.shift) : "") + "<small>" + esc(String(r.posting_time || "").slice(0, 5)) + "</small></td>" +
+        '<td class="mc">' + (r.machine ? docLink("Workstation", r.machine, shortMachine(r.machine)) : '<span class="mut">\u2013</span>') + "</td>" +
+        '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "<small>" + esc(r.item_code) + "</small></td>" +
+        '<td class="n"><b>' + nq(r.qty) + "</b><small>" + esc(r.uom) + "</small></td>" +
+        '<td class="n">' + hv(r.electricity_hours) + '</td><td class="n">' + hv(r.manpower_hours) + '</td><td class="n">' + hv(r.manpower) + "</td>" +
+        '<td class="se">' + docLink("Stock Entry", r.stock_entry) + "<small>by " + esc(r.created_by || "\u2013") + "</small></td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="3">Total \u00b7 ' + list.length + ' entries</td><td class="n">' + nq(t.qty) + '</td><td class="n">' + nq(t.el) + '</td><td class="n">' + nq(t.mh) + '</td><td class="n">' + (fl.manpower ? nq(t.mp) : "\u2013") + "</td><td></td></tr></tfoot></table>";
+    $("#pr-lb-tw").innerHTML = h;
+    $("#pr-lb-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard"><div class="t"><b>' + esc(shortMachine(r.machine) || "\u2013") + "</b><span>" + esc(short(r.posting_date)) + " " + (r.shift ? shiftBadge(r.shift) : "") + "</span></div>" +
+        '<div class="c">' + esc(r.item_name) + "</div>" +
+        '<div class="m"><span>Qty ' + nq(r.qty) + " " + esc(r.uom) + " \u00b7 Elec " + (r.electricity_hours == null ? "\u2013" : nq(r.electricity_hours)) + " \u00b7 Man " + (r.manpower_hours == null ? "\u2013" : nq(r.manpower_hours)) + " \u00b7 MP " + (r.manpower == null ? "\u2013" : nq(r.manpower)) + "</span></div></div>";
+    }).join("");
+  }
+  function lbCSV() {
+    var out = [["Posting Date", "Time", "Shift", "M/C No", "Item Code", "Product", "Qty", "UOM", "Electricity Hours", "Manpower Hours", "No of Manpower", "Stock Entry", "BOM", "Created By"]];
+    lbVisible().forEach(function (r) { out.push([r.posting_date, r.posting_time, r.shift, r.machine, r.item_code, r.item_name, r.qty, r.uom, r.electricity_hours, r.manpower_hours, r.manpower, r.stock_entry, r.bom, r.created_by]); });
+    saveCSV(out, "large-blow-production-" + S.dp.from + "-to-" + S.dp.to + ".csv");
+  }
+
+
+  /* ===================================================================
+     3. PERFORMANCE (UCM Job Card Perfomance Report)
+     =================================================================== */
+  function monthOf(f, t) {
+    var a = parseIso(f), b = parseIso(t);
+    var whole = a.getDate() === 1 && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear() && new Date(b.getFullYear(), b.getMonth() + 1, 0).getDate() === b.getDate();
+    return whole ? MONTH[a.getMonth()] + " " + a.getFullYear() : "Custom";
+  }
+  function setPfMonth(dt) { var b = new Date(dt.getFullYear(), dt.getMonth(), 1); S.pf.from = iso(b); S.pf.to = iso(new Date(b.getFullYear(), b.getMonth() + 1, 0)); }
+  setPfMonth(new Date());
+  var syncPfItem = itemPicker("pf", S.pf, function () { loadPf(); });
+  function syncPfBand() {
+    $("#pr-pf-mon").textContent = monthOf(S.pf.from, S.pf.to);
+    $("#pr-pf-from").value = S.pf.from; $("#pr-pf-to").value = S.pf.to;
+    $("#pr-pf-status").value = S.pf.status; $("#pr-pf-status").classList.toggle("is-set", S.pf.status !== "All");
+    syncPfItem();
+  }
+  async function loadPf() {
+    var my = ++S.pf.seq, el = mainEl("perf");
+    if (!S.pf.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "performance", from_date: S.pf.from, to_date: S.pf.to, status_filter: S.pf.status, item_code: S.pf.item });
+      if (!m || my !== S.pf.seq) return;
+      S.pf.rows = m.rows || []; S.pf.summary = m.summary; renderPf();
+    } catch (e) { if (my !== S.pf.seq) return; S.pf.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.pf.seq) el.classList.remove("is-loading"); }
+  }
+  function effPill(v) {
+    if (v === null || v === undefined) return '<span class="mut">\u2013</span>';
+    var c = v >= 90 ? "ok" : (v >= 70 ? "md" : "hi");
+    return '<span class="pr-qc ' + c + '"><i></i>' + nf2.format(v) + "%</span>";
+  }
+  function compPill(r) {
+    if (r.completion) return '<span class="pr-cmpl ' + (r.completion === "COMPLETED" ? "ok" : "md") + '">' + (r.completion === "COMPLETED" ? "Completed" : "Partial") + (r.completion_pct != null ? " " + r.completion_pct + "%" : "") + "</span>";
+    var s2 = r.pp_status || "\u2013";
+    return '<span class="pr-cmpl ' + (s2 === "In Process" ? "bl" : (s2 === "Draft" ? "vi" : "md")) + '">' + esc(s2) + "</span>";
+  }
+  function pfVisible() {
+    var q = S.pf.q.toLowerCase();
+    return (S.pf.rows || []).filter(function (r) { return !q || [r.job_card_no, r.production_plan, r.work_order, r.item_name, r.item_code, r.month].join(" ").toLowerCase().indexOf(q) >= 0; });
+  }
+  function renderPf() {
+    var sm = S.pf.summary, html = "";
+    if (sm) {
+      html += '<div class="pr-kpis k5">' +
+        kpi("Total Job Cards", n0(sm.total_job_card), "Started in period (any status)", "#1a73e8") +
+        kpi("Completed Plans", n0(sm.completed_plans), "Completed / closed", "#1e7e3a") +
+        kpi("Average Efficiency", nf2.format(sm.avg_efficiency || 0) + "%", "Across work orders", "#7b1fa2") +
+        kpi("Production Cost", inr(sm.production_cost), "Actual cost", "#475569") +
+        kpi("Extra Production Cost", inr(sm.extra_cost), "Actual \u2212 standard", "#c62828") + "</div>";
+    }
+    html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-pf-title"></h2><p id="pr-pf-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-pf-q" placeholder="Search job card, work order, item\u2026" value="' + esc(S.pf.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-pf-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-pf-tw"></div><div class="pr-mlist" id="pr-pf-ml"></div></section>';
+    mainEl("perf").innerHTML = html;
+    renderPfTable();
+  }
+  function renderPfTable() {
+    var list = pfVisible(), tq = 0, ta = 0, sc = 0, ac = 0, ec = 0;
+    list.forEach(function (r) { tq += r.qty_to_manufacture; ta += r.approved_qty; sc += r.std_production_cost; ac += r.production_cost; ec += r.extra_production_cost; });
+    $("#pr-pf-title").textContent = "Job card performance (" + list.length + ")";
+    $("#pr-pf-sub").textContent = (S.pf.item ? "All job cards of " + (S.pf.itemName || S.pf.item) : "Started " + nice(S.pf.from) + " \u2013 " + nice(S.pf.to)) + " \u00b7 " + (S.pf.status === "All" ? "all status" : S.pf.status) + " \u00b7 orange rows = Std CT / Cavity missing \u00b7 click a Job Card for Std vs Actual";
+    if (!list.length) { $("#pr-pf-tw").innerHTML = '<div class="pr-empty">' + ((S.pf.rows || []).length ? "No job card matches the search." : "No job cards for these filters.") + "</div>"; $("#pr-pf-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t pr-pf-t"><thead><tr><th>Job Card</th><th>Status</th><th>Efficiency</th><th>Work Order</th><th>Item</th><th>Start \u2013 End</th><th class="n">Qty to Mfg</th><th class="n">Approved</th><th class="n">Std / Act Hrs</th><th class="n">Std Cost</th><th class="n">Actual Cost</th><th class="n">Extra Cost</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      h += "<tr" + (r.zero_std ? ' class="is-zero"' : "") + "><td>" + '<button type="button" class="pr-jc" data-ct="' + esc(r.production_plan) + '" data-jc="' + esc(r.job_card_no || r.production_plan) + '">' + esc(r.job_card_no || r.production_plan) + "</button><small>" + docLink("Production Plan", r.production_plan) + "</small></td>" +
+        "<td>" + compPill(r) + "</td><td>" + effPill(r.efficiency) + "</td>" +
+        "<td>" + docLink("Work Order", r.work_order) + "<small>" + esc(r.wo_status) + "</small></td>" +
+        '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "<small>PW " + nq(r.pc_weight) + " g</small></td>" +
+        '<td class="dt">' + esc(short(r.start_date)) + " \u2013 " + esc(short(r.end_date)) + "<small>" + (r.lead_time_days ? r.lead_time_days + " days \u00b7 " : "") + esc(r.month) + "</small></td>" +
+        '<td class="n">' + nq(r.qty_to_manufacture) + '</td><td class="n"><b>' + nq(r.approved_qty) + "</b></td>" +
+        '<td class="n">' + n0(r.std_lead_time) + " / " + n0(r.actual_lead_time) + "<small>CT " + nq(r.std_cycle_time) + " \u00b7 Cav " + nq(r.std_cavity) + "</small></td>" +
+        '<td class="n">' + inr(r.std_production_cost) + '</td><td class="n">' + inr(r.production_cost) + '</td><td class="n"><b class="' + (r.extra_production_cost > 0 ? "neg" : "pos") + '">' + inr(r.extra_production_cost) + "</b></td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="6">Total \u00b7 ' + list.length + ' work orders</td><td class="n">' + nq(tq) + '</td><td class="n">' + nq(ta) + '</td><td></td><td class="n">' + inr(sc) + '</td><td class="n">' + inr(ac) + '</td><td class="n">' + inr(ec) + "</td></tr></tfoot></table>";
+    $("#pr-pf-tw").innerHTML = h;
+    $("#pr-pf-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard"><div class="t"><button type="button" class="pr-jc" data-ct="' + esc(r.production_plan) + '" data-jc="' + esc(r.job_card_no) + '">' + esc(r.job_card_no || r.production_plan) + "</button>" + effPill(r.efficiency) + "</div>" +
+        '<div class="c">' + esc(r.item_name) + '</div><div class="m"><span>' + compPill(r) + "</span><span>Extra " + inr(r.extra_production_cost) + "</span></div></div>";
+    }).join("");
+  }
+  function pfCSV() {
+    var out = [["Job Card No", "Production Plan", "PP Status", "Completion", "Efficiency %", "Work Order", "WO Status", "Start Date", "End Date", "Lead Time (Days)", "Month", "Item Code", "Item", "Qty to Manufacture", "Approved Qty", "PC Weight (gms)", "Std Cycle Time", "Std Cavity", "Std Lead Time (Hrs)", "Actual Lead Time (Hrs)", "Std Production Cost", "Production Cost", "Extra Production Cost"]];
+    pfVisible().forEach(function (r) { out.push([r.job_card_no, r.production_plan, r.pp_status, r.completion ? r.completion + " (" + r.completion_pct + "%)" : "", r.efficiency == null ? "" : r.efficiency, r.work_order, r.wo_status, r.start_date || "", r.end_date || "", r.lead_time_days || "", r.month, r.item_code, r.item_name, r.qty_to_manufacture, r.approved_qty, r.pc_weight, r.std_cycle_time, r.std_cavity, Math.round(r.std_lead_time), Math.round(r.actual_lead_time), Math.round(r.std_production_cost), Math.round(r.production_cost), Math.round(r.extra_production_cost)]); });
+    saveCSV(out, "job-card-performance-" + S.pf.from + "-to-" + S.pf.to + ".csv");
+  }
+
+  /* ===================================================================
+     4. PRODUCTION PLANNING (UCM Production Planning)
+     =================================================================== */
+  var PL_ST = {
+    "IN PROGRESS": ["In Progress", "bl"], "DELAYED": ["Delayed", "hi"], "DELAY": ["Delayed", "hi"], "ON TIME": ["On Time", "ok"],
+    "COMPLETED": ["Completed", "gr"], "NOT STARTED": ["Not Started", "gr"], "CANCELLED": ["Cancelled", "gr"], "HOLD": ["Hold", "dg"]
+  };
+  var PL_CARDS = [["all", "Job Cards", "#1565a8"], ["IN PROGRESS", "In Progress", "#1d4ed8"], ["DELAYED", "Delayed", "#b91c1c"], ["ON TIME", "On Time", "#047857"], ["COMPLETED", "Completed", "#4b5563"], ["NOT STARTED", "Not Started", "#6b7280"], ["HOLD", "Hold", "#14532d"]];
+  S.pl.month = PL_MONTHS.some(function (m) { return m[0] === thisMonth; }) ? thisMonth : "";
+  var syncPlItem = itemPicker("pl", S.pl, function () { loadPl(); });
+  function syncPlBand() { $("#pr-pl-month").value = S.pl.month; $("#pr-pl-month").classList.toggle("is-set", !!S.pl.month); syncPlItem(); }
+  async function loadPl() {
+    var my = ++S.pl.seq, el = mainEl("planning");
+    if (!S.pl.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "planning", month: S.pl.month, item_code: S.pl.item });
+      if (!m || my !== S.pl.seq) return;
+      S.pl.rows = m.rows || []; renderPl();
+    } catch (e) { if (my !== S.pl.seq) return; S.pl.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.pl.seq) el.classList.remove("is-loading"); }
+  }
+  function plKey(st) { return st === "DELAY" ? "DELAYED" : (st === "CANCELLED" ? "COMPLETED" : st); }
+  function plVisible() {
+    var q = S.pl.q.toLowerCase(), c = S.pl.card;
+    return (S.pl.rows || []).filter(function (r) {
+      if (c !== "all" && plKey(r.status) !== c) return false;
+      return !q || [r.job_card_no, r.pp_name, r.wo_name, r.party_name, r.product_name, r.item_code, r.wo_status].join(" ").toLowerCase().indexOf(q) >= 0;
+    });
+  }
+  function renderPl() {
+    var rows = S.pl.rows || [], cnt = {};
+    rows.forEach(function (r) { var k = plKey(r.status); cnt[k] = (cnt[k] || 0) + 1; });
+    var html = '<div class="pr-kpis k7">' + PL_CARDS.map(function (c) {
+      return kpi(c[1], n0(c[0] === "all" ? rows.length : (cnt[c[0]] || 0)), c[0] === "DELAYED" ? "Past expected date" : (c[0] === "all" ? (S.pl.month ? "Planned in month" : "All months") : "&nbsp;"), c[2], c[0], S.pl.card === c[0]);
+    }).join("") + "</div>";
+    html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-pl-title"></h2><p id="pr-pl-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-pl-q" placeholder="Search job card, party, product\u2026" value="' + esc(S.pl.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-pl-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-pl-tw"></div><div class="pr-mlist" id="pr-pl-ml"></div></section>';
+    mainEl("planning").innerHTML = html;
+    renderPlTable();
+  }
+  function plBadge(st) { var x = PL_ST[st] || [st, "gr"]; return '<span class="pr-plst ' + x[1] + '">' + esc(x[0]) + (st === "DELAY" ? "<i>finished late</i>" : "") + "</span>"; }
+  function renderPlTable() {
+    var list = plVisible(), pq = 0, aq = 0, mLabel = (PL_MONTHS.filter(function (m) { return m[0] === S.pl.month; })[0] || [0, "All months"])[1];
+    list.forEach(function (r) { pq += r.planned_qty; aq += r.approved_qty; });
+    $("#pr-pl-title").textContent = "Production plan (" + list.length + ")";
+    $("#pr-pl-sub").textContent = mLabel + (S.pl.item ? " \u00b7 " + (S.pl.itemName || S.pl.item) : "") + " \u00b7 Assembly excluded \u00b7 click Work Order Status for production details";
+    if (!list.length) { $("#pr-pl-tw").innerHTML = '<div class="pr-empty">' + ((S.pl.rows || []).length ? "No job card matches this filter." : "No job cards for these filters.") + "</div>"; $("#pr-pl-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t pr-pl-t"><thead><tr><th>Job Card No</th><th>WO Status</th><th>Posting</th><th>Expected</th><th>Party</th><th>Product</th><th class="n">Planned</th><th class="n">Approved</th><th>Start</th><th>End</th><th class="n">Lead</th><th>Status</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      var x = PL_ST[r.status] || ["", "gr"];
+      h += '<tr class="pl-' + x[1] + '"><td class="nm">' + docLink("Production Plan", r.pp_name, r.job_card_no) + "</td>" +
+        '<td><button type="button" class="pr-jc st-' + x[1] + '" data-pp="' + esc(r.pp_name) + '" data-jc="' + esc(r.job_card_no) + '">' + esc(r.wo_status) + "</button></td>" +
+        "<td>" + esc(short(r.posting_date)) + "</td><td>" + esc(short(r.expected_date)) + "</td>" +
+        '<td class="pt">' + esc(r.party_name || "\u2013") + '</td><td class="it">' + docLink("Item", r.item_code, r.product_name) + "</td>" +
+        '<td class="n">' + nq(r.planned_qty) + '</td><td class="n"><b>' + nq(r.approved_qty) + "</b></td>" +
+        "<td>" + esc(short(r.start_date)) + "</td><td>" + esc(short(r.end_date)) + '</td><td class="n">' + (r.lead_time ? r.lead_time + "d" : "\u2013") + "</td><td>" + plBadge(r.status) + "</td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="6">Total \u00b7 ' + list.length + ' job cards</td><td class="n">' + nq(pq) + '</td><td class="n">' + nq(aq) + '</td><td colspan="4"></td></tr></tfoot></table>';
+    $("#pr-pl-tw").innerHTML = h;
+    $("#pr-pl-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard"><div class="t">' + docLink("Production Plan", r.pp_name, r.job_card_no) + plBadge(r.status) + "</div>" +
+        '<div class="c">' + esc(r.product_name) + '</div><div class="m"><span>' + esc(r.party_name || "\u2013") + '</span><button type="button" class="pr-jc" data-pp="' + esc(r.pp_name) + '" data-jc="' + esc(r.job_card_no) + '">' + esc(r.wo_status) + "</button></div>" +
+        '<div class="m"><span>Planned ' + nq(r.planned_qty) + " \u00b7 Appr " + nq(r.approved_qty) + "</span><span>Exp " + esc(short(r.expected_date)) + "</span></div></div>";
+    }).join("");
+  }
+  function plCSV() {
+    var out = [["Job Card No", "Production Plan", "Work Order", "Work Order Status", "Posting Date", "Expected Date", "Party Name", "Item Code", "Product Name", "Planned Qty", "Approved Qty", "Start Date", "End Date", "Lead Time", "Status"]];
+    plVisible().forEach(function (r) { out.push([r.job_card_no, r.pp_name, r.wo_name, r.wo_status, r.posting_date || "", r.expected_date || "", r.party_name, r.item_code, r.product_name, r.planned_qty, r.approved_qty, r.start_date || "", r.end_date || "", r.lead_time, r.status]); });
+    saveCSV(out, "production-planning-" + (S.pl.month || "all") + ".csv");
+  }
+
+  /* ===================================================================
+     drawer (shared)
+     =================================================================== */
+  var DR = { seq: 0 };
+  function openDrawer(title, sub, cls, badge) {
+    DR.seq++;
+    var dr = $("#pr-drawer");
+    dr.className = "pr-drawer on" + (cls ? " " + cls : "");
+    dr.innerHTML = '<div class="pr-dr-h"><div class="tt"><h3 id="pr-dr-title">' + esc(title) + '</h3><p id="pr-dr-sub">' + sub + '</p></div><div id="pr-dr-badge">' + (badge || "") + "</div>" +
+      '<button type="button" class="pr-ibtn" id="pr-dr-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="pr-dr-b" id="pr-dr-body">' + loadingHTML() + "</div>";
+    dr.setAttribute("aria-hidden", "false");
+    $("#pr-scrim").classList.add("on"); lock(true);
+    return DR.seq;
+  }
+  function closeDrawer() { DR.seq++; var dr = $("#pr-drawer"); dr.classList.remove("on"); dr.setAttribute("aria-hidden", "true"); $("#pr-scrim").classList.remove("on"); lock(false); }
+  function info(l, v, cls) { return '<div class="pr-info' + (cls ? " " + cls : "") + '"><span>' + l + "</span><b>" + v + "</b></div>"; }
+
+  /* --- Job Card slider (ucm_job_card_detail + ucm_std_vs_actual_ct_detail) --- */
+  var JCD = { p: null, ct: null };
+  /* report jaisa hard-coded correction: 60700 -> 7700 (sirf Approved Qty) */
+  function fixQty(p, e) {
+    var q = e.qty || 0;
+    if (e.voucher_no === "STE/UCM/26-27/33972") q = 7700;
+    if (p.production_plan === "MFG-PP-2026-01846" && e.qty === 60700) q = 7700;
+    return q;
+  }
+  function applyOverride(p) {
+    if (p.job_card_no === "STE/UCM/26-27/33972") p.approved_qty_total = 7700;
+    if (p.production_plan === "MFG-PP-2026-01846") {
+      var t = 0; (p.production_entries || []).forEach(function (e) { if (e.qty === 60700) e.qty = 7700; t += e.qty || 0; }); p.approved_qty_total = t;
+    }
+    return p;
+  }
+  async function openJobCard(pp, jc) {
+    if (!pp) return;
+    var seq = openDrawer("Loading\u2026", esc(pp), "is-wide", '<div class="pr-eff"><b>\u2013</b><span>Efficiency</span></div>');
+    var a = call(JC_API, { production_plan: pp }).then(function (m) { return m || {}; }, function (e) { return { _err: e.message }; });
+    var b = call(CT_API, { production_plan: pp }).then(function (m) { return m || {}; }, function () { return {}; });
+    var p = await a, ct = await b;
+    if (seq !== DR.seq) return;
+    if (p._err) { $("#pr-dr-body").innerHTML = errorHTML(p._err + " (ucm_job_card_detail)"); return; }
+    JCD.p = applyOverride(p); JCD.ct = ct; drawJobCard();
+  }
+  function drawJobCard() {
+    var p = JCD.p, ct = JCD.ct || {}, isAsm = p.job_type === "Assembly";
+    var prod = p.production_entries || [], tr = p.material_transfer_entries || [], cons = p.raw_materials_consumed || [], ing = p.raw_material_ingredients || [];
+    var sct = ct.std_cycle_time || 0, scv = ct.std_cavity || 0, hasStd = sct && scv;
+    $("#pr-dr-title").textContent = p.product_name || "Job Card";
+    $("#pr-dr-sub").innerHTML = "<b>Plan</b> " + docLink("Production Plan", p.production_plan) + " \u00b7 <b>Job Card</b> " + esc(p.job_card_no || "\u2013") + (p.party_name ? " \u00b7 <b>Party</b> " + esc(p.party_name) : "");
+    var lead = null;
+    if (p.start_date && p.end_date) { lead = Math.round((parseIso(p.end_date) - parseIso(p.start_date)) / 864e5) + 1; if (lead < 1) lead = 1; }
+    var days = {}; prod.forEach(function (e) { if (e.posting_date) days[e.posting_date] = 1; });
+    var nd = Object.keys(days).length, perDay = nd ? Math.round((p.approved_qty_total || 0) / nd) : 0;
+    var h = '<div class="pr-infos k6">' + info("Start Date", esc(nice(p.start_date))) + info("End Date", esc(nice(p.end_date))) +
+      info("Lead Time", lead ? lead + " day" + (lead === 1 ? "" : "s") : "\u2013") + info("Per Day Production", n0(perDay), "") +
+      info("Qty to Manufacture", nq(p.qty_to_manufacture || 0)) + info("Approved Qty (Total)", nq(p.approved_qty_total || 0), "ok") + "</div>";
+    if (!prod.length && !tr.length && !cons.length) { $("#pr-dr-body").innerHTML = h + '<div class="pr-empty">No entries found for this job card.</div>'; setEff(null); return; }
+    var effs = [];
+    if (prod.length) {
+      h += '<section class="pr-ps"><h4>Production Entries <em>' + prod.length + '</em><button type="button" class="pr-btn is-ghost" id="pr-jc-xls">' + I.down + "<span>Excel</span></button></h4>" +
+        '<div class="pr-scroll"><table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Type</th><th class="n">Mfg Qty</th><th class="n">Approved</th><th>M/C</th><th>Shift</th><th class="n">MP</th><th class="n">Elec Hrs</th><th class="n">MP Hrs</th><th>Stock Entry</th><th>Batch</th>' +
+        (hasStd ? '<th class="n">Std CT</th><th class="n">Run Cav</th><th class="n">Std Prod</th><th class="n">Eff.</th>' : "") + "</tr></thead><tbody>";
+      prod.forEach(function (e) {
+        var q = fixQty(p, e), std = "";
+        if (hasStd) {
+          var hrs = e.electricity_hours || 0, sp = hrs ? Math.round(((hrs * 3600) / sct) * scv) : 0, ef = sp ? Math.round((q / sp) * 100) : 0;
+          effs.push(ef);
+          std = '<td class="n">' + sct + '</td><td class="n">' + (e.run_cavity != null ? e.run_cavity : "\u2013") + '</td><td class="n">' + n0(sp) + '</td><td class="n"><b class="' + (ef >= 90 ? "pos" : (ef >= 70 ? "mid" : "neg")) + '">' + ef + "%</b></td>";
+        }
+        h += "<tr><td>" + esc(short(e.posting_date)) + '</td><td><span class="pr-et ' + (e.entry_type === "M/C Pending Clear" ? "pc" : "mf") + '">' + esc(e.entry_type || "\u2013") + "</span></td>" +
+          '<td class="n">' + nq(e.manufactured_qty || 0) + '</td><td class="n"><b class="pos">' + nq(q) + "</b></td>" +
+          "<td>" + esc(shortMachine(e.machine_no) || "\u2013") + "</td><td>" + shiftBadge(e.shift) + "</td>" +
+          '<td class="n">' + nq(e.no_of_manpower) + '</td><td class="n">' + nq(e.electricity_hours) + '</td><td class="n">' + nq(e.manpower_hours) + "</td>" +
+          "<td>" + docLink("Stock Entry", e.voucher_no) + "</td><td>" + esc(e.batch_no || "\u2013") + "</td>" + std + "</tr>";
+      });
+      h += "</tbody></table></div></section>";
+    }
+    if (!isAsm && tr.length) {
+      h += '<section class="pr-ps"><h4>Raw Material Transfer Entries <em>' + tr.length + "</em></h4>" +
+        '<div class="pr-infos k2">' + info("RM Regular Qty", nq(p.rm_regular_qty || 0)) + info("RM Total Transferred", nq(p.rm_total_transferred || 0)) + "</div>" +
+        '<table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Stock Entry</th><th class="n">Qty</th></tr></thead><tbody>' +
+        tr.map(function (t) { return "<tr><td>" + esc(short(t.posting_date)) + "</td><td>" + docLink("Stock Entry", t.voucher_no) + '</td><td class="n">' + nq(t.qty || 0) + "</td></tr>"; }).join("") + "</tbody></table></section>";
+      if (ing.length) h += '<section class="pr-ps"><h4>Raw Materials Used <em>' + ing.length + '</em></h4><table class="pr-t pr-dt"><thead><tr><th>Item</th><th class="n">Qty Used</th></tr></thead><tbody>' +
+        ing.map(function (x) { return "<tr><td>" + esc(x.item_name || x.item_code || "\u2013") + '</td><td class="n">' + nq(x.qty || 0) + "</td></tr>"; }).join("") + "</tbody></table></section>";
+    }
+    if (isAsm && cons.length) {
+      h += '<section class="pr-ps"><h4>Items Used in Manufacture Entry (Assembly) <em>' + cons.length + '</em></h4><table class="pr-t pr-dt"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>' +
+        cons.map(function (c) { return "<tr><td>" + esc(c.item_name || c.item_code || "\u2013") + '</td><td class="n">' + nq(c.qty || 0) + '</td><td class="n">' + inr(c.amount || 0) + "</td></tr>"; }).join("") + "</tbody></table></section>";
+    }
+    /* previous job cards (current job card ke apne Work Orders hata ke) */
+    var cur = {}; (p.work_orders || []).forEach(function (x) { cur[x] = 1; });
+    var hist = (ct.product_history || []).filter(function (x) { return !(x && x.work_order && cur[x.work_order]); });
+    if (hist.length) {
+      h += '<section class="pr-ps"><h4>Previous Job Cards for This Product <em>' + hist.length + '</em></h4><table class="pr-t pr-dt"><thead><tr><th>Month</th><th>Work Order</th><th>Status</th><th class="n">Regular Qty</th><th class="n">Std Lead Time</th><th class="n">Actual Lead Time</th><th class="n">Efficiency</th></tr></thead><tbody>' +
+        hist.map(function (x) { return "<tr><td>" + esc(x.month || "\u2013") + "</td><td>" + docLink("Work Order", x.work_order) + "</td><td>" + esc(x.status || "\u2013") + '</td><td class="n">' + nq(x.regular_qty || 0) + '</td><td class="n">' + n0(x.std_lead_time) + '</td><td class="n">' + n0(x.actual_lead_time) + '</td><td class="n"><b>' + (x.efficiency || 0) + "%</b></td></tr>"; }).join("") + "</tbody></table></section>";
+    }
+    $("#pr-dr-body").innerHTML = h;
+    var run = null; if (effs.length) { var s = 0; effs.forEach(function (v) { s += v; }); run = Math.round(s / effs.length); }
+    setEff(run, hist.length ? hist[0].efficiency : null);
+  }
+  function setEff(run, past) {
+    var b = $("#pr-dr-badge"); if (!b) return;
+    b.innerHTML = '<div class="pr-eff"><b>' + (run != null ? run + "%" : "\u2013") + ' <i>/</i> ' + (past != null ? past + "%" : "\u2013") + "</b><span>Running / Past job card efficiency</span></div>";
+  }
+  function jcXLS() {
+    var p = JCD.p, ct = JCD.ct || {}, prod = (p && p.production_entries) || []; if (!prod.length) return;
+    var sct = ct.std_cycle_time || 0, scv = ct.std_cavity || 0, hasStd = sct && scv;
+    var head = ["Date", "Type", "Manufactured Qty", "Approved Qty", "M/C No", "Shift", "MP", "Elec. Hrs", "MP Hrs", "Stock Entry", "Batch"];
+    if (hasStd) head = head.concat(["Std CT", "Run Cavity", "Std Production", "Efficiency"]);
+    var out = [head];
+    prod.forEach(function (e) {
+      var q = fixQty(p, e), row = [e.posting_date || "", e.entry_type || "", e.manufactured_qty || 0, q, shortMachine(e.machine_no) || "", String(e.shift || "").toUpperCase(), e.no_of_manpower == null ? "" : e.no_of_manpower, e.electricity_hours == null ? "" : e.electricity_hours, e.manpower_hours == null ? "" : e.manpower_hours, e.voucher_no || "", e.batch_no || ""];
+      if (hasStd) { var hrs = e.electricity_hours || 0, sp = hrs ? Math.round(((hrs * 3600) / sct) * scv) : 0; row = row.concat([sct, e.run_cavity == null ? "" : e.run_cavity, sp, (sp ? Math.round(q / sp * 100) : 0) + "%"]); }
+      out.push(row);
+    });
+    saveCSV(out, "Production_Entries_" + (p.job_card_no || p.production_plan || "export") + ".csv");
+  }
+
+
+  /* --- Std vs Actual slider (Performance tab, ucm_std_vs_actual_ct_detail) --- */
+  async function openCT(pp, jc) {
+    if (!pp) return;
+    var seq = openDrawer("Job Card " + (jc || pp), "Std vs Actual CT / Cavity", "is-wide", '<div class="pr-eff"><b>\u2013</b><span>Efficiency</span></div>');
+    try {
+      var m = await call(CT_API, { production_plan: pp }); if (seq !== DR.seq) return;
+      drawCT(m || {});
+    } catch (e) { if (seq !== DR.seq) return; $("#pr-dr-body").innerHTML = errorHTML(e.message + " (ucm_std_vs_actual_ct_detail)"); }
+  }
+  function drawCT(p) {
+    var en = p.entries || [], hist = p.product_history || [], oe = p.overall_efficiency || 0;
+    $("#pr-dr-title").textContent = p.product_name || "Job Card";
+    $("#pr-dr-sub").innerHTML = "<b>Job Card</b> " + esc(p.job_card_no || p.production_plan || "\u2013") + " \u00b7 <b>Plan</b> " + docLink("Production Plan", p.production_plan) +
+      ((p.running_job_count || 0) > 0 ? ' \u00b7 <button type="button" class="pr-runct" title="Every open Production Plan for this item">' + p.running_job_count + " open plans</button>" : "");
+    $("#pr-dr-badge").innerHTML = '<div class="pr-eff"><b class="' + (oe >= 90 ? "pos" : (oe >= 70 ? "mid" : "neg")) + '">' + nf2.format(oe) + "%</b><span>Efficiency</span></div>";
+    var h = "";
+    if (p.current_running_job) {
+      var rj = p.current_running_job;
+      h += '<div class="pr-running"><span><b>Currently running</b></span><span>Job Card ' + esc(rj.job_card_no || "\u2013") + "</span><span>Plan " + docLink("Production Plan", rj.production_plan) + "</span><span>Qty " + nq(rj.qty_to_manufacture || 0) + "</span><span>Approved " + nq(rj.approved_qty || 0) + "</span><span>Start " + esc(short(rj.start_date)) + "</span></div>";
+    }
+    var rjs = p.running_jobs || [];
+    if (rjs.length) {
+      h += '<section class="pr-ps pr-runblk" hidden><h4>All Open Production Plans \u00b7 This Item <em>' + rjs.length + '</em></h4><table class="pr-t pr-dt"><thead><tr><th>Production Plan</th><th>Job Card</th><th>Status</th><th class="n">Qty</th><th class="n">Approved</th><th>Start</th></tr></thead><tbody>' +
+        rjs.map(function (x) { return "<tr><td>" + docLink("Production Plan", x.production_plan) + "</td><td>" + esc(x.job_card_no || "\u2013") + "</td><td>" + esc(x.status || "\u2013") + '</td><td class="n">' + nq(x.qty_to_manufacture || 0) + '</td><td class="n">' + nq(x.approved_qty || 0) + "</td><td>" + esc(short(x.start_date)) + "</td></tr>"; }).join("") + "</tbody></table></section>";
+    }
+    if (p.product_performance) {
+      var pp2 = p.product_performance, rp = pp2.reject_percent || 0;
+      h += '<section class="pr-ps"><h4>Product Performance</h4><div class="pr-minis k7">' +
+        mini("Total Job Cards", n0(pp2.total_job_card), "#1a73e8") + mini("Avg Daily Running", nq(pp2.avg_daily_running_time) + " hrs", "#00897b") +
+        mini("Avg Daily Downtime", nq(pp2.avg_daily_downtime) + " hrs", "#8d6e63") + mini("Extra Prod. Cost", inr(pp2.total_extra_production_cost), "#c62828") +
+        mini("Approved Pcs", n0(pp2.total_approved_pcs), "#1e7e3a") + mini("Reject Pcs", n0(pp2.total_reject_pcs), "#e53935") +
+        mini("Reject %", nf2.format(rp) + "%", rp > 5 ? "#c62828" : (rp > 2 ? "#cc5500" : "#1e7e3a")) + "</div></section>";
+    }
+    if (!en.length) { $("#pr-dr-body").innerHTML = h + '<div class="pr-empty">No stock entries found for this job card.</div>'; return; }
+    h += '<div class="pr-infos k7">' + info("Work Order Status", esc(p.work_order_status || "\u2013")) + info("Std CT", nq(p.std_cycle_time || 0)) + info("Std Cavity", nq(p.std_cavity || 0)) +
+      info("Target Qty", nq(p.qty_to_manufacture || 0)) + info("Std Cost", inr(p.std_production_cost_total)) + info("Actual Cost", inr(p.production_cost_total)) + info("Extra Cost", inr(p.extra_production_cost_total), "bad") + "</div>";
+    var th = 0, ts = 0, ta = 0;
+    h += '<section class="pr-ps"><h4>Stock Entries <span class="pr-lg2"><i class="g"></i>Completion boundary <i class="r"></i>Excess entries</span></h4><div class="pr-scroll"><table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Stock Entry</th><th class="n">Qty</th><th class="n">Std CT</th><th class="n">Std Cav</th><th class="n">Act Cav</th><th class="n">Act CT</th><th class="n">Hours</th><th class="n">Std Prod</th><th class="n">Approved</th><th class="n">Cum. Std</th></tr></thead><tbody>' +
+      en.map(function (e) {
+        th += e.hours || 0; ts += e.std_production || 0; ta += e.approved_qty || 0;
+        return '<tr class="' + (e.row_status === "boundary" ? "is-bd" : (e.row_status === "excess" ? "is-ex" : "")) + '"><td>' + esc(short(e.posting_date)) + "</td><td>" + docLink("Stock Entry", e.voucher_no) + '</td><td class="n">' + nq(e.qty || 0) + '</td><td class="n">' + nq(e.std_ct || 0) + '</td><td class="n">' + nq(e.std_cavity || 0) + '</td><td class="n">' + nq(e.actual_cavity || 0) + '</td><td class="n">' + nq(e.actual_ct) + '</td><td class="n">' + nq(e.hours) + '</td><td class="n">' + n0(e.std_production) + '</td><td class="n"><b>' + n0(e.approved_qty) + '</b></td><td class="n">' + n0(e.cumulative_std_production) + "</td></tr>";
+      }).join("") + '</tbody><tfoot><tr><td colspan="7">Total</td><td class="n">' + nf2.format(th) + '</td><td class="n">' + n0(ts) + '</td><td class="n">' + n0(ta) + "</td><td></td></tr></tfoot></table></div></section>";
+    if (hist.length) {
+      var tx = p.total_history_extra_cost || 0;
+      h += '<section class="pr-ps"><h4>Product History \u00b7 Last 12 Months <em class="' + (tx > 0 ? "bad" : "") + '">Extra cost ' + inr(Math.abs(tx)) + (tx < 0 ? " saved" : "") + '</em></h4><div class="pr-scroll"><table class="pr-t pr-dt"><thead><tr><th>Month</th><th>Work Order</th><th>Status</th><th class="n">Regular Qty</th><th class="n">Std Lead</th><th class="n">Actual Lead</th><th class="n">Std Cost</th><th class="n">Actual Cost</th><th class="n">Extra Cost</th><th class="n">Efficiency</th></tr></thead><tbody>' +
+        hist.map(function (x) { return "<tr><td>" + esc(x.month || "\u2013") + "</td><td>" + docLink("Work Order", x.work_order) + "</td><td>" + esc(x.status || "\u2013") + '</td><td class="n">' + nq(x.regular_qty || 0) + '</td><td class="n">' + n0(x.std_lead_time) + '</td><td class="n">' + n0(x.actual_lead_time) + '</td><td class="n">' + inr(x.std_cost) + '</td><td class="n">' + inr(x.actual_cost) + '</td><td class="n"><b class="' + ((x.diff || 0) > 0 ? "neg" : "pos") + '">' + inr(Math.abs(x.diff || 0)) + '</b></td><td class="n">' + effPill(x.efficiency || 0) + "</td></tr>"; }).join("") + "</tbody></table></div></section>";
+    }
+    $("#pr-dr-body").innerHTML = h;
+  }
+  function mini(l, v, c) { return '<div class="pr-mini" style="--c:' + c + '"><span>' + l + "</span><b>" + v + "</b></div>"; }
+
+  /* --- Item history slider (Less than 30 Kg) --- */
+  async function openItemHistory(ic, inm) {
+    var seq = openDrawer(inm || ic || "Item History", esc(ic || "") + " \u00b7 last 6 months", "is-wide");
+    if (!ic) { $("#pr-dr-body").innerHTML = '<div class="pr-empty">No item data available.</div>'; return; }
+    try {
+      var m = await call(IH_API, { item_code: ic }); if (seq !== DR.seq) return;
+      var en = (m && m.data) || [];
+      if (!en.length) { $("#pr-dr-body").innerHTML = '<div class="pr-empty">No entries found for this item in the last 6 months.</div>'; return; }
+      var kg = en.map(function (e) { return e.prod_kg || 0; }), below = kg.filter(function (v) { return v < 30; }).length;
+      var h = '<div class="pr-infos k4">' + info("Total Entries", n0(en.length)) + info("Below 30 Kg", n0(below), below ? "bad" : "ok") + info("Max Prod (Kg)", nf2.format(Math.max.apply(null, kg))) + info("Min Prod (Kg)", nf2.format(Math.min.apply(null, kg))) + "</div>" +
+        '<table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Stock Entry</th><th class="n">Production</th><th class="n">CT</th><th class="n">Cavity</th><th class="n">Elec Hrs</th><th class="n">PW (g)</th><th class="n">Prod (Kg)</th><th class="n">Approved</th><th class="n">Rejected</th></tr></thead><tbody>' +
+        en.map(function (e) { var k = e.prod_kg || 0; return "<tr><td>" + esc(short(e.production_date)) + "</td><td>" + docLink("Stock Entry", e.stock_entry) + '</td><td class="n">' + nq(e.produced_qty) + '</td><td class="n">' + nq(e.cycle_time) + '</td><td class="n">' + nq(e.cavity) + '</td><td class="n">' + nq(e.electricity_hours) + '</td><td class="n">' + nq(e.pw || 0) + '</td><td class="n"><b class="' + (k < 30 ? "neg" : "pos") + '">' + nf2.format(k) + '</b></td><td class="n">' + nq(e.approved_qty || 0) + '</td><td class="n">' + nq(e.rejected_qty || 0) + "</td></tr>"; }).join("") + "</tbody></table>";
+      $("#pr-dr-body").innerHTML = h;
+    } catch (e) { if (seq !== DR.seq) return; $("#pr-dr-body").innerHTML = errorHTML(e.message + " (ucm_item_history_api)"); }
+  }
+
+  /* --- Daily Analysis slider (product change by machine) --- */
+  var AN = { plant: "New Plant", data: null };
+  function plantCat(ws) { var x = String(ws || "").toLowerCase(); if (/new\s*plant/.test(x)) return "New Plant"; if (/old\s*plant/.test(x)) return "Old Plant"; return null; }
+  function machineOf(ws) { var x = String(ws || "").replace(/(new|old)\s*plant/ig, "").replace(/^[\s\-:|]+/, "").replace(/[\s\-:|]+$/, "").replace(/\s{2,}/g, " "); return shortMachine(x) || ws || "\u2013"; }
+  function simpleRows(rows, plant) {
+    var out = [], seen = {};
+    (rows || []).forEach(function (r) {
+      if (plantCat(r.workstation) !== plant) return;
+      var rec = { machine: machineOf(r.workstation), jc: r.job_card_no || r.production_plan || "\u2013", pp: r.production_plan || "", shift: r.shift || "\u2013", item: r.item_name || r.item_code || "Unknown Item" };
+      var k = rec.machine + "|" + rec.shift + "|" + rec.jc + "|" + rec.item; if (seen[k]) return; seen[k] = 1; out.push(rec);
+    });
+    return out;
+  }
+  function shiftHas(s, l) { return new RegExp("(^|[^A-Z])" + l + "([^A-Z]|$)").test(String(s || "").toUpperCase()); }
+  function byMachine(rows, l, st) {
+    var m = {};
+    rows.forEach(function (r) { if (!shiftHas(r.shift, l)) return; if (!m[r.machine]) m[r.machine] = []; m[r.machine].push({ jc: r.jc, item: r.item, status: st[r.pp] || "" }); });
+    return m;
+  }
+  function sig(en) { var s = {}; en.forEach(function (e) { s[String(e.item).trim().toUpperCase()] = 1; }); return Object.keys(s).sort().join("||"); }
+  function compare(fromRows, fs, toRows, ts, plant, needIP, st) {
+    var fm = byMachine(simpleRows(fromRows, plant), fs, st), tm = byMachine(simpleRows(toRows, plant), ts, st), out = [];
+    Object.keys(tm).forEach(function (mc) {
+      var f = fm[mc], t = tm[mc]; if (!f || !t || !f.length || !t.length) return;
+      if (sig(f) === sig(t)) return;
+      if (needIP && !f.some(function (e) { return e.status === "In Process"; })) return;
+      out.push({ machine: mc, from: f, to: t });
+    });
+    return out.sort(function (a, b) { return String(a.machine).localeCompare(String(b.machine), undefined, { numeric: true }); });
+  }
+  var PPST = { "Completed": "ok", "In Process": "md", "Not Started": "bl", "Submitted": "bl", "Material Requested": "vi", "Closed": "gr", "Draft": "gr", "Cancelled": "hi" };
+  function stPill(s) { return s ? '<span class="pr-pps ' + (PPST[s] || "gr") + '">' + esc(s) + "</span>" : '<span class="mut">\u2013</span>'; }
+  function cmpTable(title, note, empty, fh, th, rows) {
+    var h = '<section class="pr-ps"><h4>' + title + ' <em class="' + (rows.length ? "bad" : "") + '">' + rows.length + " " + note + "</em></h4>";
+    if (!rows.length) return h + '<div class="pr-none">' + empty + "</div></section>";
+    function col(en, f) { return en.map(function (e) { return f === "status" ? stPill(e.status) : esc(e[f]); }).join("<br>"); }
+    return h + '<table class="pr-t pr-dt pr-cmp"><thead><tr><th rowspan="2">Machine</th><th colspan="3" class="grp">' + fh + '</th><th colspan="3" class="grp to">' + th + "</th></tr>" +
+      '<tr><th>Job Card</th><th>Status</th><th>Item</th><th class="to">Job Card</th><th class="to">Status</th><th class="to">Item</th></tr></thead><tbody>' +
+      rows.map(function (r) { return "<tr><td><b>" + esc(r.machine) + "</b></td><td>" + col(r.from, "jc") + "</td><td>" + col(r.from, "status") + "</td><td>" + col(r.from, "item") + '</td><td class="to">' + col(r.to, "jc") + '</td><td class="to">' + col(r.to, "status") + '</td><td class="to chg">' + col(r.to, "item") + "</td></tr>"; }).join("") + "</tbody></table></section>";
+  }
+  async function openAnalysis() {
+    if (S.dp.from !== S.dp.to || S.dp.seg !== "ultra") return;
+    var dt = S.dp.from, pv = addDays(dt, -1);
+    AN.data = null;
+    var seq = openDrawer("Daily Analysis \u2014 Product by Machine", "Comparing " + esc(nice(dt)) + " with " + esc(nice(pv)), "is-wide");
+    try {
+      var m = await api({ action: "analysis", date: dt }); if (seq !== DR.seq) return;
+      AN.data = m || {};
+      /* har baar New Plant se khulo; New Plant mein kuch na ho aur Old mein ho to Old Plant */
+      AN.plant = "New Plant";
+      if (!anCount("New Plant") && anCount("Old Plant")) AN.plant = "Old Plant";
+      drawAnalysis();
+    } catch (e) { if (seq !== DR.seq) return; $("#pr-dr-body").innerHTML = errorHTML(e.message); }
+  }
+  function anCount(pl) {
+    var m = AN.data || {}, td = m.today || [], pd = m.prev || [], st = m.plan_status || {};
+    return compare(pd, "B", td, "A", pl, false, st).length + compare(td, "A", td, "B", pl, true, st).length;
+  }
+  function drawAnalysis() {
+    var m = AN.data, td = m.today || [], pd = m.prev || [], st = m.plan_status || {}, tL = nice(m.date), pL = nice(m.prev_date);
+    var h = '<div class="pr-dtabs">' + ["New Plant", "Old Plant"].map(function (pl) { var n = anCount(pl); return '<button type="button" data-anp="' + pl + '"' + (AN.plant === pl ? ' class="on"' : "") + ">" + pl + '<em class="' + (n ? "has" : "z") + '">' + n + "</em></button>"; }).join("") + "</div>";
+    if (!simpleRows(td, "New Plant").length && !simpleRows(td, "Old Plant").length) h += '<div class="pr-warn">No New Plant / Old Plant entries found for ' + esc(tL) + " (" + td.length + " rows in total).</div>";
+    h += cmpTable("Shift Handover: " + esc(pL) + " Shift B \u2192 " + esc(tL) + " Shift A", "product changed", "No product change \u2014 every machine runs the same product from Shift B to Shift A.",
+      esc(pL) + " \u2014 Shift B", esc(tL) + " \u2014 Shift A", compare(pd, "B", td, "A", AN.plant, false, st));
+    h += cmpTable("Same Day: " + esc(tL) + " Shift A \u2192 Shift B (Shift A plan In Process)", "changed before plan complete", "No machine changed product in Shift B while its Shift A plan was still In Process.",
+      esc(tL) + " \u2014 Shift A", esc(tL) + " \u2014 Shift B", compare(td, "A", td, "B", AN.plant, true, st));
+    $("#pr-dr-body").innerHTML = h;
+  }
+
+  /* ===================================================================
+     events
+     =================================================================== */
+  $("#pr-scrim").addEventListener("click", closeDrawer);
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (!$("#pr-set").hidden) closeSettings(); else closeDrawer(); } });
+  $("#pr-drawer").addEventListener("click", function (e) {
+    var b;
+    if (e.target.closest("#pr-dr-x")) { closeDrawer(); return; }
+    if (e.target.closest("#pr-jc-xls")) { jcXLS(); return; }
+    if ((b = e.target.closest("[data-anp]"))) { AN.plant = b.getAttribute("data-anp"); drawAnalysis(); return; }
+    if (e.target.closest(".pr-runct")) { var rb = $(".pr-runblk"); if (rb) rb.hidden = !rb.hidden; return; }
+  });
+  d.addEventListener("click", function (e) {
+    var b = e.target.closest(".pr-sec [data-sec]"); if (!b) return;
+    closeDrawer(); setSection(b.getAttribute("data-sec"));
+  });
+  root.addEventListener("click", function (e) {
+    var b;
+    /* job card trigger (dono tab) */
+    if ((b = e.target.closest("[data-main] .pr-jc[data-pp]"))) {
+      if (b.closest('[data-main="daily"]') && S.dp.lt) openItemHistory(b.getAttribute("data-ic"), b.getAttribute("data-in"));
+      else openJobCard(b.getAttribute("data-pp"), b.getAttribute("data-jc"));
+      return;
+    }
+    if ((b = e.target.closest('[data-main="jobcard"] .pr-kpi[data-card]'))) { S.jc.card = b.getAttribute("data-card"); $$('[data-main="jobcard"] .pr-kpi[data-card]').forEach(function (x) { x.classList.toggle("on", x === b); }); renderJcTable(); return; }
+    if (e.target.closest("#pr-jc-csv")) { jcCSV(); return; }
+    if (e.target.closest("#pr-dp-prev")) { shiftDay(-1); return; }
+    if (e.target.closest("#pr-dp-next")) { shiftDay(1); return; }
+    if (e.target.closest("#pr-dp-analysis")) { openAnalysis(); return; }
+    if ((b = e.target.closest("[data-pg]"))) { var n = S.dp.di + (+b.getAttribute("data-pg")); if (n >= 0 && n < S.dp.dates.length) { S.dp.di = n; renderDp(); } return; }
+    if ((b = e.target.closest("[data-di]"))) { S.dp.di = +b.getAttribute("data-di"); renderDp(); return; }
+    if (e.target.closest("#pr-dp-csv")) { dpCSV(); return; }
+    if (e.target.closest("#pr-lb-csv")) { lbCSV(); return; }
+    if (e.target.closest("#pr-jlb-csv")) { jlbCSV(); return; }
+    if ((b = e.target.closest("#pr-jc-seg [data-jseg]"))) {
+      var js = b.getAttribute("data-jseg"); if (js === S.jlb.seg) return;
+      S.jlb.seg = js; store("jc-seg", js); syncJcBand(); syncSub();
+      if (js === "large") { if (S.jlb.rows) renderJlb(); else loadJlb(); } else { if (S.jc.rows) renderJc(); else loadJc(); }
+      return;
+    }
+    if ((b = e.target.closest("#pr-dp-seg [data-seg]"))) {
+      var sg = b.getAttribute("data-seg"); if (sg === S.dp.seg) return;
+      S.dp.seg = sg; store("dp-seg", sg); syncDpBand(); syncSub();
+      if (sg === "large") { if (S.lb.rows) renderLb(); else loadLb(); } else { if (S.dp.rows) renderDp(); else loadDp(); }
+      return;
+    }
+    if ((b = e.target.closest("[data-main] .pr-jc[data-ct]"))) { openCT(b.getAttribute("data-ct"), b.getAttribute("data-jc")); return; }
+    if (e.target.closest("#pr-pf-prev") || e.target.closest("#pr-pf-next")) { var f0 = parseIso(S.pf.from); setPfMonth(new Date(f0.getFullYear(), f0.getMonth() + (e.target.closest("#pr-pf-prev") ? -1 : 1), 1)); syncPfBand(); syncSub(); loadPf(); return; }
+    if (e.target.closest("#pr-pf-csv")) { pfCSV(); return; }
+    if ((b = e.target.closest('[data-main="planning"] .pr-kpi[data-card]'))) { S.pl.card = b.getAttribute("data-card"); $$('[data-main="planning"] .pr-kpi[data-card]').forEach(function (x) { x.classList.toggle("on", x === b); }); renderPlTable(); return; }
+    if (e.target.closest("#pr-pl-csv")) { plCSV(); return; }
+  });
+  var qT = null;
+  root.addEventListener("input", function (e) {
+    if (e.target.id === "pr-jc-q") { S.jc.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderJcTable, 120); }
+    else if (e.target.id === "pr-pf-q") { S.pf.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderPfTable, 120); }
+    else if (e.target.id === "pr-pl-q") { S.pl.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderPlTable, 120); }
+    else if (e.target.id === "pr-jlb-q") { S.jlb.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderJlbTable, 120); }
+    else if (e.target.id === "pr-lb-q") { S.lb.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderLbTable, 120); }
+    else if (e.target.id === "pr-dp-q") { S.dp.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderDpTable, 120); }
+  });
+  root.addEventListener("change", function (e) {
+    var id = e.target.id, v = e.target.value;
+    if (id === "pr-jc-status") { S.jc.status = v; S.jc.card = "all"; store("jc-status", v); syncJcBand(); syncSub(); loadJc(); }
+    else if (id === "pr-jlb-month") { S.jlb.month = v; syncJcBand(); syncSub(); loadJlb(); }
+    else if (id === "pr-jc-month") { S.jc.month = v; S.jc.card = "all"; syncJcBand(); syncSub(); loadJc(); }
+    else if (id === "pr-dp-plant") { S.dp.plant = v; store("dp-plant", v); syncDpBand(); syncSub(); loadDp(); }
+    else if (id === "pr-dp-lt") { S.dp.lt = e.target.checked ? 1 : 0; syncDpBand(); syncSub(); loadDp(); }
+    else if (id === "pr-pf-status") { S.pf.status = v; syncPfBand(); syncSub(); loadPf(); }
+    else if (id === "pr-pl-month") { S.pl.month = v; S.pl.card = "all"; syncPlBand(); syncSub(); loadPl(); }
+    else if (id === "pr-pf-from" || id === "pr-pf-to") {
+      if (!v) { syncPfBand(); return; }
+      if (id === "pr-pf-from") S.pf.from = v; else S.pf.to = v;
+      if (S.pf.from > S.pf.to) { var y2 = S.pf.from; S.pf.from = S.pf.to; S.pf.to = y2; }
+      syncPfBand(); syncSub(); loadPf();
+    }
+    else if (id === "pr-dp-from" || id === "pr-dp-to") {
+      if (!v) { syncDpBand(); return; }
+      if (id === "pr-dp-from") S.dp.from = v; else S.dp.to = v;
+      if (S.dp.from > S.dp.to) { var x = S.dp.from; S.dp.from = S.dp.to; S.dp.to = x; }
+      syncDpBand(); syncSub(); loadDp();
+    }
+  });
+  $("#pr-refresh").addEventListener("click", function () { if (S.sec === "jobcard") loadJc(); else if (S.sec === "daily") loadDp(); else if (S.sec === "perf") loadPf(); else loadPl(); });
+  $("#pr-print").addEventListener("click", function () { w.print(); });
+
+  /* --- section switch --- */
+  function syncSub() {
+    var sub = S.sec === "jobcard" ? (S.jlb.seg === "large" ? "Job Card \u00b7 Large Blow \u00b7 " + jlbLabel() : "Job Card \u00b7 Ultra \u00b7 " + (S.jc.status === "All" ? "All status" : S.jc.status) + " \u00b7 " + jcScope())
+      : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
+      : S.sec === "perf" ? "Performance \u00b7 " + monthOf(S.pf.from, S.pf.to) + " \u00b7 " + (S.pf.status === "All" ? "All status" : S.pf.status)
+      : "Planning \u00b7 " + ((PL_MONTHS.filter(function (m) { return m[0] === S.pl.month; })[0] || [0, "All months"])[1]);
+    $$(".pr-sub").forEach(function (p) { p.textContent = sub; });
+  }
+  function setSection(sec) {
+    if (S.secs.indexOf(sec) < 0) sec = S.secs[0];
+    S.sec = sec;
+    $$(".pr-sec [data-sec]").forEach(function (b) { var on = b.getAttribute("data-sec") === sec; b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+    $$("[data-band]").forEach(function (x) { x.hidden = x.getAttribute("data-band") !== sec; });
+    $$("[data-main]").forEach(function (x) { x.hidden = x.getAttribute("data-main") !== sec; });
+    syncSub();
+    if (sec === "jobcard") { syncJcBand(); if (S.jlb.seg === "large" ? !S.jlb.rows : !S.jc.rows) loadJc(); }
+    else if (sec === "daily") { syncDpBand(); if (S.dp.seg === "large" ? !S.lb.rows : !S.dp.rows) loadDp(); }
+    else if (sec === "perf") { syncPfBand(); if (!S.pf.rows) loadPf(); }
+    else { syncPlBand(); if (!S.pl.rows) loadPl(); }
+  }
+
+  /* ===================================================================
+     settings (System Manager): Full ya koi bhi report
+     =================================================================== */
+  var SV = { users: [], cand: [], pick: null, add: { jobcard: 1, daily: 1, perf: 1, planning: 1 } };
+  function repToggles(sel, attr) {
+    var full = REP_KEYS.every(function (k) { return sel[k]; });
+    return '<div class="pr-reps"><button type="button" class="pr-rep is-full' + (full ? " on" : "") + '" ' + attr + ' data-rep="full">' + I.check + "Full</button>" +
+      REP_KEYS.map(function (k) { return '<button type="button" class="pr-rep' + (sel[k] ? " on" : "") + '" ' + attr + ' data-rep="' + k + '">' + I.check + REP_LABEL[k] + "</button>"; }).join("") + "</div>";
+  }
+  function toggled(sel, rep) {
+    var o = {}; REP_KEYS.forEach(function (k) { o[k] = sel[k] ? 1 : 0; });
+    if (rep === "full") REP_KEYS.forEach(function (k) { o[k] = 1; }); else o[rep] = o[rep] ? 0 : 1;
+    return o;
+  }
+  function selStr(o) { return REP_KEYS.filter(function (k) { return o[k]; }).join(","); }
+  function accText(reps) { var a = reps.split(",").filter(Boolean); return a.length === REP_KEYS.length ? "Full" : a.map(function (k) { return REP_LABEL[k]; }).join(", "); }
+  function openSettings() {
+    var m = $("#pr-set");
+    $(".pr-modal", m).innerHTML =
+      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning. View only \u2014 this page cannot change data. System Managers always have full access. Disabled users are not listed.</p></div>' +
+        '<button type="button" class="pr-ibtn" id="pr-set-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="pr-mb"><div class="pr-msg" id="pr-set-msg"></div>' +
+        '<div class="pr-addbox"><div class="pr-add"><div class="pr-pick"><input type="text" id="pr-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="pr-pick-l" id="pr-set-l" hidden></div></div>' +
+        '<button type="button" class="pr-btn" id="pr-set-go">Give access</button></div><div id="pr-set-add"></div></div>' +
+        '<div class="pr-ulist" id="pr-set-list"><div class="pr-none">Loading\u2026</div></div></div>';
+    m.hidden = false; lock(true);
+    drawAdd();
+    $("#pr-set-x").addEventListener("click", closeSettings);
+    var inp = $("#pr-set-u"), lst = $("#pr-set-l");
+    function pick() {
+      var qs = inp.value.trim().toLowerCase(), have = {};
+      SV.users.forEach(function (u) { have[u.user] = 1; });
+      var list = SV.cand.filter(function (c) { return !have[c.user] && (!qs || (c.full_name + " " + c.user).toLowerCase().indexOf(qs) >= 0); }).slice(0, 8);
+      lst.innerHTML = list.length ? list.map(function (c) { return '<button type="button" data-u="' + esc(c.user) + '"><b>' + esc(c.full_name) + "</b><small>" + esc(c.user) + "</small></button>"; }).join("") : '<div class="pr-none">No user found</div>';
+      lst.hidden = false;
+    }
+    inp.addEventListener("focus", pick);
+    inp.addEventListener("input", function () { SV.pick = null; pick(); });
+    inp.addEventListener("blur", function () { setTimeout(function () { lst.hidden = true; }, 120); });
+    lst.addEventListener("mousedown", function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b) return; e.preventDefault();
+      var c = SV.cand.filter(function (x) { return x.user === b.getAttribute("data-u"); })[0];
+      SV.pick = c ? c.user : null; inp.value = c ? c.full_name + " (" + c.user + ")" : ""; lst.hidden = true;
+    });
+    $("#pr-set-add").addEventListener("click", function (e) { var b = e.target.closest("[data-rep]"); if (!b) return; SV.add = toggled(SV.add, b.getAttribute("data-rep")); drawAdd(); });
+    $("#pr-set-go").addEventListener("click", async function () {
+      if (!SV.pick) { setMsg("Pick a user from the list first."); return; }
+      var reps = selStr(SV.add); if (!reps) { setMsg("Select Full or at least one report."); return; }
+      this.disabled = true; var who = SV.pick;
+      if (await settingsCall({ action: "set", user: who, reports: reps })) { SV.pick = null; inp.value = ""; setMsg("Access given to " + who + ": " + accText(reps) + ".", true); }
+      this.disabled = false;
+    });
+    $("#pr-set-list").addEventListener("click", async function (e) {
+      var b = e.target.closest("button[data-u]"); if (!b || b.disabled) return;
+      var who = b.getAttribute("data-u"), u = SV.users.filter(function (x) { return x.user === who; })[0]; if (!u) return;
+      var reps;
+      if (b.hasAttribute("data-rm")) {
+        if (!b.classList.contains("arm")) { b.classList.add("arm"); b.textContent = "Remove?"; setTimeout(function () { if (b.isConnected) { b.classList.remove("arm"); b.innerHTML = I.x; } }, 3000); return; }
+        reps = "";
+      } else {
+        var cur = {}; (u.reports || []).forEach(function (k) { cur[k] = 1; });
+        reps = selStr(toggled(cur, b.getAttribute("data-rep")));
+        if (!reps) { if (!b.classList.contains("arm")) { b.classList.add("arm"); setMsg("Click again to remove all access for this user."); setTimeout(function () { if (b.isConnected) b.classList.remove("arm"); }, 3000); return; } }
+      }
+      $$("button", b.closest(".pr-urow")).forEach(function (x) { x.disabled = true; });
+      if (await settingsCall({ action: "set", user: who, reports: reps })) setMsg(reps ? "Access for " + who + ": " + accText(reps) + "." : "Access removed for " + who + ".", true);
+    });
+    settingsCall({ action: "list" });
+  }
+  function drawAdd() { $("#pr-set-add").innerHTML = '<span class="pr-addl">Access</span>' + repToggles(SV.add, ""); }
+  function setMsg(t, ok) { var el = $("#pr-set-msg"); if (!el) return; el.className = "pr-msg" + (t ? " show" + (ok ? " ok" : "") : ""); el.textContent = t || ""; }
+  async function settingsCall(body) {
+    try {
+      var m = await api(body, "POST"); if (!m) return false;
+      SV.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); SV.cand = m.candidates || [];
+      $("#pr-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
+        var sel = {}; (u.reports || []).forEach(function (k) { sel[k] = 1; });
+        return '<div class="pr-urow"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + "</small></div>" +
+          (u.admin ? '<span class="tag admin">System Manager \u00b7 Full</span><span class="rm"></span>'
+            : repToggles(sel, 'data-u="' + esc(u.user) + '"') + '<button type="button" class="rm" data-u="' + esc(u.user) + '" data-rm="1" title="Remove access">' + I.x + "</button>") + "</div>";
+      }).join("") : '<div class="pr-none">No users yet</div>';
+      return true;
+    } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
+  }
+  function closeSettings() { var m = $("#pr-set"); if (m.hidden) return; m.hidden = true; lock(false); }
+  $("#pr-gear").addEventListener("click", openSettings);
+  $("#pr-set").addEventListener("mousedown", function (e) { if (e.target === this) closeSettings(); });
+
+  /* ============ UCM standard header: title + buttons ERP navbar mein ============ */
+  function mergeNav() {
+    var nav = d.querySelector("nav.navbar"), brand = nav && nav.querySelector(".navbar-brand");
+    if (!nav || !brand) return;
+    var t = d.createElement("div"); t.className = "pr-nav-title";
+    t.innerHTML = '<h1>Production</h1><p class="pr-sub"></p>';
+    brand.insertAdjacentElement("afterend", t);
+    var act = $("#pr-act"); act.classList.add("pr-nav-act");
+    var sw = $("#pr-head .pr-sec"); if (sw) { sw.classList.add("in-nav"); act.insertBefore(sw, act.firstChild); }   /* tabs header ke right side */
+    var login = nav.querySelector("#website-post-login");
+    if (login && login.parentNode) {
+      var li = d.createElement("li"); li.className = "nav-item pr-nav-li"; li.appendChild(act);
+      login.parentNode.insertBefore(li, login);
+    } else { (brand.parentElement || nav).appendChild(act); act.classList.add("is-end"); }
+    $("#pr-head").hidden = true;
+    d.body.classList.add("pr-nav-merged");
+    alignToLogo();
+    w.addEventListener("resize", alignToLogo);
+    w.addEventListener("load", alignToLogo);
+  }
+  /* page ka left margin = logo ka left margin */
+  function alignToLogo() {
+    var brand = d.querySelector("nav.navbar .navbar-brand"); if (!brand) return;
+    var img = brand.querySelector("img, svg") || brand;
+    var left = Math.round(img.getBoundingClientRect().left - root.getBoundingClientRect().left);
+    if (left >= 8 && left <= 120) root.style.setProperty("--pr-pad", left + "px");
+    var nav = d.querySelector("nav.navbar"), pos = nav ? getComputedStyle(nav).position : "";
+    var stick = nav && (pos === "sticky" || pos === "fixed") ? Math.round(nav.getBoundingClientRect().height) : 0;
+    if (!stick && nav && nav.parentElement && /sticky|fixed/.test(getComputedStyle(nav.parentElement).position)) stick = Math.round(nav.parentElement.getBoundingClientRect().height);
+    root.style.setProperty("--pr-nav-h", stick + "px");
+  }
+
+  /* ============ start ============ */
+  async function boot() {
+    if (!cookie("user_id") || cookie("user_id") === "Guest") { location.href = "/login?redirect-to=" + encodeURIComponent(location.pathname); return; }
+    try { S.acc = await api({ action: "me" }); }
+    catch (e) {
+      $("#pr-gate").innerHTML = '<div class="pr-gate-card"><div class="ico warn">!</div><h3>Could not check access</h3><p>' + esc(e.message) + '</p><p class="s">Check that the <b>ucm_production_web</b> Server Script is saved and enabled.</p></div>';
+      return;
+    }
+    var acc = (S.acc && S.acc.access) || {};
+    S.secs = SECS.filter(function (s) { return acc[s.k]; }).map(function (s) { return s.k; });
+    if (!S.secs.length) {
+      $("#pr-gate").innerHTML = '<div class="pr-gate-card"><div class="ico">' + I.lock + '</div><h3>You do not have access</h3><p>This page is open only to System Managers and users given access by them.</p><p class="s">Signed in as <b>' + esc((S.acc && (S.acc.full_name || S.acc.user)) || "") + "</b></p></div>";
+      return;
+    }
+    $$(".pr-sec [data-sec]").forEach(function (b) { b.hidden = S.secs.indexOf(b.getAttribute("data-sec")) < 0; });
+    d.body.classList.toggle("pr-is-single", S.secs.length === 1); root.classList.toggle("is-single", S.secs.length === 1);
+    $("#pr-gate").hidden = true; $("#pr-app").hidden = false;
+    $("#pr-gear").hidden = !S.acc.is_admin;
+    mergeNav();
+    setSection(S.secs[0]);   /* page khulne par hamesha Job Card (access ho to) */
+  }
+  boot();
+})();
