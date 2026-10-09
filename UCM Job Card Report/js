@@ -116,7 +116,7 @@
   var yday = (function () { var x = new Date(); x.setDate(x.getDate() - 1); return iso(x); })();   /* Daily Production: page khulne par kal ki date */
   var S = {
     acc: null, sec: null, secs: [],
-    jc: { status: "In Progress", item: "", itemName: "", month: "", rows: null, card: "all", q: "", seq: 0 },
+    jc: { status: "In Progress", item: "", itemName: "", month: "", rows: null, card: "all", q: "", seq: 0, sort: "jc_desc" },
     dp: { from: yday, to: yday, plant: "All", lt: 0, rows: null, dates: [], di: 0, q: "", seq: 0, seg: "ultra" },
     lb: { rows: null, fields: {}, q: "" },
     jlb: { seg: "ultra", month: thisMonth, rows: null, q: "", seq: 0 },
@@ -128,6 +128,7 @@
     var pl = store("dp-plant"); if (PLANTS.indexOf(pl) >= 0) S.dp.plant = pl;
     if (store("dp-seg") === "large") S.dp.seg = "large";
     if (store("jc-seg") === "large") S.jlb.seg = "large";
+    var js0 = store("jc-sort"); if (js0 && /^(jc_desc|jc_asc|start_desc|pending|approved|product|party)$/.test(js0)) S.jc.sort = js0;
   })();
 
   function secButtons() {
@@ -297,6 +298,30 @@
     saveCSV(out, "large-blow-products-" + S.jlb.month + ".csv");
   }
 
+  /* Job Card No (UCM/10/40) ke hisaab se sort: FY month (Apr pehle) phir number; bina number wale end mein */
+  function jcNoKey(r) {
+    var p = String(r.job_card_no || "").split("/");
+    if (p.length < 3 || !/^\d+$/.test(p[1]) || !/^\d+$/.test(p[2])) return 9e9;
+    var mo = +p[1]; return ((mo >= 4 ? mo - 4 : mo + 8) * 100000) + (+p[2]);
+  }
+  function jcNoCmp(a, b) { return (jcNoKey(a) - jcNoKey(b)) || String(a.plan_no || "").localeCompare(String(b.plan_no || "")); }
+  /* Sort by (search ke paas dropdown) \u2013 default Job Card No, naya pehle */
+  var JC_SORTS = [
+    ["jc_desc", "Job Card No \u2193 (newest)"], ["jc_asc", "Job Card No \u2191 (oldest)"],
+    ["start_desc", "Start date (latest)"], ["pending", "Pending (most short)"],
+    ["approved", "Approved qty (high)"], ["product", "Product A\u2013Z"], ["party", "Party A\u2013Z"]
+  ];
+  function jcSorted(list) {
+    var k = S.jc.sort, out = list.slice();
+    function txt(f) { return function (a, b) { return String(a[f] || "").localeCompare(String(b[f] || "")) || jcNoCmp(b, a); }; }
+    var fn = k === "jc_asc" ? jcNoCmp
+      : k === "start_desc" ? function (a, b) { return String(b.start_date || "").localeCompare(String(a.start_date || "")) || jcNoCmp(b, a); }
+      : k === "pending" ? function (a, b) { return ((a.pending_qty || 0) - (b.pending_qty || 0)) || jcNoCmp(b, a); }
+      : k === "approved" ? function (a, b) { return ((b.approved_qty || 0) - (a.approved_qty || 0)) || jcNoCmp(b, a); }
+      : k === "product" ? txt("item_name") : k === "party" ? txt("party_name")
+      : function (a, b) { var x = jcNoKey(a), y = jcNoKey(b); if (x === 9e9 || y === 9e9) return x - y; return (y - x) || String(b.plan_no || "").localeCompare(String(a.plan_no || "")); };
+    return out.sort(fn);
+  }
   async function loadJc() {
     if (S.jlb.seg === "large") return loadJlb();
     var my = ++S.jc.seq, el = mainEl("jobcard");
@@ -311,12 +336,12 @@
   var JC_CARDS = { all: "Job cards", in_progress: "In Progress", completed: "Completed", not_started: "Not Started", short: "Short of plan" };
   function jcVisible() {
     var q = S.jc.q.toLowerCase(), c = S.jc.card;
-    return (S.jc.rows || []).filter(function (r) {
+    return jcSorted((S.jc.rows || []).filter(function (r) {
       if (c === "short" && !(r.pending_qty < 0)) return false;
       if (c !== "all" && c !== "short" && r.row_status !== c) return false;
       if (q && [r.plan_no, r.job_card_no, r.party_name, r.item_name, r.item_code, r.work_order].join(" ").toLowerCase().indexOf(q) < 0) return false;
       return true;
-    });
+    }));
   }
   function jcScope() {
     if (S.jc.item) return "All job cards of " + (S.jc.itemName || S.jc.item);
@@ -333,7 +358,8 @@
       kpi("Not Started / Draft", n0(cnt.not_started), "Work order not begun", "#1a56db", "not_started", k === "not_started") +
       kpi("Short of Plan", n0(cnt.short), "Approved below MR planned", "#c62828", "short", k === "short") + "</div>";
     html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-jc-title"></h2><p id="pr-jc-sub"></p></div>' +
-      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-jc-q" placeholder="Search plan, job card, party, item\u2026" value="' + esc(S.jc.q) + '"></label>' +
+      '<div class="pr-reg-tools"><label class="pr-sortby" title="Sort table"><span>Sort</span><select id="pr-jc-sort">' + opts(JC_SORTS, S.jc.sort) + "</select></label>" +
+      '<label class="pr-search">' + I.search + '<input type="search" id="pr-jc-q" placeholder="Search plan, job card, party, item\u2026" value="' + esc(S.jc.q) + '"></label>' +
       '<button type="button" class="pr-ibtn" id="pr-jc-csv" title="Download CSV">' + I.down + "</button></div></div>" +
       '<div class="pr-tw" id="pr-jc-tw"></div><div class="pr-mlist" id="pr-jc-ml"></div></section>';
     mainEl("jobcard").innerHTML = html;
@@ -347,7 +373,8 @@
     $("#pr-jc-title").textContent = (S.jc.card === "all" ? "Job cards" : JC_CARDS[S.jc.card]) + " (" + list.length + ")";
     $("#pr-jc-sub").textContent = jcScope() + " \u00b7 click a Job Card No for production details";
     if (!list.length) { $("#pr-jc-tw").innerHTML = '<div class="pr-empty">' + ((S.jc.rows || []).length ? "No job card matches this filter." : "No job cards for these filters.") + "</div>"; $("#pr-jc-ml").innerHTML = ""; return; }
-    var h = '<table class="pr-t"><thead><tr><th>Plan No</th><th>Job Card No</th><th>Party</th><th>Item</th><th class="n">MR Planned</th><th class="n">Manufactured</th><th class="n">Approved</th><th class="n">Pending</th><th>Work Order</th><th>Start</th><th>End</th><th class="n">Lead Time</th></tr></thead><tbody>';
+    var adm = !!(S.acc && S.acc.can_close_plan);   /* Close button: sirf "Close Plan" access wale */
+    var h = '<table class="pr-t"><thead><tr><th>Plan No</th><th>Job Card No</th><th>Party</th><th>Item</th><th class="n">MR Planned</th><th class="n">Manufactured</th><th class="n">Approved</th><th class="n">Pending</th><th>Work Order</th><th>Start</th><th>End</th><th class="n">Lead Time</th>' + (adm ? '<th class="c">Action</th>' : "") + "</tr></thead><tbody>";
     list.forEach(function (r) {
       var c = stColor(r.row_status);
       h += '<tr><td class="nm"><a class="st-' + c + '" href="/app/production-plan/' + encodeURIComponent(r.plan_no) + '" target="_blank" rel="noopener">' + esc(r.plan_no) + "</a></td>" +
@@ -356,14 +383,52 @@
         '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "</td>" +
         '<td class="n">' + nq(r.mr_planned_qty) + '</td><td class="n">' + nq(r.manufactured_qty) + '</td><td class="n"><b>' + nq(r.approved_qty) + '</b></td><td class="n">' + pendCell(r.pending_qty) + "</td>" +
         '<td><a class="st-' + c + '" href="/app/work-order/' + encodeURIComponent(r.work_order) + '" target="_blank" rel="noopener">' + esc(r.work_order) + "</a><small>" + esc(r.wo_status) + "</small></td>" +
-        "<td>" + esc(short(r.start_date)) + "</td><td>" + esc(short(r.end_date)) + '</td><td class="n">' + (r.lead_time_days ? r.lead_time_days + "d" : "\u2013") + "</td></tr>";
+        "<td>" + esc(short(r.start_date)) + "</td><td>" + esc(short(r.end_date)) + '</td><td class="n">' + (r.lead_time_days ? r.lead_time_days + "d" : "\u2013") + "</td>" +
+        (adm ? '<td class="c">' + closeBtn(r) + "</td>" : "") + "</tr>";
     });
     $("#pr-jc-tw").innerHTML = h + "</tbody></table>";
     $("#pr-jc-ml").innerHTML = list.map(function (r) {
       return '<div class="pr-mcard st-' + stColor(r.row_status) + '"><div class="t">' + jcTrigger(r) + "<span>" + esc(r.plan_no) + "</span></div>" +
         '<div class="c">' + esc(r.item_name) + "</div><div class=\"m\"><span>" + esc(r.party_name || "\u2013") + "</span><span>" + esc(short(r.start_date)) + "</span></div>" +
-        '<div class="m"><span>MR ' + nq(r.mr_planned_qty) + " \u00b7 Appr " + nq(r.approved_qty) + "</span><span>Pending " + pendCell(r.pending_qty) + "</span></div></div>";
+        '<div class="m"><span>MR ' + nq(r.mr_planned_qty) + " \u00b7 Appr " + nq(r.approved_qty) + "</span><span>Pending " + pendCell(r.pending_qty) + "</span></div>" +
+        (S.acc && S.acc.can_close_plan ? '<div class="m"><span>' + esc(r.work_order) + " \u00b7 " + esc(r.wo_status) + "</span>" + closeBtn(r) + "</div>" : "") + "</div>";
     }).join("");
+  }
+  /* --- Close Production Plan (sirf System Manager): 2 baar click --- */
+  function closeBtn(r) {
+    if (r.pp_status === "Closed" || r.pp_status === "Completed") return '<span class="pr-pps gr">' + esc(r.pp_status) + "</span>";
+    return '<button type="button" class="pr-closepp" data-cp="' + esc(r.plan_no) + '" title="Close all work orders of this plan, then close the plan">Close</button>';
+  }
+  var cpTimer;
+  async function closePlan(b) {
+    var pp = b.getAttribute("data-cp");
+    if (!b.classList.contains("arm")) {
+      $$(".pr-closepp.arm").forEach(function (x) { x.classList.remove("arm"); x.textContent = "Close"; });
+      b.classList.add("arm"); b.textContent = "Confirm?"; clearTimeout(cpTimer);
+      cpTimer = setTimeout(function () { b.classList.remove("arm"); b.textContent = "Close"; }, 4000);
+      return;
+    }
+    clearTimeout(cpTimer);
+    $$('.pr-closepp[data-cp="' + pp.replace(/"/g, "") + '"]').forEach(function (x) { x.disabled = true; x.textContent = "Closing\u2026"; });
+    try {
+      var m = await api({ action: "close_plan", plan: pp }, "POST") || {};
+      var t = (m.closed_work_orders || []).length;
+      if ((m.failed || []).length) {
+        prToast("bad", pp + ": " + m.failed.length + " work order(s) could not be closed \u2013 " + m.failed.map(function (f) { return f.work_order + " (" + f.error.replace(/<[^>]+>/g, "") + ")"; }).join("; ") + ". Plan is still open.");
+      } else {
+        prToast("ok", pp + " closed" + (t ? " with " + t + " work order" + (t > 1 ? "s" : "") : "") + "." + ((m.draft_work_orders || []).length ? " " + m.draft_work_orders.length + " draft work order(s) left as draft." : ""));
+      }
+      loadJc();
+    } catch (e) {
+      prToast("bad", "Could not close " + pp + ": " + e.message);
+      $$('.pr-closepp[data-cp="' + pp.replace(/"/g, "") + '"]').forEach(function (x) { x.disabled = false; x.classList.remove("arm"); x.textContent = "Close"; });
+    }
+  }
+  function prToast(kind, text) {
+    var t = $("#pr-toast");
+    if (!t) { t = d.createElement("div"); t.id = "pr-toast"; d.body.appendChild(t); }
+    t.className = "pr-toast " + kind + " on"; t.textContent = text;
+    clearTimeout(t._h); t._h = setTimeout(function () { t.className = "pr-toast " + kind; }, kind === "bad" ? 9000 : 5000);
   }
   function jcCSV() {
     var out = [["Plan No", "Job Card No", "Party", "Item Code", "Item", "MR Planned Qty", "Manufactured Qty", "Approved Qty", "Pending Qty", "Work Order", "WO Status", "Start Date", "End Date", "Lead Time (Days)"]];
@@ -1134,6 +1199,7 @@
     if (e.target.closest("#pr-lb-csv")) { lbCSV(); return; }
     if (e.target.closest("#pr-jlb-csv")) { jlbCSV(); return; }
     if (e.target.closest("#pr-nm-csv")) { nmCSV(); return; }
+    if ((b = e.target.closest(".pr-closepp"))) { if (!b.disabled) closePlan(b); return; }
     if ((b = e.target.closest("[data-nmi]"))) { openNmItem(b.getAttribute("data-nmi"), b.getAttribute("data-nmn")); return; }
     if (e.target.closest("#pr-nm-prev") || e.target.closest("#pr-nm-next")) { var n0d = parseIso(S.nm.from); setNmMonth(new Date(n0d.getFullYear(), n0d.getMonth() + (e.target.closest("#pr-nm-prev") ? -1 : 1), 1)); syncNmBand(); syncSub(); loadNm(); return; }
     if ((b = e.target.closest("#pr-jc-seg [data-jseg]"))) {
@@ -1173,6 +1239,7 @@
       if (S.nm.from > S.nm.to) { var z2 = S.nm.from; S.nm.from = S.nm.to; S.nm.to = z2; }
       syncNmBand(); syncSub(); loadNm();
     }
+    else if (id === "pr-jc-sort") { S.jc.sort = v; store("jc-sort", v); renderJcTable(); }
     else if (id === "pr-jlb-month") { S.jlb.month = v; syncJcBand(); syncSub(); loadJlb(); }
     else if (id === "pr-jc-month") { S.jc.month = v; S.jc.card = "all"; syncJcBand(); syncSub(); loadJc(); }
     else if (id === "pr-dp-plant") { S.dp.plant = v; store("dp-plant", v); syncDpBand(); syncSub(); loadDp(); }
@@ -1221,7 +1288,11 @@
   /* ===================================================================
      settings (System Manager): Full ya koi bhi report
      =================================================================== */
-  var SV = { users: [], cand: [], pick: null, add: { jobcard: 1, daily: 1, perf: 1, planning: 1 } };
+  var SV = { users: [], cand: [], pick: null, add: { jobcard: 1, daily: 1, perf: 1, planning: 1, nonmoving: 1 } };
+  function closeChip(u) {
+    return '<button type="button" class="pr-clchip' + (u.close ? " on" : "") + '" data-u="' + esc(u.user) + '" data-cl="' + (u.close ? 0 : 1) + '" title="' +
+      (u.close ? "Can close Production Plans from Job Card \u2013 click to remove" : "Give access to the Close button in Job Card") + '">' + I.check + "Close Plan</button>";
+  }
   function repToggles(sel, attr) {
     var full = REP_KEYS.every(function (k) { return sel[k]; });
     return '<div class="pr-reps"><button type="button" class="pr-rep is-full' + (full ? " on" : "") + '" ' + attr + ' data-rep="full">' + I.check + "Full</button>" +
@@ -1237,7 +1308,7 @@
   function openSettings() {
     var m = $("#pr-set");
     $(".pr-modal", m).innerHTML =
-      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning / Non Moving. View only \u2014 this page cannot change data. System Managers always have full access. Disabled users are not listed.</p></div>' +
+      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning / Non Moving. Reports are view only. System Managers always have full access, except <b>Close Plan</b> (the Close button in Job Card), which is given separately to each user, System Managers included. Disabled users are not listed.</p></div>' +
         '<button type="button" class="pr-ibtn" id="pr-set-x" title="Close">' + I.x + "</button></div>" +
       '<div class="pr-mb"><div class="pr-msg" id="pr-set-msg"></div>' +
         '<div class="pr-addbox"><div class="pr-add"><div class="pr-pick"><input type="text" id="pr-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="pr-pick-l" id="pr-set-l" hidden></div></div>' +
@@ -1272,6 +1343,14 @@
     });
     $("#pr-set-list").addEventListener("click", async function (e) {
       var b = e.target.closest("button[data-u]"); if (!b || b.disabled) return;
+      if (b.hasAttribute("data-cl")) {
+        var cw = b.getAttribute("data-u"), con = b.getAttribute("data-cl") === "1";
+        b.disabled = true;
+        if (await settingsCall({ action: "set_close", user: cw, on: con ? 1 : 0 })) {
+          setMsg((con ? "Close Plan access given to " : "Close Plan access removed for ") + cw + "." + (cw === (S.acc && S.acc.user) ? " Refresh the page to see the change." : ""), true);
+        } else b.disabled = false;
+        return;
+      }
       var who = b.getAttribute("data-u"), u = SV.users.filter(function (x) { return x.user === who; })[0]; if (!u) return;
       var reps;
       if (b.hasAttribute("data-rm")) {
@@ -1296,8 +1375,8 @@
       $("#pr-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
         var sel = {}; (u.reports || []).forEach(function (k) { sel[k] = 1; });
         return '<div class="pr-urow"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + "</small></div>" +
-          (u.admin ? '<span class="tag admin">System Manager \u00b7 Full</span><span class="rm"></span>'
-            : repToggles(sel, 'data-u="' + esc(u.user) + '"') + '<button type="button" class="rm" data-u="' + esc(u.user) + '" data-rm="1" title="Remove access">' + I.x + "</button>") + "</div>";
+          (u.admin ? '<span class="tag admin">System Manager \u00b7 Full</span>' + closeChip(u) + '<span class="rm"></span>'
+            : repToggles(sel, 'data-u="' + esc(u.user) + '"') + closeChip(u) + '<button type="button" class="rm" data-u="' + esc(u.user) + '" data-rm="1" title="Remove access">' + I.x + "</button>") + "</div>";
       }).join("") : '<div class="pr-none">No users yet</div>';
       return true;
     } catch (e) { setMsg((body.action === "list" ? "Could not load users: " : "Not saved: ") + e.message); return false; }
