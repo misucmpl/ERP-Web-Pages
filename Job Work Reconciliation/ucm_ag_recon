@@ -6,10 +6,12 @@
 #
 # "UCM AG Job Work Reconciliation" web page ka poora backend (sirf VIEW):
 #   action = "me"         → mera access              (koi bhi logged-in user)
-#   action = "repack"     → Dispatch Entry: 2 Repack Stock Entries + 1 Delivery Note, sab submit (Dispatch Entry access)
-#                           product, qty, vehicle_no, distance
+#   action = "repack"     → Dispatch Entry: Fender + Chain Set ek saath — har product ke 2 Repack + EK Delivery Note, sab submit
+#                           qty_fender, qty_chain, vehicle_no, distance, make_receipt
+#                           make_receipt = 1 → WH2 - UCM mein stock kam ho to pehle kami jitni "Material Receipt"
+#   action = "vehicles"   → Dispatch Entry: vehicle number ki list (sirf UK08CA9773, UK08CB7855)
 #   action = "undo"       → popup se: Delivery Note + Repack entries cancel + delete (Dispatch Entry access)
-#   action = "stock"      → Dispatch Entry popup ke liye WH2 - UCM stock (View access)
+#   action = "stock"      → Dispatch Entry popup ke liye WH2 - UCM stock + valuation rate (View access)
 #   action = "data"       → report data              (View access)  · customer, from_date, to_date
 #   action = "customers"  → customer search          (View access)  · q
 #   action = "list"       → access wale users        (sirf System Manager)
@@ -111,7 +113,7 @@ elif agr_action == "list" or agr_action == "set":
         user_roles[u].append(row.get("role"))
     users = []
     if user_roles:
-        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
                                    fields=["name", "full_name", "enabled"], limit_page_length=0):
             r = user_roles.get(info.get("name")) or []
             users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
@@ -125,16 +127,38 @@ elif agr_action == "list" or agr_action == "set":
     frappe.response["message"] = {"users": users, "candidates": candidates}
 
 elif agr_action == "repack":
-    # ═════ Dispatch Entry → 2 Stock Entries (type Repack), turant Submit ═════
-    # Entry 1: WH2 - UCM se Fender / Chain Set (REPOL ke pcs) → WH1 - UCM mein REPOL (kg)
-    # Entry 2: WH2 - UCM se Fender / Chain Set (MB ke pcs)    → WH1 - UCM mein Master Batch (kg)
-    # Calculation server par dobara hoti hai (AG_JOB_WORK_CALCULATION.xlsx jaisa).
+    # ═════ Dispatch Entry: Fender + Chain Set EK SAATH → har product ke 2 Repack + 1 Delivery Note ═════
+    # Har product (jiski qty > 0) ke liye 2 Repack (turant Submit):
+    #   Repack 1: WH2 - UCM se FG (REPOL ke pcs) → WH1 - UCM mein REPOL (kg)
+    #   Repack 2: WH2 - UCM se FG (MB ke pcs)    → WH1 - UCM mein Master Batch (kg)
+    # Phir dono products ka EK Delivery Note → C00001 (REPOL total kg + MB total kg).
+    # Stock kam ho (make_receipt = 1) → us product ki pehle kami jitni Material Receipt.
+    # Koi bhi step fail ho to poori request rollback ho jaati hai (kuch nahi banta).
+    # Params: qty_fender (pcs), qty_chain (sets), vehicle_no, distance, make_receipt
+    #         (purana product + qty bhi chalta hai)
     if not agr_can_entry:
         frappe.throw("You do not have access to submit Dispatch Entry. Ask a System Manager for Dispatch Entry access.")
-    rp_product = frappe.form_dict.get("product") or ""
-    rp_qty = frappe.utils.cint(frappe.form_dict.get("qty") or 0)
-    if rp_qty <= 0:
-        frappe.throw("Enter a quantity greater than 0.")
+    RP_PRODUCTS = {
+        "fender": {"fg": "CUST-FG-REAR FENDER-AG", "label": "Fender", "unit": "pcs", "parts": [[577.0, 23.0]]},
+        "chain": {"fg": "CUST-FG-CHAIN SET-AG", "label": "Chain Set", "unit": "sets",
+                  "parts": [[225.6, 9.4], [236.16, 9.84]]},   # Upper, Lower (1 set = 1 Upper + 1 Lower)
+    }
+    RP_ORDER = ["fender", "chain"]
+    rp_qty = {
+        "fender": frappe.utils.cint(frappe.form_dict.get("qty_fender") or 0),
+        "chain": frappe.utils.cint(frappe.form_dict.get("qty_chain") or 0),
+    }
+    rp_old = frappe.form_dict.get("product") or ""
+    if rp_old in RP_PRODUCTS and rp_qty["fender"] <= 0 and rp_qty["chain"] <= 0:
+        rp_qty[rp_old] = frappe.utils.cint(frappe.form_dict.get("qty") or 0)
+    rp_keys = []
+    for k in RP_ORDER:
+        if rp_qty[k] < 0:
+            frappe.throw("Quantity cannot be negative.")
+        if rp_qty[k] > 0:
+            rp_keys.append(k)
+    if not rp_keys:
+        frappe.throw("Enter Fender and / or Chain Set quantity.")
     rp_vehicle = (frappe.form_dict.get("vehicle_no") or "").strip().upper().replace(" ", "")
     rp_distance = frappe.utils.cint(frappe.form_dict.get("distance") or 0)
     if not rp_vehicle:
@@ -147,44 +171,66 @@ elif agr_action == "repack":
     RP_TGT_WH = "WH1 - UCM"
     RP_REPOL = "RM-GR-PP-REPOL-BLACK-AG"
     RP_MB = "RM-MB-PP-BLACK-AG"
-    if rp_product == "fender":
-        rp_fg = "CUST-FG-REAR FENDER-AG"
-        rp_label = "Fender"
-        rp_parts = [[577.0, 23.0]]
-    elif rp_product == "chain":
-        rp_fg = "CUST-FG-CHAIN SET-AG"
-        rp_label = "Chain Set"
-        rp_parts = [[225.6, 9.4], [236.16, 9.84]]   # Upper, Lower (1 set = 1 Upper + 1 Lower)
-    else:
-        frappe.throw("Select Fender or Chain Set.")
+    rp_make_receipt = frappe.utils.cint(frappe.form_dict.get("make_receipt"))
 
-    rp_repol_kg = 0
-    rp_mb_kg = 0
-    rp_repol_pcs = 0
-    rp_mb_pcs = 0
-    rp_total_pcs = 0
-    for pt in rp_parts:
-        wt = pt[0] + pt[1]
-        rk = rp_qty * pt[0] / 1000.0
-        mk = rp_qty * pt[1] / 1000.0
-        rp_repol_kg = rp_repol_kg + rk
-        rp_mb_kg = rp_mb_kg + mk
-        rp_repol_pcs = rp_repol_pcs + int(round(rk * 1000 / wt))
-        rp_mb_pcs = rp_mb_pcs + int(round(mk * 1000 / wt))
-        rp_total_pcs = rp_total_pcs + rp_qty
-    rp_repol_kg_r = int(round(rp_repol_kg))
-    rp_mb_kg_r = int(round(rp_mb_kg))
+    # ---- har product ki calculation (AG_JOB_WORK_CALCULATION.xlsx jaisa) ----
+    rp_calc = {}
+    rp_short_msgs = []
+    for k in rp_keys:
+        p = RP_PRODUCTS[k]
+        qty = rp_qty[k]
+        c_repol_kg = 0
+        c_mb_kg = 0
+        c_repol_pcs = 0
+        c_mb_pcs = 0
+        c_total_pcs = 0
+        for pt in p["parts"]:
+            wt = pt[0] + pt[1]
+            rk = qty * pt[0] / 1000.0
+            mk = qty * pt[1] / 1000.0
+            c_repol_kg = c_repol_kg + rk
+            c_mb_kg = c_mb_kg + mk
+            c_repol_pcs = c_repol_pcs + int(round(rk * 1000 / wt))
+            c_mb_pcs = c_mb_pcs + int(round(mk * 1000 / wt))
+            c_total_pcs = c_total_pcs + qty
+        c_need = c_total_pcs
+        if c_repol_pcs + c_mb_pcs > c_need:
+            c_need = c_repol_pcs + c_mb_pcs
+        c_avail = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": p["fg"], "warehouse": RP_SRC_WH}, "actual_qty"))
+        c_short = int(c_need - c_avail) if c_need > c_avail else 0
+        rp_calc[k] = {
+            "repol_kg_r": int(round(c_repol_kg)), "mb_kg_r": int(round(c_mb_kg)),
+            "repol_pcs": c_repol_pcs, "mb_pcs": c_mb_pcs, "total_pcs": c_total_pcs,
+            "need": c_need, "avail": c_avail, "short": c_short, "mr_rate": 0,
+        }
+        if c_short > 0:
+            rp_short_msgs.append(p["fg"] + ": need " + str(c_need) + " pcs, available " + str(int(c_avail)) + " pcs")
+    if rp_short_msgs and not rp_make_receipt:
+        frappe.throw("Not enough stock in " + RP_SRC_WH + ": " + "; ".join(rp_short_msgs) + ".")
 
-    rp_avail = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": rp_fg, "warehouse": RP_SRC_WH}, "actual_qty"))
-    if rp_total_pcs > rp_avail:
-        frappe.throw("Not enough stock of " + rp_fg + " in " + RP_SRC_WH + ": need " + str(rp_total_pcs)
-                     + " pcs, available " + str(int(rp_avail)) + " pcs.")
+    # Material Receipt ka rate: WH2 ka valuation rate, warna Item ka, warna pichhla SLE
+    for k in rp_keys:
+        c = rp_calc[k]
+        if c["short"] <= 0:
+            continue
+        fg = RP_PRODUCTS[k]["fg"]
+        rate = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": fg, "warehouse": RP_SRC_WH}, "valuation_rate"))
+        if not rate:
+            rate = frappe.utils.flt(frappe.db.get_value("Item", fg, "valuation_rate"))
+        if not rate:
+            sle = frappe.get_all("Stock Ledger Entry", filters={"item_code": fg, "is_cancelled": 0, "valuation_rate": [">", 0]},
+                                 fields=["valuation_rate"], order_by="posting_date desc, posting_time desc, creation desc",
+                                 limit_page_length=1)
+            if sle:
+                rate = frappe.utils.flt(sle[0].valuation_rate)
+        if not rate:
+            frappe.throw("No valuation rate found for " + fg + ", so the Material Receipt cannot be made. "
+                         "Make the receipt manually once from ERPNext.")
+        c["mr_rate"] = rate
 
     rp_company = frappe.db.get_single_value("Global Defaults", "default_company") \
         or frappe.db.get_value("Warehouse", RP_SRC_WH, "company")
     # Difference Account (Repack ke har row par): Cost of Goods Sold type account allowed nahi hai.
-    # Pehle "Stock Adjustment" type ka account dhoondo; na mile to company ka stock_adjustment_account
-    # (agar wo COGS type ka na ho). Zarurat ho to RP_DIFF_ACCOUNT mein seedha account ka naam likh dein.
     RP_DIFF_ACCOUNT = "Jobwork Customer Stock - UCM"   # manual Repack entries mein yahi Difference Account
     RP_COST_CENTER = "Main - UCM"
     rp_diff_acc = RP_DIFF_ACCOUNT
@@ -202,54 +248,95 @@ elif agr_action == "repack":
     if not rp_diff_acc:
         frappe.throw("No Stock Adjustment account found for " + rp_company
                      + ". Create / tag an account with Account Type 'Stock Adjustment' (e.g. Stock Adjustment - UCM).")
+    rp_uom_items = [RP_REPOL, RP_MB]
+    for k in rp_keys:
+        rp_uom_items.append(RP_PRODUCTS[k]["fg"])
     rp_uom = {}
-    for it in frappe.get_all("Item", filters={"name": ["in", [rp_fg, RP_REPOL, RP_MB]]}, fields=["name", "stock_uom"]):
+    for it in frappe.get_all("Item", filters={"name": ["in", rp_uom_items]}, fields=["name", "stock_uom"]):
         rp_uom[it.name] = it.stock_uom
-    rp_remark = ("AG Dispatch Entry (web page) - Vehicle " + rp_vehicle + ", " + str(rp_distance) + " km - " + rp_label + " " + str(rp_qty)
-                 + (" sets" if rp_product == "chain" else " pcs") + " = " + str(rp_total_pcs) + " pcs. By " + agr_user)
+    rp_desc = []
+    for k in rp_keys:
+        rp_desc.append(RP_PRODUCTS[k]["label"] + " " + str(rp_qty[k]) + " " + RP_PRODUCTS[k]["unit"]
+                       + " (" + str(rp_calc[k]["total_pcs"]) + " pcs)")
+    # NOTE: "AG Dispatch Entry (web page)" remarks mein zaroori hai — undo isi se pehchanta hai
+    rp_remark = ("AG Dispatch Entry (web page) - Vehicle " + rp_vehicle + ", " + str(rp_distance) + " km - "
+                 + " + ".join(rp_desc) + ". By " + agr_user)
 
-    rp_plan = [
-        [rp_repol_pcs, RP_REPOL, rp_repol_kg_r],
-        [rp_mb_pcs, RP_MB, rp_mb_kg_r],
-    ]
-    rp_docs = []
-    for pl in rp_plan:
-        if pl[0] <= 0 or pl[2] <= 0:
+    # ---- 1. Material Receipt (sirf jis product ka stock kam ho) ----
+    rp_receipts = []
+    for k in rp_keys:
+        c = rp_calc[k]
+        if c["short"] <= 0:
             continue
-        se = frappe.get_doc({
+        fg = RP_PRODUCTS[k]["fg"]
+        mr = frappe.get_doc({
             "doctype": "Stock Entry",
-            "stock_entry_type": "Repack",
-            "purpose": "Repack",
+            "stock_entry_type": "Material Receipt",
+            "purpose": "Material Receipt",
             "company": rp_company,
             "posting_date": frappe.utils.nowdate(),
-            "remarks": rp_remark,
+            "remarks": rp_remark + " | Short stock receipt " + fg + ": " + str(c["short"]) + " pcs (available " + str(int(c["avail"])) + ")",
             "items": [
-                {"s_warehouse": RP_SRC_WH, "item_code": rp_fg, "qty": pl[0],
-                 "uom": rp_uom.get(rp_fg), "stock_uom": rp_uom.get(rp_fg), "conversion_factor": 1,
+                {"t_warehouse": RP_SRC_WH, "item_code": fg, "qty": c["short"], "basic_rate": c["mr_rate"],
+                 "uom": rp_uom.get(fg), "stock_uom": rp_uom.get(fg), "conversion_factor": 1,
                  "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
-                {"t_warehouse": RP_TGT_WH, "item_code": pl[1], "qty": pl[2],
-                 "uom": rp_uom.get(pl[1]), "stock_uom": rp_uom.get(pl[1]), "conversion_factor": 1,
-                 "is_finished_item": 1, "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
             ],
         })
-        se.flags.ignore_permissions = True
-        se.insert()
-        rp_docs.append(se)
-    # Dono Repack submit. Koi bhi step fail ho to poori request rollback ho jaati hai (kuch nahi banta).
+        mr.flags.ignore_permissions = True
+        mr.insert()
+        mr.flags.ignore_permissions = True
+        mr.submit()
+        rp_receipts.append({"name": mr.name, "product": RP_PRODUCTS[k]["label"], "item_code": fg, "qty": c["short"],
+                            "rate": c["mr_rate"], "amount": mr.items[0].amount, "warehouse": RP_SRC_WH})
+
+    # ---- 2. Repack: har product ke 2 (REPOL + MB) ----
+    rp_docs = []
+    rp_dn_kg = {RP_REPOL: 0, RP_MB: 0}
+    for k in rp_keys:
+        c = rp_calc[k]
+        fg = RP_PRODUCTS[k]["fg"]
+        plan = [[c["repol_pcs"], RP_REPOL, c["repol_kg_r"]], [c["mb_pcs"], RP_MB, c["mb_kg_r"]]]
+        for pl in plan:
+            if pl[0] <= 0 or pl[2] <= 0:
+                continue
+            se = frappe.get_doc({
+                "doctype": "Stock Entry",
+                "stock_entry_type": "Repack",
+                "purpose": "Repack",
+                "company": rp_company,
+                "posting_date": frappe.utils.nowdate(),
+                "remarks": rp_remark,
+                "items": [
+                    {"s_warehouse": RP_SRC_WH, "item_code": fg, "qty": pl[0],
+                     "uom": rp_uom.get(fg), "stock_uom": rp_uom.get(fg), "conversion_factor": 1,
+                     "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
+                    {"t_warehouse": RP_TGT_WH, "item_code": pl[1], "qty": pl[2],
+                     "uom": rp_uom.get(pl[1]), "stock_uom": rp_uom.get(pl[1]), "conversion_factor": 1,
+                     "is_finished_item": 1, "expense_account": rp_diff_acc, "cost_center": RP_COST_CENTER},
+                ],
+            })
+            se.flags.ignore_permissions = True
+            se.insert()
+            rp_docs.append([RP_PRODUCTS[k]["label"], se])
+            rp_dn_kg[pl[1]] = rp_dn_kg[pl[1]] + pl[2]
     rp_out = []
-    for se in rp_docs:
+    for x in rp_docs:
+        se = x[1]
         se.flags.ignore_permissions = True
         se.submit()
-        rp_out.append({"name": se.name, "fg_pcs": se.items[0].qty, "rm_item": se.items[1].item_code, "rm_qty": se.items[1].qty})
+        rp_out.append({"name": se.name, "product": x[0], "fg_item": se.items[0].item_code, "fg_pcs": se.items[0].qty,
+                       "rm_item": se.items[1].item_code, "rm_qty": se.items[1].qty})
 
-    # ── Delivery Note (AG ko challan): REPOL + MB poore kg, fixed rate, WH1 - UCM se ──
+    # ---- 3. EK Delivery Note (AG ko challan): REPOL + MB total kg, fixed rate, WH1 - UCM se ----
     dn_meta = frappe.get_meta("Delivery Note")
     dn_items = []
-    for pl in rp_plan:
-        if pl[2] > 0:
-            dn_items.append({"item_code": pl[1], "qty": pl[2], "rate": RP_RATES.get(pl[1]),
-                             "uom": rp_uom.get(pl[1]), "stock_uom": rp_uom.get(pl[1]), "conversion_factor": 1,
+    for item in [RP_REPOL, RP_MB]:
+        if rp_dn_kg[item] > 0:
+            dn_items.append({"item_code": item, "qty": rp_dn_kg[item], "rate": RP_RATES.get(item),
+                             "uom": rp_uom.get(item), "stock_uom": rp_uom.get(item), "conversion_factor": 1,
                              "warehouse": RP_TGT_WH})
+    if not dn_items:
+        frappe.throw("Quantity is too small - no REPOL / Master Batch kg to dispatch.")
     dn_dict = {
         "doctype": "Delivery Note",
         "customer": RP_CUSTOMER,
@@ -258,7 +345,6 @@ elif agr_action == "repack":
         "set_warehouse": RP_TGT_WH,
         "items": dn_items,
     }
-    # More Info / Transporter: vehicle number aur distance (jo field site par ho, usme)
     for fname in ["vehicle_no", "custom_vehicle_no"]:
         if dn_meta.has_field(fname):
             dn_dict[fname] = rp_vehicle
@@ -270,8 +356,7 @@ elif agr_action == "repack":
     rp_se_names = []
     for x in rp_out:
         rp_se_names.append(x["name"])
-    # Site ke mandatory custom fields (label se dhoondte hain, naam kuch bhi ho):
-    #   Order By = "Others", Sales Order Type = "Job Work"
+    # Site ke mandatory custom fields: Order By = "Others", Sales Order Type = "Job Work"
     RP_DN_FIXED = {"order by": "Others", "orderby": "Others", "sales order type": "Job Work"}
     for df in dn_meta.fields:
         lbl = (df.label or "").strip().lower()
@@ -290,6 +375,28 @@ elif agr_action == "repack":
     dn = frappe.get_doc(dn_dict)
     dn.flags.ignore_permissions = True
     dn.insert()
+    # ── GST: server se banne par template ("Output GST In-state") set ho jaata hai par taxes table khaali
+    #    rehti hai (form mein ye rows browser JS bharta hai). Isliye template ki rows khud daal kar
+    #    dobara save — tab SGST / CGST manual DN jaisa calculate hota hai.
+    if not dn.get("taxes"):
+        rp_tpl_name = dn.get("taxes_and_charges") or frappe.db.get_value(
+            "Sales Taxes and Charges Template", {"company": rp_company, "is_default": 1, "disabled": 0}, "name")
+        if rp_tpl_name:
+            rp_tpl = frappe.get_doc("Sales Taxes and Charges Template", rp_tpl_name)
+            RP_SKIP = ["name", "parent", "parentfield", "parenttype", "idx", "docstatus", "doctype",
+                       "owner", "creation", "modified", "modified_by"]
+            for tx in rp_tpl.taxes:
+                row = {}
+                txd = tx.as_dict()
+                for key in txd:
+                    if key not in RP_SKIP:
+                        row[key] = txd[key]
+                dn.append("taxes", row)
+            dn.taxes_and_charges = rp_tpl_name
+            dn.flags.ignore_permissions = True
+            dn.save()
+    if not dn.get("taxes"):
+        frappe.throw("GST rows could not be added to the Delivery Note (no Sales Taxes and Charges Template found). Nothing was saved.")
     dn.flags.ignore_permissions = True
     dn.submit()
     dn_lines = []
@@ -309,12 +416,14 @@ elif agr_action == "repack":
         "distance": rp_distance,
         "status": dn.status,
     }
+    rp_products_out = []
+    for k in rp_keys:
+        rp_products_out.append({"key": k, "label": RP_PRODUCTS[k]["label"], "qty": rp_qty[k], "unit": RP_PRODUCTS[k]["unit"],
+                                "total_pcs": rp_calc[k]["total_pcs"], "available_before": rp_calc[k]["avail"]})
     frappe.response["message"] = {
         "entries": rp_out,
-        "product": rp_label,
-        "qty": rp_qty,
-        "total_pcs": rp_total_pcs,
-        "available_before": rp_avail,
+        "receipts": rp_receipts,
+        "products": rp_products_out,
         "delivery_note": rp_dn,
     }
 
@@ -345,7 +454,7 @@ elif agr_action == "undo":
         ud_docs.append(d)
     for n in ud_se:
         d = frappe.get_doc("Stock Entry", n)
-        if UD_MARK not in (d.get("remarks") or "") or d.stock_entry_type != "Repack":
+        if UD_MARK not in (d.get("remarks") or "") or d.stock_entry_type not in ["Repack", "Material Receipt"]:
             frappe.throw(n + " was not created from the Dispatch Entry page, so it cannot be deleted here.")
         ud_docs.append(d)
     ud_done = []
@@ -367,10 +476,22 @@ elif agr_action == "stock":
     stock_out = {}
     for it in stock_items:
         stock_out[it] = 0
+    stock_rate = {}
     for b in frappe.get_all("Bin", filters={"item_code": ["in", stock_items], "warehouse": stock_wh},
-                            fields=["item_code", "actual_qty"]):
+                            fields=["item_code", "actual_qty", "valuation_rate"]):
         stock_out[b.item_code] = stock_out.get(b.item_code, 0) + frappe.utils.flt(b.actual_qty)
-    frappe.response["message"] = {"warehouse": stock_wh, "stock": stock_out}
+        if frappe.utils.flt(b.valuation_rate):
+            stock_rate[b.item_code] = frappe.utils.flt(b.valuation_rate)
+    for it in frappe.get_all("Item", filters={"name": ["in", stock_items]}, fields=["name", "valuation_rate"]):
+        if not stock_rate.get(it.name) and frappe.utils.flt(it.valuation_rate):
+            stock_rate[it.name] = frappe.utils.flt(it.valuation_rate)
+    frappe.response["message"] = {"warehouse": stock_wh, "stock": stock_out, "rate": stock_rate}
+
+elif agr_action == "vehicles":
+    # Dispatch Entry: sirf ye 2 vehicle number. Naye number popup ke "+ Add new vehicle" se judte hain.
+    if not agr_can_view:
+        frappe.throw("You do not have access to this report.")
+    frappe.response["message"] = {"vehicles": ["UK08CA9773", "UK08CB7855"]}
 
 elif agr_action == "data":
     if not agr_can_view:
