@@ -11,6 +11,11 @@
 #   action = "analysis"  → Daily Analysis (ek din + pichla din, plant All + Pending Clear)  · date
 #   action = "largeblow" → Large Blow production: "Manufacture" Stock Entry (BOM se, bina Work Order),
 #                          FG "WH7 - UCM" mein · from_date, to_date  (ya month = YYYY-MM / "all")
+#   action = "lb_form"   → Large Blow "Add Production Entry" form: har machine ki is shift ki entry,
+#                          na ho to pichhli shift ki entry (copy ke liye) · date, shift = A / B
+#   action = "lb_items"  → us form ke liye FG-BLO product search · q
+#   action = "lb_submit" (POST) → form ki machines ki "Manufacture" Stock Entries banao + Submit · date, shift, rows
+#   action = "lb_delete" (POST) → is page se bani Large Blow Stock Entry cancel + delete · stock_entry
 #   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
 #   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
 #   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date (WH2 - UCM, Ultra fix)
@@ -19,7 +24,8 @@
 #                          "Closed", phir Production Plan "Closed" · plan
 #   action = "items"     → Product filter ke liye item search · q
 #   action = "list"/"set"→ ⚙️ Settings (sirf System Manager) · user, reports = "jobcard,daily" / ""
-#   action = "set_close" → ⚙️ "Close Plan" access do / hatao (System Manager ko bhi) · user, on = 1 / 0
+#   action = "set_close" → ⚙️ "Delete & Close" / "Production Entry" access do / hatao (System Manager ko bhi)
+#                          · user, on = 1 / 0, perm = close / entry
 #
 # Access: System Manager ko sab. Baaki user ko har report ka alag role:
 #   UCM Prod Job Card · UCM Prod Daily · UCM Prod Performance · UCM Prod Planning · UCM Prod Non Moving  (sab = Full)
@@ -38,13 +44,17 @@ PW_ROLES = {"jobcard": "UCM Prod Job Card", "daily": "UCM Prod Daily", "perf": "
 PW_KEYS = ["jobcard", "daily", "perf", "planning", "nonmoving"]
 # Job Card ka "Close" button: alag access. System Manager ko bhi apne aap NAHI milta,
 # ⚙️ se "Close Plan" dena padta hai.
-PW_CLOSE_ROLE = "UCM Prod Close Plan"
+PW_CLOSE_ROLE = "UCM Prod Close Plan"   # "Delete & Close" access: Close Plan + Delete Entry (Large Blow), ek hi access
+# Daily Production → Large Blow "Add Production Entry" (Stock Entry submit / delete): alag access, sabko ⚙️ se
+PW_ENTRY_ROLE = "UCM Prod Production Entry"
+# JS ke PROD_VER se match hona chahiye — alag ho to page par laal warning aati hai
+PW_VER = "09-Oct-2026 delete-close"
 
 pw_user = frappe.session.user
 if pw_user == "Guest":
     frappe.throw("Please log in.")
 
-pw_role_names = ["System Manager", "UCM Admin", PW_CLOSE_ROLE]
+pw_role_names = ["System Manager", "UCM Admin", PW_CLOSE_ROLE, PW_ENTRY_ROLE]
 for k in PW_KEYS:
     pw_role_names.append(PW_ROLES[k])
 pw_my_roles = frappe.get_all("Has Role", filters={"parent": pw_user, "parenttype": "User",
@@ -55,6 +65,9 @@ pw_access = {}
 for k in PW_KEYS:
     pw_access[k] = pw_is_admin or PW_ROLES[k] in pw_my_roles
 pw_can_close = PW_CLOSE_ROLE in pw_my_roles and pw_access["jobcard"]
+pw_can_entry = PW_ENTRY_ROLE in pw_my_roles and pw_access["daily"]
+# Delete Entry (Large Blow Stock Entry cancel + delete) = Close Plan access ke saath milta hai
+pw_can_delete = PW_CLOSE_ROLE in pw_my_roles and pw_access["daily"]
 
 pw_action = frappe.form_dict.get("action") or "me"
 
@@ -207,6 +220,9 @@ if pw_action == "me":
         "show_summary": pw_show_summary,
         "access": pw_access,
         "can_close_plan": pw_can_close,
+        "can_prod_entry": pw_can_entry,
+        "can_delete_entry": pw_can_delete,
+        "ver": PW_VER,
     }
 
 # ───────────────────────────── SETTINGS ─────────────────────────────
@@ -216,30 +232,33 @@ elif pw_action == "list" or pw_action == "set" or pw_action == "set_close":
     for k in PW_KEYS:
         if not frappe.db.exists("Role", PW_ROLES[k]):
             frappe.get_doc({"doctype": "Role", "role_name": PW_ROLES[k], "desk_access": 1}).insert(ignore_permissions=True)
-    if not frappe.db.exists("Role", PW_CLOSE_ROLE):
-        frappe.get_doc({"doctype": "Role", "role_name": PW_CLOSE_ROLE, "desk_access": 1}).insert(ignore_permissions=True)
+    for xr in [PW_CLOSE_ROLE, PW_ENTRY_ROLE]:
+        if not frappe.db.exists("Role", xr):
+            frappe.get_doc({"doctype": "Role", "role_name": xr, "desk_access": 1}).insert(ignore_permissions=True)
 
     # "Close Plan" access: System Manager ko bhi diya / hataya ja sakta hai
     if pw_action == "set_close":
         ct = (frappe.form_dict.get("user") or "").strip()
         con = frappe.utils.cint(frappe.form_dict.get("on"))
+        # perm = "close" (Close Plan) ya "entry" (Production Entry)
+        c_role = PW_ENTRY_ROLE if frappe.form_dict.get("perm") == "entry" else PW_CLOSE_ROLE
         if not ct or not frappe.db.exists("User", ct) or ct in ["Administrator", "Guest"]:
             frappe.throw("User not found.")
         cdoc = frappe.get_doc("User", ct)
         ckeep = []
         for r in cdoc.roles:
-            if r.role != PW_CLOSE_ROLE:
+            if r.role != c_role:
                 ckeep.append(r)
         cdoc.set("roles", ckeep)
         if con:
-            cdoc.append("roles", {"role": PW_CLOSE_ROLE})
+            cdoc.append("roles", {"role": c_role})
         cdoc.flags.ignore_validate = True
         cdoc.flags.ignore_permissions = True
         cdoc.save()
-        chas = frappe.get_all("Has Role", filters={"parent": ct, "parenttype": "User", "role": PW_CLOSE_ROLE}, pluck="role")
+        chas = frappe.get_all("Has Role", filters={"parent": ct, "parenttype": "User", "role": c_role}, pluck="role")
         if con and not chas:
-            frappe.throw("Close Plan access could not be saved for " + ct + ". If this user has a Role Profile, add "
-                         + PW_CLOSE_ROLE + " to that Role Profile.")
+            frappe.throw("Access could not be saved for " + ct + ". If this user has a Role Profile, add "
+                         + c_role + " to that Role Profile.")
     all_pw_roles = []
     for k in PW_KEYS:
         all_pw_roles.append(PW_ROLES[k])
@@ -262,7 +281,7 @@ elif pw_action == "list" or pw_action == "set" or pw_action == "set_close":
         keep = []
         for r in user_doc.roles:
             # saara access hataya (✕) to Close Plan bhi hatao
-            if r.role not in all_pw_roles and not (not want and r.role == PW_CLOSE_ROLE):
+            if r.role not in all_pw_roles and not (not want and (r.role == PW_CLOSE_ROLE or r.role == PW_ENTRY_ROLE)):
                 keep.append(r)
         user_doc.set("roles", keep)
         for k in want:
@@ -278,7 +297,7 @@ elif pw_action == "list" or pw_action == "set" or pw_action == "set_close":
                 frappe.throw("Access could not be saved for " + target + ". If this user has a Role Profile, add the "
                              "UCM Prod roles to that Role Profile.")
 
-    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", all_pw_roles + ["System Manager", PW_CLOSE_ROLE]]},
+    role_rows = frappe.get_all("Has Role", filters={"parenttype": "User", "role": ["in", all_pw_roles + ["System Manager", PW_CLOSE_ROLE, PW_ENTRY_ROLE]]},
                                fields=["parent", "role"])
     user_roles = {}
     for row in role_rows:
@@ -300,7 +319,8 @@ elif pw_action == "list" or pw_action == "set" or pw_action == "set_close":
                     reps.append(k)
             users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
                           "enabled": 1, "admin": 1 if "System Manager" in r else 0, "reports": reps,
-                          "close": 1 if PW_CLOSE_ROLE in r else 0})
+                          "close": 1 if PW_CLOSE_ROLE in r else 0,
+                          "entry": 1 if PW_ENTRY_ROLE in r else 0})
     users = sorted(users, key=lambda x: (0 if x["admin"] else 1, (x["full_name"] or "").lower()))
     candidates = []
     for info in frappe.get_all("User", filters={"user_type": "System User", "enabled": 1,
@@ -576,13 +596,23 @@ elif pw_action == "daily" or pw_action == "analysis":
 # ───────────────────── 2b. LARGE BLOW (daily) ─────────────────────
 # Large Blow ki entry: ek hi "Manufacture" Stock Entry, raw material WH6 se,
 # FG seedha "WH7 - UCM" mein (Quality transfer nahi). Ultra item group yahan nahi aata.
-elif pw_action == "largeblow":
+elif pw_action == "largeblow" or pw_action == "lb_form":
     if not pw_access["daily"]:
         frappe.throw("You do not have access to the Daily Production report.")
     lb_today = frappe.utils.nowdate()
     lb_f = {"from_date": frappe.form_dict.get("from_date") or lb_today,
             "to_date": frappe.form_dict.get("to_date") or lb_today,
             "wh": "WH7 - UCM"}
+    # Add Production Entry form: chuni date tak pichhle 60 din ki entries (pichhli shift copy karne ke liye)
+    lbf_date = ""
+    lbf_shift = ""
+    if pw_action == "lb_form":
+        lbf_date = str(frappe.utils.getdate(frappe.form_dict.get("date") or lb_today))
+        lbf_shift = (frappe.form_dict.get("shift") or "A").strip().upper()
+        if lbf_shift not in ["A", "B"]:
+            frappe.throw("Select Shift A or B.")
+        lb_f["from_date"] = str(frappe.utils.add_days(lbf_date, -60))
+        lb_f["to_date"] = lbf_date
     # Job Card tab (Large Blow): month = "all" ya "YYYY-MM"
     lb_month = (frappe.form_dict.get("month") or "").strip()
     if lb_month == "all":
@@ -634,9 +664,22 @@ elif pw_action == "largeblow":
             if not lb_fld["man_hrs"] and ("manpower" in lk or "man_power" in lk) and "hour" in lk:
                 lb_fld["man_hrs"] = k
 
+    # label se: "No of Manpower", "Electricity Cost per Hour", "Wage Cost per Hour"
+    lb_lbl = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        lb_lbl[(df.label or "").strip().lower()] = df.fieldname
+    if lb_lbl.get("no of manpower"):
+        lb_fld["manpower"] = lb_lbl.get("no of manpower")
+    lb_fld["elec_rate"] = lb_lbl.get("electricity cost per hour") or ""
+    lb_fld["wage_rate"] = lb_lbl.get("wage cost per hour") or ""
+
     lb_out = []
     for r in lb_rows:
         lb_out.append({
+            # is web page se bani entry? (sirf wahi yahan se delete ho sakti hai)
+            "by_page": 1 if "Large Blow production entry (web page)" in (r.get("remarks") or "") else 0,
+            "elec_rate": frappe.utils.flt(r.get(lb_fld["elec_rate"])) if lb_fld["elec_rate"] else None,
+            "wage_rate": frappe.utils.flt(r.get(lb_fld["wage_rate"])) if lb_fld["wage_rate"] else None,
             "stock_entry": r.get("name"),
             "posting_date": str(r.get("posting_date") or ""),
             "posting_time": str(r.get("posting_time") or ""),
@@ -652,8 +695,207 @@ elif pw_action == "largeblow":
             "bom": r.get("bom_no") or "",
             "created_by": r.get("lb_created_by") or "",
         })
-    frappe.response["message"] = {"rows": lb_out, "from_date": str(lb_f["from_date"]), "to_date": str(lb_f["to_date"]),
-                                  "month": lb_month, "fields": lb_fld}
+    if pw_action == "largeblow":
+        frappe.response["message"] = {"rows": lb_out, "from_date": str(lb_f["from_date"]), "to_date": str(lb_f["to_date"]),
+                                      "month": lb_month, "fields": lb_fld}
+    else:
+        # ── Add Production Entry form (Large Blow) ──
+        # shift ko "A" / "B" mein (site par "SHIFT A" jaisa bhi ho sakta hai)
+        for r in lb_out:
+            sv = (r.get("shift") or "").upper().replace("SHIFT", "").replace("-", "").strip()
+            r["shift_letter"] = sv if sv in ["A", "B"] else ""
+            # sort key: date + shift (A pehle, phir B) + time
+            r["sk"] = r["posting_date"] + ("1" if r["shift_letter"] == "A" else ("2" if r["shift_letter"] == "B" else "0")) + (r.get("posting_time") or "")
+        cur_key = lbf_date + ("1" if lbf_shift == "A" else "2")
+        # machines: "Large Blow" naam wale Workstation; na milen to pichhle 60 din mein jin par entry hui
+        lbf_machines = []
+        for wsn in frappe.get_all("Workstation", filters={"name": ["like", "%large blow%"]}, pluck="name",
+                                  order_by="name asc", limit_page_length=0):
+            lbf_machines.append(wsn)
+        lbf_src = "workstation"
+        if not lbf_machines:
+            lbf_src = "entries"
+            for r in lb_out:
+                if r.get("machine") and r["machine"] not in lbf_machines:
+                    lbf_machines.append(r["machine"])
+        lbf_current = {}
+        lbf_prev = {}
+        for r in lb_out:
+            mc = r.get("machine") or ""
+            if not mc:
+                continue
+            if r["posting_date"] == lbf_date and r["shift_letter"] == lbf_shift:
+                if mc not in lbf_current:
+                    lbf_current[mc] = []
+                lbf_current[mc].append(r)
+            elif r["sk"][:11] < cur_key:
+                # sabse nayi pichhli entry (sk bada = naya)
+                if mc not in lbf_prev or r["sk"] > lbf_prev[mc]["sk"]:
+                    lbf_prev[mc] = r
+        lbf_out = []
+        for mc in lbf_machines:
+            lbf_out.append({"machine": mc, "current": lbf_current.get(mc) or [], "previous": lbf_prev.get(mc)})
+        # jo machine list mein nahi thi par entry mili (naam alag), wo bhi dikhao
+        for mc in lbf_current:
+            if mc not in lbf_machines:
+                lbf_out.append({"machine": mc, "current": lbf_current[mc], "previous": lbf_prev.get(mc)})
+        frappe.response["message"] = {"date": lbf_date, "shift": lbf_shift, "machines": lbf_out,
+                                      "machine_source": lbf_src, "fields": lb_fld}
+
+elif pw_action == "lb_submit":
+    # ═════ Large Blow: har machine ki ek "Manufacture" Stock Entry (BOM se), turant Submit ═════
+    # Manual entry (STE/UCM/26-27/48512) jaisi:
+    #   From BOM + Use Multi-Level BOM, Finished Good Qty = qty, Get Items
+    #   Raw material WH6 - UCM se, FG WH7 - UCM mein
+    #   Additional Costs: Electricity Cost = elec hrs x rate, Manpower Cost = manpower x man hrs x wage
+    #   Workstation, Shift, No of Manpower, Electricity / Manpower Hours, rates, totals
+    # Koi bhi machine fail ho to kuch nahi banta (poori request rollback).
+    # ERPNext ki Stock Entry permission chahiye (create + submit).
+    if not pw_can_entry:
+        frappe.throw("You do not have Production Entry access. Ask a System Manager to give it from the access settings.")
+    ls_date = str(frappe.utils.getdate(frappe.form_dict.get("date") or frappe.utils.nowdate()))
+    if ls_date > frappe.utils.nowdate():
+        frappe.throw("Production date cannot be in the future.")
+    ls_shift = (frappe.form_dict.get("shift") or "").strip().upper()
+    if ls_shift not in ["A", "B"]:
+        frappe.throw("Select Shift A or B.")
+    ls_rows = frappe.form_dict.get("rows") or []
+    if isinstance(ls_rows, str):
+        ls_rows = frappe.parse_json(ls_rows)
+    if not ls_rows:
+        frappe.throw("Nothing to submit.")
+    LS_SRC = "WH6 - UCM"
+    LS_TGT = "WH7 - UCM"
+    ls_company = frappe.db.get_single_value("Global Defaults", "default_company") \
+        or frappe.db.get_value("Warehouse", LS_TGT, "company")
+    ls_exp = frappe.db.get_value("Company", ls_company, "expenses_included_in_valuation") or "Expenses Included In Valuation - UCM"
+    # Stock Entry ke custom fields, label se (naam kuch bhi ho)
+    ls_lbl = {}
+    ls_opts = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        lk = (df.label or "").strip().lower()
+        if lk and lk not in ls_lbl:
+            ls_lbl[lk] = df.fieldname
+            ls_opts[lk] = df.options or ""
+    ls_shift_val = "SHIFT " + ls_shift
+    if ls_opts.get("shift") and ls_shift_val not in ls_opts.get("shift") and ls_shift in ls_opts.get("shift").split("\n"):
+        ls_shift_val = ls_shift
+    ls_out = []
+    for row in ls_rows:
+        mc = (row.get("machine") or "").strip()
+        ic = (row.get("item_code") or "").strip()
+        qty = frappe.utils.flt(row.get("qty"))
+        eh = frappe.utils.flt(row.get("electricity_hours"))
+        mh = frappe.utils.flt(row.get("manpower_hours"))
+        mp = frappe.utils.flt(row.get("manpower"))
+        er = frappe.utils.flt(row.get("elec_rate")) or 125
+        wr = frappe.utils.flt(row.get("wage_rate")) or 70
+        if not mc or not frappe.db.exists("Workstation", mc):
+            frappe.throw("Machine not found: " + mc)
+        if not ic or not frappe.db.exists("Item", ic):
+            frappe.throw(mc + ": select a product from the list.")
+        if qty <= 0:
+            frappe.throw(mc + ": enter the quantity.")
+        # is machine + date + shift ki entry pehle se to nahi?
+        ls_dup = frappe.db.sql("""
+            SELECT se.name FROM `tabStock Entry` se
+            WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture' AND se.posting_date = %(d)s
+              AND se.custom_workstation = %(m)s AND UPPER(REPLACE(IFNULL(se.custom_shift, ''), 'SHIFT', '')) LIKE %(s)s
+            LIMIT 1
+        """, {"d": ls_date, "m": mc, "s": "%" + ls_shift + "%"}, as_dict=True)
+        if ls_dup:
+            frappe.throw(mc + " already has an entry for " + ls_date + " Shift " + ls_shift + ": " + ls_dup[0].name)
+        ls_bom = frappe.db.get_value("Item", ic, "default_bom")
+        if not ls_bom:
+            ls_bl = frappe.get_all("BOM", filters={"item": ic, "is_active": 1, "is_default": 1, "docstatus": 1},
+                                   pluck="name", limit_page_length=1)
+            ls_bom = ls_bl[0] if ls_bl else ""
+        if not ls_bom:
+            frappe.throw(mc + ": no default BOM found for " + ic + ".")
+        e_cost = round(eh * er, 2)
+        m_cost = round(mp * mh * wr, 2)
+        sd = {
+            "doctype": "Stock Entry",
+            "stock_entry_type": "Manufacture",
+            "purpose": "Manufacture",
+            "company": ls_company,
+            "set_posting_time": 1,
+            "posting_date": ls_date,
+            "posting_time": frappe.utils.nowtime(),
+            "from_bom": 1,
+            "use_multi_level_bom": 1,
+            "bom_no": ls_bom,
+            "fg_completed_qty": qty,
+            "from_warehouse": LS_SRC,
+            "to_warehouse": LS_TGT,
+            "remarks": "Large Blow production entry (web page) - " + mc + ", " + ls_date + " Shift " + ls_shift + ". By " + pw_user,
+            "additional_costs": [
+                {"expense_account": ls_exp, "description": "Electricity Cost", "amount": e_cost},
+                {"expense_account": ls_exp, "description": "Manpower Cost", "amount": m_cost},
+            ],
+        }
+        ls_set = [["workstation", mc], ["shift", ls_shift_val], ["no of manpower", mp],
+                  ["electricity hours", eh], ["manpower hours", mh],
+                  ["electricity cost per hour", er], ["wage cost per hour", wr],
+                  ["total cost of electricity", e_cost], ["total cost of manpower", m_cost],
+                  ["total cost", e_cost + m_cost], ["total working hours per manpower", mp * mh]]
+        for pr in ls_set:
+            fn = ls_lbl.get(pr[0])
+            if fn:
+                sd[fn] = pr[1]
+        if "custom_workstation" not in sd:
+            sd["custom_workstation"] = mc
+        if "custom_shift" not in sd:
+            sd["custom_shift"] = ls_shift_val
+        try:
+            se = frappe.get_doc(sd)
+            se.get_items()
+            se.insert()
+            se.submit()
+        except Exception as e:
+            frappe.throw(mc + " (" + ic + "): " + str(e))
+        fg_qty = 0
+        rm_n = 0
+        for it in se.items:
+            if it.t_warehouse and not it.s_warehouse:
+                fg_qty = fg_qty + frappe.utils.flt(it.qty)
+            else:
+                rm_n = rm_n + 1
+        ls_out.append({"machine": mc, "stock_entry": se.name, "item_code": ic, "qty": fg_qty or qty,
+                       "raw_materials": rm_n, "bom": ls_bom, "additional_cost": e_cost + m_cost})
+    frappe.response["message"] = {"date": ls_date, "shift": ls_shift, "entries": ls_out}
+
+elif pw_action == "lb_delete":
+    # ═════ Large Blow: web page se bani Stock Entry ko Cancel karke Delete ═════
+    # Sirf wahi entry jo is page ne banayi (remarks mein "Large Blow production entry (web page)").
+    # Ye access "Close Plan" ke saath milta hai. ERPNext ki Stock Entry cancel + delete permission bhi chahiye.
+    if not pw_can_delete:
+        frappe.throw("You do not have Delete & Close access. Ask a System Manager to give it from the access settings.")
+    ld_name = (frappe.form_dict.get("stock_entry") or "").strip()
+    if not ld_name or not frappe.db.exists("Stock Entry", ld_name):
+        frappe.throw("Stock Entry not found.")
+    ld = frappe.get_doc("Stock Entry", ld_name)
+    if "Large Blow production entry (web page)" not in (ld.get("remarks") or "") or ld.stock_entry_type != "Manufacture":
+        frappe.throw(ld_name + " was not created from this page, so it cannot be deleted here. Cancel it in ERPNext.")
+    try:
+        if ld.docstatus == 1:
+            ld.cancel()
+        frappe.delete_doc("Stock Entry", ld_name)
+    except Exception as e:
+        frappe.throw("Could not delete " + ld_name + ": " + str(e))
+    frappe.response["message"] = {"deleted": ld_name}
+
+elif pw_action == "lb_items":
+    # Add Production Entry: Large Blow product search (FG-BLO… items)
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    lbi_q = (frappe.form_dict.get("q") or "").strip()
+    lbi_or = None
+    if lbi_q:
+        lbi_or = [["name", "like", "%" + lbi_q + "%"], ["item_name", "like", "%" + lbi_q + "%"]]
+    frappe.response["message"] = frappe.get_all("Item", filters={"disabled": 0, "name": ["like", "FG-BLO%"]},
+                                                or_filters=lbi_or, fields=["name", "item_name", "stock_uom"],
+                                                order_by="item_name asc", limit_page_length=20)
 
 # ───────────────────── 3. JOB CARD PERFORMANCE ─────────────────────
 elif pw_action == "performance":
@@ -1214,12 +1456,12 @@ elif pw_action == "planning":
     pl_out = sorted(pl_out, key=lambda x: x["sort_key"])
     frappe.response["message"] = {"rows": pl_out, "month": pl_month, "item_code": pl_item}
 
-# ───────────────────── 1b. CLOSE PRODUCTION PLAN ("Close Plan" access) ─────────────────────
+# ───────────────────── 1b. CLOSE PRODUCTION PLAN ("Delete & Close" access) ─────────────────────
 # Pehle plan ke saare submitted Work Orders (Completed / Closed / Cancelled chhod kar) Close,
 # ERPNext ke apne close_work_order se. Sab band ho jaayein tab hi Production Plan Close.
 elif pw_action == "close_plan":
     if not pw_can_close:
-        frappe.throw("You do not have Close Plan access. Ask a System Manager to give it from the access settings.")
+        frappe.throw("You do not have Delete & Close access. Ask a System Manager to give it from the access settings.")
     cp_name = (frappe.form_dict.get("plan") or "").strip()
     if not cp_name or not frappe.db.exists("Production Plan", cp_name):
         frappe.throw("Production Plan not found.")
