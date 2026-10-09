@@ -71,6 +71,7 @@
     card: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/></svg>',
     factory: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20V9l6 4V9l6 4V4h8v16z"/><path d="M6 17h2M11 17h2M16 17h2"/></svg>',
     gauge: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></svg>',
+    box: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>',
     cal: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>',
     chart: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>',
     check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>'
@@ -99,10 +100,11 @@
     { k: "jobcard", label: "Job Card", icon: I.card },
     { k: "daily", label: "Daily Production", icon: I.factory },
     { k: "perf", label: "Performance", icon: I.gauge },
-    { k: "planning", label: "Planning", icon: I.cal }
+    { k: "planning", label: "Planning", icon: I.cal },
+    { k: "nonmoving", label: "Non Moving", icon: I.box }
   ];
-  var REP_KEYS = ["jobcard", "daily", "perf", "planning"];
-  var REP_LABEL = { jobcard: "Job Card", daily: "Daily Production", perf: "Performance", planning: "Planning" };
+  var REP_KEYS = ["jobcard", "daily", "perf", "planning", "nonmoving"];
+  var REP_LABEL = { jobcard: "Job Card", daily: "Daily Production", perf: "Performance", planning: "Planning", nonmoving: "Non Moving" };
   var PL_MONTHS = [];
   (function () { for (var i = 0; i < 9; i++) { var m = (6 + i) % 12, y = 2026 + (6 + i >= 12 ? 1 : 0); PL_MONTHS.push([y + "-" + pad(m + 1), MONTH[m] + " " + y]); } })();
   var JC_STATUSES = ["All", "Production Not Started", "In Progress", "Hold", "Completed", "Assembled"];
@@ -118,6 +120,7 @@
     dp: { from: yday, to: yday, plant: "All", lt: 0, rows: null, dates: [], di: 0, q: "", seq: 0, seg: "ultra" },
     lb: { rows: null, fields: {}, q: "" },
     jlb: { seg: "ultra", month: thisMonth, rows: null, q: "", seq: 0 },
+    nm: { from: "", to: "", wh: "WH2 - UCM", ig: "Ultra", rows: null, q: "", seq: 0 },   /* warehouse + item group fix */
     pf: { from: "", to: "", status: "Completed", item: "", itemName: "", rows: null, summary: null, q: "", seq: 0 },
     pl: { month: "", item: "", itemName: "", rows: null, card: "all", q: "", seq: 0 }
   };
@@ -192,6 +195,16 @@
         '<p class="pr-note">Click Work Order Status for production details \u00b7 Job Card No opens the Production Plan</p>' +
       "</div></section>" +
       '<main class="pr-main" data-main="planning" hidden></main>' +
+
+      /* ---- Non Moving FG Item ---- */
+      '<section class="pr-band" data-band="nonmoving" hidden><div class="pr-filters">' +
+        '<div class="pr-f"><span>Month</span><div class="pr-nav">' +
+          '<button type="button" class="pr-nbtn" id="pr-nm-prev" title="Previous month">' + I.left + '</button><b id="pr-nm-mon"></b>' +
+          '<button type="button" class="pr-nbtn" id="pr-nm-next" title="Next month">' + I.right + "</button></div></div>" +
+        '<div class="pr-f"><span>Period</span><div class="pr-dates"><input type="date" id="pr-nm-from"><i>to</i><input type="date" id="pr-nm-to"></div></div>' +
+        '<p class="pr-note">Items that came in during the period but did not move out at all \u00b7 click an item for its transactions</p>' +
+      "</div></section>" +
+      '<main class="pr-main" data-main="nonmoving" hidden></main>' +
     "</div>" +
     '<div class="pr-scrim" id="pr-scrim"></div>' +
     '<aside class="pr-drawer" id="pr-drawer" aria-hidden="true"></aside>' +
@@ -988,6 +1001,104 @@
     $("#pr-dr-body").innerHTML = h;
   }
 
+
+  /* ===================================================================
+     5. NON MOVING FG ITEM (UCM Non Moving FG Item)
+     =================================================================== */
+  var NM_TX_API = "/api/method/get_item_transactions", NM_SO_API = "/api/method/get_item_sales_orders";
+  function setNmMonth(dt) { var b = new Date(dt.getFullYear(), dt.getMonth(), 1); S.nm.from = iso(b); S.nm.to = iso(new Date(b.getFullYear(), b.getMonth() + 1, 0)); }
+  setNmMonth(new Date());
+  function syncNmBand() {
+    $("#pr-nm-mon").textContent = monthOf(S.nm.from, S.nm.to);
+    $("#pr-nm-from").value = S.nm.from; $("#pr-nm-to").value = S.nm.to;
+  }
+  async function loadNm() {
+    var my = ++S.nm.seq, el = mainEl("nonmoving");
+    if (!S.nm.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
+    try {
+      var m = await api({ action: "nonmoving", from_date: S.nm.from, to_date: S.nm.to, warehouse: S.nm.wh, item_group: S.nm.ig });
+      if (!m || my !== S.nm.seq) return;
+      S.nm.rows = m.rows || []; renderNm();
+    } catch (e) { if (my !== S.nm.seq) return; S.nm.rows = null; el.innerHTML = errorHTML(e.message); }
+    finally { if (my === S.nm.seq) el.classList.remove("is-loading"); }
+  }
+  function nmVisible() { var q = S.nm.q.toLowerCase(); return (S.nm.rows || []).filter(function (r) { return !q || [r.item_name, r.item_code, r.item_group].join(" ").toLowerCase().indexOf(q) >= 0; }); }
+  function renderNm() {
+    var all = S.nm.rows || [], ti = 0, tb = 0, top = null;
+    all.forEach(function (r) { ti += r.inward_qty || 0; tb += r.balance_qty || 0; if (!top || (r.balance_qty || 0) > (top.balance_qty || 0)) top = r; });
+    var html = '<div class="pr-kpis k4">' +
+      kpi("Non-Moving Items", n0(all.length), esc(S.nm.ig + " \u00b7 " + S.nm.wh), "#1565a8") +
+      kpi("Total Inward Qty", nq(ti), "Received in the period", "#b8560c") +
+      kpi("Total Balance Qty", nq(tb), "Blocked inventory", "#c62828") +
+      kpi("Highest Balance", '<span class="pr-nm-top">' + (top ? esc(top.item_name) : "\u2013") + "</span>", top ? nq(top.balance_qty) + " units" : "", "#6a3fa0") + "</div>" +
+      '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-nm-title"></h2><p id="pr-nm-sub"></p></div>' +
+      '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-nm-q" placeholder="Search item\u2026" value="' + esc(S.nm.q) + '"></label>' +
+      '<button type="button" class="pr-ibtn" id="pr-nm-csv" title="Download CSV">' + I.down + "</button></div></div>" +
+      '<div class="pr-tw" id="pr-nm-tw"></div><div class="pr-mlist" id="pr-nm-ml"></div></section>';
+    mainEl("nonmoving").innerHTML = html;
+    renderNmTable();
+  }
+  function nmTrig(r) { return '<button type="button" class="pr-jc pr-nm-it" data-nmi="' + esc(r.item_code) + '" data-nmn="' + esc(r.item_name) + '">' + esc(r.item_name) + "</button>"; }
+  function renderNmTable() {
+    var list = nmVisible(), ti = 0, tb = 0;
+    $("#pr-nm-title").textContent = "Non-moving items (" + list.length + ")";
+    $("#pr-nm-sub").textContent = nice(S.nm.from) + " \u2013 " + nice(S.nm.to) + " \u00b7 " + S.nm.wh + " \u00b7 " + S.nm.ig + " \u00b7 highest inward first";
+    if (!list.length) { $("#pr-nm-tw").innerHTML = '<div class="pr-empty">' + ((S.nm.rows || []).length ? "No item matches the search." : "No non-moving items for these filters.") + "</div>"; $("#pr-nm-ml").innerHTML = ""; return; }
+    var h = '<table class="pr-t pr-nm-t"><thead><tr><th>#</th><th>Item</th><th>Item Group</th><th class="n">Inward Qty</th><th class="n">DN Out</th><th class="n">Assembly</th><th class="n">Other Out</th><th class="n">Balance Qty</th></tr></thead><tbody>';
+    list.forEach(function (r, i) {
+      ti += r.inward_qty || 0; tb += r.balance_qty || 0;
+      h += '<tr><td class="mut">' + (i + 1) + '</td><td class="it">' + nmTrig(r) + "<small>" + esc(r.item_code) + "</small></td><td>" + esc(r.item_group) + "</td>" +
+        '<td class="n"><b class="pos">' + nq(r.inward_qty) + '</b></td><td class="n mut">' + nq(r.dn_out_qty) + '</td><td class="n mut">' + nq(r.assembly_qty) + '</td><td class="n mut">' + nq(r.other_out_qty) + "</td>" +
+        '<td class="n">' + ((r.balance_qty || 0) > 0 ? '<span class="pr-nm-bal">' + nq(r.balance_qty) + "</span>" : nq(r.balance_qty)) + "</td></tr>";
+    });
+    h += '</tbody><tfoot><tr><td colspan="3">Total \u00b7 ' + list.length + ' items</td><td class="n">' + nq(ti) + '</td><td colspan="3"></td><td class="n">' + nq(tb) + "</td></tr></tfoot></table>";
+    $("#pr-nm-tw").innerHTML = h;
+    $("#pr-nm-ml").innerHTML = list.map(function (r) {
+      return '<div class="pr-mcard"><div class="t">' + nmTrig(r) + "</div>" +
+        '<div class="m"><span>' + esc(r.item_code) + " \u00b7 In " + nq(r.inward_qty) + '</span><span class="pr-nm-bal">' + nq(r.balance_qty) + "</span></div></div>";
+    }).join("");
+  }
+  function nmCSV() {
+    var out = [["Item Code", "Item Name", "Item Group", "Inward Qty", "DN Out Qty", "Assembly Qty", "Other Out Qty", "Balance Qty"]];
+    nmVisible().forEach(function (r) { out.push([r.item_code, r.item_name, r.item_group, r.inward_qty, r.dn_out_qty, r.assembly_qty, r.other_out_qty, r.balance_qty]); });
+    saveCSV(out, "non-moving-" + S.nm.wh.replace(/\W+/g, "") + "-" + S.nm.from + "-to-" + S.nm.to + ".csv");
+  }
+  /* slider: Sales Orders (45 din) + Inward + Outward */
+  var NM_BADGE = [["manufacture", "vi"], ["receipt", "ok"], ["issue", "hi"], ["transfer", "bl"], ["delivery", "md"]];
+  function nmBadge(t) { var x = String(t || "").toLowerCase(), c = "gr"; NM_BADGE.forEach(function (b) { if (c === "gr" && x.indexOf(b[0]) >= 0) c = b[1]; }); return '<span class="pr-pps ' + c + '">' + esc(t || "\u2013") + "</span>"; }
+  function nmSoClass(s) { s = String(s || "").toLowerCase(); return s.indexOf("completed") >= 0 || s.indexOf("closed") >= 0 ? "ok" : s.indexOf("hold") >= 0 || s.indexOf("cancel") >= 0 ? "hi" : s.indexOf("deliver") >= 0 || s.indexOf("bill") >= 0 ? "md" : "bl"; }
+  function nmTxTable(rows) {
+    if (!rows.length) return '<div class="pr-none">No transactions found.</div>';
+    var tq = 0;
+    return '<table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Voucher No</th><th>Item</th><th class="n">Qty</th><th>Entry Type</th></tr></thead><tbody>' +
+      rows.map(function (r) { tq += +r.qty || 0; return "<tr><td>" + esc(short(r.posting_date)) + "</td><td>" + docLink(r.voucher_type, r.voucher_no) + "</td><td>" + esc(r.item_name || "") + '</td><td class="n"><b>' + nq(r.qty) + "</b></td><td>" + nmBadge(r.entry_type || r.voucher_type) + "</td></tr>"; }).join("") +
+      '</tbody><tfoot><tr><td colspan="3">Total</td><td class="n">' + nq(tq) + "</td><td></td></tr></tfoot></table>";
+  }
+  async function openNmItem(ic, inm) {
+    var seq = openDrawer(inm || ic, docLink("Item", ic, ic) + " \u00b7 " + esc(S.nm.wh) + " \u00b7 " + esc(nice(S.nm.from)) + " \u2013 " + esc(nice(S.nm.to)), "is-wide");
+    var so = [], tx = { inward: [], outward: [] }, soErr = "", txErr = "";
+    await Promise.all([
+      call(NM_SO_API, { item_code: ic, days: 45 }).then(function (m) { so = m || []; }).catch(function (e) { soErr = e.message; }),
+      call(NM_TX_API, { item_code: ic, warehouse: S.nm.wh, from_date: S.nm.from, to_date: S.nm.to }).then(function (m) { tx = m || tx; }).catch(function (e) { txErr = e.message; })
+    ]);
+    if (seq !== DR.seq) return;
+    var inw = tx.inward || [], outw = tx.outward || [];
+    var h = '<div class="pr-infos k3">' + info("Sales Orders (45 days)", n0(so.length), so.length ? "bad" : "") + info("Inward entries", n0(inw.length), "ok") + info("Outward entries", n0(outw.length), outw.length ? "" : "bad") + "</div>";
+    h += '<section class="pr-ps"><h4>Sales Orders \u00b7 Last 45 Days <em class="' + (so.length ? "bad" : "") + '">' + so.length + "</em></h4>";
+    if (soErr) h += errorHTML(soErr + " (get_item_sales_orders)");
+    else if (!so.length) h += '<div class="pr-none">No sales orders in the last 45 days.</div>';
+    else h += '<div class="pr-warn">This item has ' + so.length + " sales order" + (so.length > 1 ? "s" : "") + " in the last 45 days.</div>" +
+      '<table class="pr-t pr-dt"><thead><tr><th>Date</th><th>Sales Order</th><th>Status</th><th>Customer</th><th class="n">Order Qty</th><th class="n">Delivered</th></tr></thead><tbody>' +
+      so.map(function (r) { return "<tr><td>" + esc(short(r.transaction_date)) + "</td><td>" + docLink("Sales Order", r.sales_order) + '</td><td><span class="pr-pps ' + nmSoClass(r.status) + '">' + esc(r.status || "\u2013") + "</span></td><td>" + esc(r.customer_name || "") + '</td><td class="n">' + nq(r.order_qty) + '</td><td class="n">' + nq(r.delivered_qty) + "</td></tr>"; }).join("") + "</tbody></table>";
+    h += "</section>";
+    if (txErr) h += errorHTML(txErr + " (get_item_transactions)");
+    else {
+      h += '<section class="pr-ps"><h4>Inward <em>' + inw.length + "</em></h4>" + nmTxTable(inw) + "</section>";
+      h += '<section class="pr-ps"><h4>Outward <em class="' + (outw.length ? "" : "bad") + '">' + outw.length + "</em></h4>" + nmTxTable(outw) + "</section>";
+    }
+    $("#pr-dr-body").innerHTML = h;
+  }
+
   /* ===================================================================
      events
      =================================================================== */
@@ -1022,6 +1133,9 @@
     if (e.target.closest("#pr-dp-csv")) { dpCSV(); return; }
     if (e.target.closest("#pr-lb-csv")) { lbCSV(); return; }
     if (e.target.closest("#pr-jlb-csv")) { jlbCSV(); return; }
+    if (e.target.closest("#pr-nm-csv")) { nmCSV(); return; }
+    if ((b = e.target.closest("[data-nmi]"))) { openNmItem(b.getAttribute("data-nmi"), b.getAttribute("data-nmn")); return; }
+    if (e.target.closest("#pr-nm-prev") || e.target.closest("#pr-nm-next")) { var n0d = parseIso(S.nm.from); setNmMonth(new Date(n0d.getFullYear(), n0d.getMonth() + (e.target.closest("#pr-nm-prev") ? -1 : 1), 1)); syncNmBand(); syncSub(); loadNm(); return; }
     if ((b = e.target.closest("#pr-jc-seg [data-jseg]"))) {
       var js = b.getAttribute("data-jseg"); if (js === S.jlb.seg) return;
       S.jlb.seg = js; store("jc-seg", js); syncJcBand(); syncSub();
@@ -1045,6 +1159,7 @@
     if (e.target.id === "pr-jc-q") { S.jc.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderJcTable, 120); }
     else if (e.target.id === "pr-pf-q") { S.pf.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderPfTable, 120); }
     else if (e.target.id === "pr-pl-q") { S.pl.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderPlTable, 120); }
+    else if (e.target.id === "pr-nm-q") { S.nm.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderNmTable, 120); }
     else if (e.target.id === "pr-jlb-q") { S.jlb.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderJlbTable, 120); }
     else if (e.target.id === "pr-lb-q") { S.lb.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderLbTable, 120); }
     else if (e.target.id === "pr-dp-q") { S.dp.q = e.target.value; clearTimeout(qT); qT = setTimeout(renderDpTable, 120); }
@@ -1052,6 +1167,12 @@
   root.addEventListener("change", function (e) {
     var id = e.target.id, v = e.target.value;
     if (id === "pr-jc-status") { S.jc.status = v; S.jc.card = "all"; store("jc-status", v); syncJcBand(); syncSub(); loadJc(); }
+    else if (id === "pr-nm-from" || id === "pr-nm-to") {
+      if (!v) { syncNmBand(); return; }
+      if (id === "pr-nm-from") S.nm.from = v; else S.nm.to = v;
+      if (S.nm.from > S.nm.to) { var z2 = S.nm.from; S.nm.from = S.nm.to; S.nm.to = z2; }
+      syncNmBand(); syncSub(); loadNm();
+    }
     else if (id === "pr-jlb-month") { S.jlb.month = v; syncJcBand(); syncSub(); loadJlb(); }
     else if (id === "pr-jc-month") { S.jc.month = v; S.jc.card = "all"; syncJcBand(); syncSub(); loadJc(); }
     else if (id === "pr-dp-plant") { S.dp.plant = v; store("dp-plant", v); syncDpBand(); syncSub(); loadDp(); }
@@ -1071,7 +1192,7 @@
       syncDpBand(); syncSub(); loadDp();
     }
   });
-  $("#pr-refresh").addEventListener("click", function () { if (S.sec === "jobcard") loadJc(); else if (S.sec === "daily") loadDp(); else if (S.sec === "perf") loadPf(); else loadPl(); });
+  $("#pr-refresh").addEventListener("click", function () { if (S.sec === "jobcard") loadJc(); else if (S.sec === "daily") loadDp(); else if (S.sec === "perf") loadPf(); else if (S.sec === "nonmoving") loadNm(); else loadPl(); });
   $("#pr-print").addEventListener("click", function () { w.print(); });
 
   /* --- section switch --- */
@@ -1079,6 +1200,7 @@
     var sub = S.sec === "jobcard" ? (S.jlb.seg === "large" ? "Job Card \u00b7 Large Blow \u00b7 " + jlbLabel() : "Job Card \u00b7 Ultra \u00b7 " + (S.jc.status === "All" ? "All status" : S.jc.status) + " \u00b7 " + jcScope())
       : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
       : S.sec === "perf" ? "Performance \u00b7 " + monthOf(S.pf.from, S.pf.to) + " \u00b7 " + (S.pf.status === "All" ? "All status" : S.pf.status)
+      : S.sec === "nonmoving" ? "Non Moving \u00b7 " + monthOf(S.nm.from, S.nm.to) + " \u00b7 " + S.nm.wh + " \u00b7 " + S.nm.ig
       : "Planning \u00b7 " + ((PL_MONTHS.filter(function (m) { return m[0] === S.pl.month; })[0] || [0, "All months"])[1]);
     $$(".pr-sub").forEach(function (p) { p.textContent = sub; });
   }
@@ -1092,6 +1214,7 @@
     if (sec === "jobcard") { syncJcBand(); if (S.jlb.seg === "large" ? !S.jlb.rows : !S.jc.rows) loadJc(); }
     else if (sec === "daily") { syncDpBand(); if (S.dp.seg === "large" ? !S.lb.rows : !S.dp.rows) loadDp(); }
     else if (sec === "perf") { syncPfBand(); if (!S.pf.rows) loadPf(); }
+    else if (sec === "nonmoving") { syncNmBand(); if (!S.nm.rows) loadNm(); }
     else { syncPlBand(); if (!S.pl.rows) loadPl(); }
   }
 
@@ -1114,7 +1237,7 @@
   function openSettings() {
     var m = $("#pr-set");
     $(".pr-modal", m).innerHTML =
-      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning. View only \u2014 this page cannot change data. System Managers always have full access. Disabled users are not listed.</p></div>' +
+      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning / Non Moving. View only \u2014 this page cannot change data. System Managers always have full access. Disabled users are not listed.</p></div>' +
         '<button type="button" class="pr-ibtn" id="pr-set-x" title="Close">' + I.x + "</button></div>" +
       '<div class="pr-mb"><div class="pr-msg" id="pr-set-msg"></div>' +
         '<div class="pr-addbox"><div class="pr-add"><div class="pr-pick"><input type="text" id="pr-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="pr-pick-l" id="pr-set-l" hidden></div></div>' +
