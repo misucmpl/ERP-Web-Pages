@@ -517,3 +517,133 @@ body.agr-busy #agr-refresh svg { animation: agrSpin .9s linear infinite; }
 .agr-btn.ghost.del svg { width: 13px; height: 13px; }
 .agr-cconf.is-del { background: var(--out-l); border-color: #f0c4bf; }
 .agr-csub.is-done .agr-cact .why { margin-right: auto; margin-left: 4px; }
+
+/* ===== Access popup screen mein fit: page scroll nahi, sirf user list andar scroll ===== */
+#agr-set.agr-modal-bg { align-items: center !important; padding: 16px !important; overflow: hidden !important; }
+#agr-set .agr-modal { display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+#agr-set .agr-mh { flex: 0 0 auto; }
+#agr-set .agr-mb { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#agr-set .agr-mb > * { flex: 0 0 auto; }
+#agr-set .agr-ulist { flex: 1 1 auto !important; min-height: 72px; overflow-y: auto !important; overscroll-behavior: contain; scrollbar-width: thin; }
+@media (max-width: 760px) { #agr-set.agr-modal-bg { padding: 0 !important; align-items: stretch !important; } #agr-set .agr-modal { max-height: 100vh; max-height: 100dvh; border-radius: 0; } }
+
+/* Dispatch Entry: vehicle dropdown + "Add new" */
+.agr-cm .agr-cveh select { height: 52px; border: 1.5px solid var(--line2); border-radius: 10px; padding: 0 10px; font: inherit; font-size: 15px; font-weight: 800; letter-spacing: .03em; color: var(--ink); background: #fff; width: 100%; outline: none; cursor: pointer; }
+.agr-cm .agr-cveh select:focus { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.14); }
+.agr-cm .agr-cveh select:disabled { background: #f5f3ef; color: var(--mut); cursor: default; }
+.agr-cveh select[hidden], .agr-vnew[hidden] { display: none !important; }
+.agr-vnew { display: flex; gap: 6px; align-items: center; }
+.agr-vnew input { flex: 1; min-width: 0; }
+.agr-btn.sm { height: 52px; padding: 0 14px; }
+.agr-ibtn.sm { width: 34px; height: 34px; flex: 0 0 34px; }
+
+/* stock short: Material Receipt row + prompt */
+.agr-cplan .row.mr .n { background: #b45309; }
+.agr-cplan .row.mr b { color: #b45309; }
+.agr-cents a.mr { border-color: #f5d38a; background: #fffbeb; }
+.agr-cents a.mr b { color: #b45309; }
+.agr-cshort { border: 1px solid #f5d38a; background: #fffbeb; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; color: #7a4b00; font-size: 12.5px; }
+.agr-cshort > b { display: block; font-size: 13px; color: #92400e; margin-bottom: 6px; }
+.agr-cshort table { border-collapse: collapse; margin-bottom: 6px; }
+.agr-cshort td { padding: 2px 14px 2px 0; }
+.agr-cshort td + td { font-weight: 800; text-align: right; }
+.agr-cshort tr.hl td { color: #b91c1c; }
+.agr-cshort p { margin: 0; line-height: 1.45; }
+.agr-ver { font-size: 10.5px; font-weight: 600; color: #9a8f7c; background: #f5f1ea; border-radius: 99px; padding: 1px 8px; margin-left: 6px; vertical-align: middle; }
+/* ===== Dispatch Entry v3: Fender + Chain Set ek saath (dono ki qty, 1 Delivery Note) ===== */
+.agr-cm .agr-cin.agr-cin2 { grid-template-columns: minmax(0,2.4fr) minmax(0,.95fr) minmax(0,.6fr); }
+.agr-cpick2 .agr-cp { position: relative; display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 52px; padding: 6px 8px 6px 10px; border: 1.5px solid var(--line2); border-radius: 10px; background: #fff; cursor: text; transition: border-color .15s, box-shadow .15s, background .15s; }
+.agr-cpick2 .agr-cp:hover { border-color: var(--pri-b); }
+.agr-cpick2 .agr-cp:focus-within { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.12); }
+.agr-cpick2 .agr-cp .ic { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #f3efe8; color: var(--ink2); }
+.agr-cpick2 .agr-cp .ic svg { width: 18px; height: 18px; }
+.agr-cpick2 .agr-cp .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.agr-cpick2 .agr-cp .tx b { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.agr-cpick2 .agr-cp .tx small { font-size: 10.5px; line-height: 1.3; color: var(--mut); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agr-cpick2 .agr-cp .tx small.st { color: var(--ink2); font-weight: 600; }
+.agr-cpick2 .agr-cp .qb { flex: 0 0 96px; display: flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: #faf9f6; padding-right: 8px; }
+.agr-cm .agr-cpick2 .agr-cp .qb input { width: 100%; min-width: 0; height: 38px; border: 0; background: none; box-shadow: none; padding: 0 4px 0 8px; font: inherit; font-size: 18px; font-weight: 800; color: var(--ink); outline: none; text-align: right; }
+.agr-cpick2 .agr-cp .qb i { font-style: normal; font-size: 11px; font-weight: 600; color: var(--mut); }
+.agr-cpick2 .agr-cp.on { border-color: var(--pri); background: var(--pri-l); }
+.agr-cpick2 .agr-cp.on .ic { background: var(--pri); color: #fff; }
+.agr-cpick2 .agr-cp.on .qb { background: #fff; border-color: var(--pri-b); }
+.agr-cpick2 .agr-cp .qb input:disabled { color: var(--mut); }
+@media (max-width: 760px) {
+  .agr-cm .agr-cin.agr-cin2 { grid-template-columns: 1fr 1fr; }
+  .agr-cm .agr-cpick2 { grid-template-columns: 1fr; }
+}
+
+/* ===== Dispatch Entry v3.1: popup chauda, height kam (sab ek screen mein) ===== */
+.agr-modal.agr-cm { max-width: min(1320px, calc(100vw - 32px)); }
+.agr-cm .agr-cin.agr-cin2 { grid-template-columns: minmax(0,3fr) minmax(190px,1fr) minmax(120px,.55fr); align-items: end; }
+.agr-cm .agr-cpick2 { min-width: 0; }
+.agr-cpick2 .agr-cp { min-width: 0; overflow: hidden; }
+.agr-cpick2 .agr-cp .qb { flex: 0 0 150px; height: 40px; }
+.agr-cm .agr-cpick2 .agr-cp .qb input { font-size: 20px; padding: 0 6px 0 10px; -moz-appearance: textfield; }
+.agr-cpick2 .agr-cp .qb input::-webkit-outer-spin-button,
+.agr-cpick2 .agr-cp .qb input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.agr-cpick2 .agr-cp .qb i { flex: 0 0 auto; }
+/* do tables (Part + Delivery Challan) side by side */
+.agr-cm .agr-ctabs { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr); gap: 8px; align-items: start; margin-bottom: 6px; }
+.agr-cm .agr-ctabs .agr-tw { margin-bottom: 0; }
+/* ERP entries 2 column mein */
+.agr-cm .agr-cplan { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); column-gap: 18px; }
+.agr-cm .agr-cplan .h, .agr-cm .agr-cplan .none, .agr-cm .agr-cplan .row.dn { grid-column: 1 / -1; }
+.agr-cm .agr-cplan .row:nth-of-type(2) { border-top: 0; }
+.agr-cm .agr-cplan .row em { word-break: normal; overflow-wrap: anywhere; }
+.agr-cm .agr-cres .c small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1000px) {
+  .agr-cm .agr-ctabs, .agr-cm .agr-cplan { grid-template-columns: 1fr; }
+  .agr-cm .agr-cplan .row:nth-of-type(2) { border-top: 1px solid #efebe3; }
+}
+@media (max-width: 760px) {
+  .agr-cm .agr-cin.agr-cin2 { grid-template-columns: 1fr 1fr; }
+  .agr-cpick2 .agr-cp .qb { flex-basis: 120px; }
+}
+.agr-cm .agr-cplan .row b { white-space: nowrap; }
+.agr-cm .agr-cplan .row.dn { grid-template-columns: 24px minmax(0,1fr) 24px minmax(0,1fr); }
+
+/* ===== Dispatch Entry: Vehicle picker (custom dropdown) ===== */
+.agr-vdd { position: relative; }
+.agr-vbtn { width: 100%; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px; border: 1.5px solid var(--line2); border-radius: 10px; background: #fff; cursor: pointer; text-align: left; color: var(--ink); transition: border-color .15s, box-shadow .15s; }
+.agr-vbtn:hover { border-color: var(--pri-b); }
+.agr-vdd.open .agr-vbtn, .agr-vbtn:focus-visible { border-color: var(--pri); box-shadow: 0 0 0 3px rgba(192,98,12,.14); outline: none; }
+.agr-vbtn:disabled { background: #f5f3ef; cursor: default; }
+.agr-vbtn .vi, .agr-vlist .vi { flex: 0 0 34px; width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--pri-l); color: var(--pri); }
+.agr-vbtn b { flex: 1; min-width: 0; font-size: 16px; font-weight: 800; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agr-vbtn b.ph { font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--mut); }
+.agr-vbtn .cr { color: var(--mut); display: flex; transition: transform .15s; }
+.agr-vdd.open .agr-vbtn .cr { transform: rotate(180deg); }
+.agr-vpop { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: max(100%, 280px); background: #fff; border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 20px 40px -18px rgba(29,35,48,.45); padding: 6px; }
+.agr-vlist { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.agr-vlist button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: none; cursor: pointer; text-align: left; color: var(--ink); }
+.agr-vlist button:hover { background: #faf6ef; }
+.agr-vlist button b { flex: 1; font-size: 14.5px; font-weight: 700; letter-spacing: .04em; }
+.agr-vlist button .vi { flex-basis: 30px; width: 30px; height: 30px; background: #f3efe8; color: var(--ink2); }
+.agr-vlist button.on { background: var(--pri-l); }
+.agr-vlist button.on .vi { background: var(--pri); color: #fff; }
+.agr-vlist button .ok { color: var(--pri); display: flex; }
+.agr-vadd { display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line2); }
+.agr-cm .agr-vadd input { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line2); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; outline: none; background: #faf9f6; }
+.agr-cm .agr-vadd input::placeholder { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--mut); }
+.agr-cm .agr-vadd input:focus { border-color: var(--pri); background: #fff; }
+.agr-cm .agr-vadd .agr-btn { height: 36px; padding: 0 14px; font-size: 13px; }
+
+/* ===== v3.2: ERP entries ek-ek line mein (1, 2, 3 neeche-neeche) + label alignment ===== */
+.agr-cm .agr-cplan { display: block; }
+.agr-cm .agr-cplan .row,
+.agr-cm .agr-cplan .row.dn { display: grid; grid-template-columns: 22px minmax(0,1.25fr) 22px minmax(0,1fr); align-items: center; gap: 10px; padding: 5px 0; border-top: 1px solid #efebe3; }
+.agr-cm .agr-cplan .h + .row { border-top: 0; }
+.agr-cm .agr-cplan .row.dn { border-top: 1px dashed var(--line2); }
+.agr-cm .agr-cplan .row .src, .agr-cm .agr-cplan .row .tgt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agr-cm .agr-cplan .row em { word-break: normal; overflow-wrap: normal; }
+/* Bootstrap ka label margin-bottom hatao — Vehicle No aur Distance ek seedh mein */
+.agr-cm .agr-cin label, .agr-cm .agr-cin .agr-cqty { margin: 0; }
+.agr-cm .agr-cin .agr-cqty > span:first-child { line-height: 1.3; }
+.agr-cm .agr-cdist input { height: 52px; }
+.agr-vbtn { margin: 0; }
+@media (max-width: 760px) {
+  .agr-cm .agr-cplan .row, .agr-cm .agr-cplan .row.dn { grid-template-columns: 22px minmax(0,1fr); }
+  .agr-cm .agr-cplan .row .arr { display: none; }
+  .agr-cm .agr-cplan .row .tgt { grid-column: 2; }
+}
