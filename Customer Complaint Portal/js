@@ -1,6 +1,6 @@
 /* ============================================================
-   UCMPL · Customer Complaints · Dashboard — JS
-   Web Page → Javascript box mein poora paste karein.
+   UCMPL \u00b7 Customer Complaints \u00b7 Dashboard \u2014 JS
+   Web Page \u2192 Javascript box mein poora paste karein.
    API: /api/method/ucm_complaints  (DocType: Customer Complaint)
    ============================================================ */
 (function () {
@@ -53,7 +53,7 @@ const PAGE = 25;
 const st = { all: [], month: "", status: "", type: "", q: "", cur: null, show: PAGE, canDelete: false, cn: null };
 const CN_API = "/api/method/ucm_complaint_credit_notes";
 const ACCESS_API = "/api/method/ucm_complaint_access";
-/* access: view / log (sales) / quality / full / admin — set from ⚙️ Settings */
+/* access: view / log (sales) / quality / full / admin \u2014 set from \u2699\ufe0f Settings */
 let acc = { can_view: false, can_log: false, can_reply: false, can_close: false, can_comment: false, is_admin: false, level: "none" };
 
 function msg(el, text, kind) {
@@ -84,7 +84,18 @@ async function load(keepId) {
   try {
     const j = await api(API);
     if (!j) return;
-    st.all = Array.isArray(j.message) ? j.message : [];
+    /* API kabhi list seedha, kabhi {data: [...]} mein bhejta hai: dono chalein */
+    let list = j.message;
+    if (!Array.isArray(list)) list = (list && (list.data || list.complaints || list.rows)) || j.data;
+    if (!Array.isArray(list)) {
+      const got = JSON.stringify(j.message === undefined ? j : j.message).slice(0, 160);
+      msg($("dMsg"), "The ucm_complaints API did not return a list of complaints. It returned: " + got +
+        ". Open Server Script \"ucm_complaints\" and check that it is the complaints script (not ucm_complaint_access).");
+      list = [];
+    }
+    st.all = list;
+    /* jis complaint ka Quality reply aa chuka hai par status abhi bhi "Open" hai, use "Replied" gino */
+    st.all.forEach((c) => { if (c.status === "Open" && (String(c.quality_reply || "").trim() || c.replied_on)) c.status = "Replied"; });
     st.canDelete = !!j.can_delete;
     if (st.cn === null) loadCN();
     buildFilters();
@@ -100,17 +111,14 @@ async function load(keepId) {
 }
 
 function buildFilters() {
-  const mSel = $("dMonth"), tSel = $("dType");
+  const mSel = $("dMonth");
   const months = {}, types = {};
   st.all.forEach((c) => { months[String(c.logged_on).slice(0, 7)] = 1; if (c.complaint_type) types[c.complaint_type] = 1; });
-  const keepM = mSel.value, keepT = tSel.value;
+  const keepM = mSel.value, keepT = st.type;
   mSel.innerHTML = '<option value="">All months</option>' + Object.keys(months).sort().reverse()
     .map((k) => `<option value="${k}">${MONTHS_FULL[+k.slice(5) - 1]} ${k.slice(0, 4)}</option>`).join("");
-  tSel.innerHTML = '<option value="">All types</option>' + Object.keys(types).sort()
-    .map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
   mSel.value = months[keepM] ? keepM : "";
-  tSel.value = types[keepT] ? keepT : "";
-  st.month = mSel.value; st.type = tSel.value;
+  st.month = mSel.value; st.type = types[keepT] ? keepT : "";
 }
 
 /* rows matching month + type + search (status applied separately so KPIs show the split) */
@@ -217,15 +225,15 @@ function table(rows) {
   $("tList").innerHTML = shown.map((c) => {
     const h = replyHours(c);
     const rep = h != null
-      ? `<span class="rep">Reply in <b>${dur(h)}</b>${c.replied_by_name ? " · " + esc(c.replied_by_name) : ""}</span>`
-      : (c.quality_reply ? '<span class="rep">Replied</span>' : '<span class="rep pending">Reply pending</span>');
+      ? `<span class="rep">Reply in <b>${dur(h)}</b>${c.replied_by_name ? " \u00b7 " + esc(c.replied_by_name) : ""}</span>`
+      : (c.status !== "Open" && c.quality_reply ? '<span class="rep">Replied</span>' : '<span class="rep pending">Reply pending</span>');
     return `<div class="ucd-item ${esc(c.status)}${st.cur && st.cur.name === c.name ? " cur" : ""}" data-id="${esc(c.name)}">
       <div class="ucd-it-top"><span class="id">${esc(c.name)}</span><span class="ucd-badge ${esc(c.status)}">${esc(c.status)}</span>${c.complaint_type ? `<span class="type">${esc(c.complaint_type)}</span>` : ""}</div>
       <div class="ucd-it-cust" title="${esc(c.customer_name || c.customer)}">${esc(c.customer_name || c.customer)}</div>
-      <div class="ucd-it-meta" title="${esc(c.item_code)}"><b>${esc(c.item_code)}</b> · Inv ${esc(c.invoice_no)}${c.invoice_date ? " (" + fDate(c.invoice_date) + ")" : ""}</div>
+      <div class="ucd-it-meta" title="${esc(c.item_code)}"><b>${esc(c.item_code)}</b> \u00b7 Inv ${esc(c.invoice_no)}${c.invoice_date ? " (" + fDate(c.invoice_date) + ")" : ""}</div>
       ${c.complaint ? `<div class="ucd-it-text">${esc(c.complaint)}</div>` : ""}
       <div class="ucd-it-side">
-        <span class="when">${fDate(c.logged_on)}<small>${fTime(c.logged_on)} · ${ago(c.logged_on)}</small></span>
+        <span class="when">${fDate(c.logged_on)}<small>${fTime(c.logged_on)} \u00b7 ${ago(c.logged_on)}</small></span>
         <span class="rep">by ${esc(c.logged_by_name || "")}</span>
         ${rep}
       </div>
@@ -262,22 +270,16 @@ function openDrawer(c) {
       meta.push(fDate(c.replied_on) + ", " + fTime(c.replied_on));
       meta.push(dur(replyHours(c)) + " after logging");
     }
-    $("dwReplyShow").innerHTML = `<p class="ucd-sec">Quality reply</p><div class="ucd-box q">${meta.length ? `<span class="who">${meta.join(" &middot; ")}</span>` : ""}${esc(c.quality_reply)}</div>`;
-    $("dwReplyLbl").textContent = "Update reply";
+    $("dwReplyShow").innerHTML = `<p class="ucd-sec">Reply (earlier)</p><div class="ucd-box q">${meta.length ? `<span class="who">${meta.join(" &middot; ")}</span>` : ""}${esc(c.quality_reply)}</div>`;
   } else {
     $("dwReplyShow").innerHTML = "";
-    $("dwReplyLbl").textContent = "Quality reply";
   }
-  $("dwReply").value = "";
-  $("dwReply").placeholder = c.quality_reply
-    ? "Write the updated reply here. It will replace the reply above\u2026"
-    : "Root cause, action taken, and what the customer should expect\u2026";
   const closed = c.status === "Closed";
-  $("dwReplyEdit").style.display = closed || !acc.can_reply ? "none" : "";
-  $("dwSave").style.display = closed || !acc.can_reply ? "none" : "";
   $("dwDone").style.display = acc.can_close ? "" : "none";
   $("dwCmAdd").style.display = acc.can_comment ? "" : "none";
   $("dwCmText").value = "";
+  $("dwAtt").innerHTML = ""; $("dwReplyAtt").innerHTML = "";
+  cmPick.clear();
   loadComments(c.name);
   $("dwDone").textContent = closed ? "Reopen" : "Mark Closed";
   $("dwDone").classList.toggle("green", !closed);
@@ -308,7 +310,7 @@ function lockScroll(on) {
 async function update(fields, okText) {
   const c = st.cur;
   if (!c) return;
-  const btns = [$("dwSave"), $("dwDone"), $("dwDel")];
+  const btns = [$("dwDone"), $("dwDel")];
   btns.forEach((b) => (b.disabled = true));
   try {
     await api(`/api/resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(c.name)}`,
@@ -321,12 +323,6 @@ async function update(fields, okText) {
   btns.forEach((b) => (b.disabled = false));
 }
 
-$("dwSave").addEventListener("click", () => {
-  const t = $("dwReply").value.trim();
-  if (t.length < 5) { msg($("dwMsg"), "Write the reply first (at least a few words)."); return; }
-  if (st.cur && t === (st.cur.quality_reply || "")) { msg($("dwMsg"), "Reply is unchanged."); return; }
-  update({ quality_reply: t }, "Reply saved and posted on the invoice.");
-});
 /* Delete: System Manager only, click twice to confirm */
 let delTimer;
 function resetDel() { const b = $("dwDel"); b.classList.remove("arm"); b.textContent = "Delete"; clearTimeout(delTimer); }
@@ -354,7 +350,7 @@ $("dwDel").addEventListener("click", async () => {
 
 $("dwDone").addEventListener("click", () => {
   if (!st.cur) return;
-  if (st.cur.status === "Closed") update({ status: st.cur.quality_reply ? "Replied" : "Open" }, "Complaint reopened.");
+  if (st.cur.status === "Closed") update({ status: (st.cur.quality_reply || st.cur.replied_on) ? "Replied" : "Open" }, "Complaint reopened.");
   else update({ status: "Closed" }, "Complaint closed.");
 });
 $("dwClose").addEventListener("click", closeDrawer);
@@ -430,7 +426,6 @@ $("cnClose").addEventListener("click", closeCN);
 
 /* ---------------- filters ---------------- */
 $("dMonth").addEventListener("change", (e) => { st.month = e.target.value; render(); });
-$("dType").addEventListener("change", (e) => { st.type = e.target.value; render(); });
 let tmr;
 $("dSearch").addEventListener("input", (e) => { clearTimeout(tmr); tmr = setTimeout(() => { st.q = e.target.value.trim(); render(); }, 150); });
 $("dStatus").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; st.status = b.dataset.s; render(); });
@@ -449,40 +444,262 @@ root.addEventListener("mousemove", (e) => {
 });
 root.addEventListener("mouseleave", () => { tip.style.display = "none"; });
 
-/* ---------------- comments (Sales + Quality) ---------------- */
-const fWhen = (s) => s ? fDate(s) + ", " + fTime(s) : "";
-function drawComments(list) {
-  $("dwCmN").textContent = list.length ? "(" + list.length + ")" : "";
-  $("dwCmList").innerHTML = list.length ? list.map((m) => `
-    <div class="ucd-cm-item${m.user === acc.user ? " me" : ""}">
-      <div class="ucd-cm-av">${esc(String(m.by || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase())}</div>
-      <div class="ucd-cm-b"><div class="ucd-cm-h"><b>${esc(m.by)}</b><span>${fWhen(m.on)} &middot; ${ago(m.on)}</span></div>
-      <div class="ucd-cm-t">${esc(m.text)}</div></div>
-    </div>`).join("") : '<div class="ucd-cm-none">No comments yet.</div>';
+/* ---------------- photos / videos (log, reply, comment) ---------------- */
+const ATT = {
+  MAX_FILES: 6,
+  VIDEO_MAX: 10 * 1024 * 1024,      /* video: 10 MB tak */
+  IMAGE_MAX: 10 * 1024 * 1024,      /* photo: compress ke baad 10 MB tak */
+  IMG_EDGE: 1920                    /* badi photo ko 1920px tak chhota karke bhejo */
+};
+const fSize = (b) => b >= 1048576 ? (Math.round(b / 104857.6) / 10) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+const isVid = (n) => /\.(mp4|mov|m4v|webm|3gp|mkv|avi)$/i.test(String(n || "").split("?")[0]);
+const isImg = (n) => /\.(jpe?g|png|gif|webp|heic|heif|bmp)$/i.test(String(n || "").split("?")[0]);
+
+/* badi photo ko browser mein hi chhota karo (JPEG), taaki upload jaldi ho */
+function shrinkImage(file) {
+  return new Promise((resolve) => {
+    if (!/^image\/(jpeg|png|webp)$/i.test(file.type) || file.size < 1.2 * 1048576) { resolve(file); return; }
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, ATT.IMG_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+      const cx = cv.getContext("2d");
+      cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
+      cx.drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob((b) => {
+        if (!b || b.size >= file.size) { resolve(file); return; }
+        resolve(new File([b], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" }));
+      }, "image/jpeg", 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
 }
+
+/* picker: "+ Photo / Video" button + chhote thumbnails, x se hatao */
+function attPicker(boxId, msgEl) {
+  const box = $(boxId);
+  const P = { files: [], busy: false };
+  box.innerHTML = `<input type="file" accept="image/*,video/*" multiple hidden>
+    <button class="ucd-att-add" type="button" title="Add photos or videos (video up to 10 MB)">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+      <span>Photo / Video</span></button>
+    <div class="ucd-att-list"></div>`;
+  const inp = box.querySelector("input"), list = box.querySelector(".ucd-att-list");
+  function draw() {
+    list.innerHTML = P.files.map((f, i) => `<div class="ucd-att-it${f.vid ? " v" : ""}" title="${esc(f.file.name)} \u00b7 ${fSize(f.file.size)}">
+      ${f.vid ? `<video src="${f.url}#t=0.3" muted preload="metadata"></video><i>&#9654;</i>` : `<img src="${f.url}" alt="">`}
+      <small>${fSize(f.file.size)}</small>
+      <button type="button" data-i="${i}" aria-label="Remove">&times;</button></div>`).join("");
+    box.classList.toggle("has", P.files.length > 0);
+  }
+  box.querySelector(".ucd-att-add").addEventListener("click", () => { if (!P.busy) inp.click(); });
+  list.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-i]"); if (!b || P.busy) return;
+    const f = P.files.splice(+b.dataset.i, 1)[0];
+    if (f) URL.revokeObjectURL(f.url);
+    draw();
+  });
+  inp.addEventListener("change", async () => {
+    const picked = Array.prototype.slice.call(inp.files || []);
+    inp.value = "";
+    const bad = [];
+    for (const raw of picked) {
+      if (P.files.length >= ATT.MAX_FILES) { bad.push("Only " + ATT.MAX_FILES + " files can be added at a time."); break; }
+      const vid = /^video\//i.test(raw.type) || isVid(raw.name);
+      const img = /^image\//i.test(raw.type) || isImg(raw.name);
+      if (!vid && !img) { bad.push(raw.name + ": only photos and videos can be added."); continue; }
+      if (vid && raw.size > ATT.VIDEO_MAX) { bad.push(raw.name + " is " + fSize(raw.size) + ". Videos must be 10 MB or smaller."); continue; }
+      const file = vid ? raw : await shrinkImage(raw);
+      if (!vid && file.size > ATT.IMAGE_MAX) { bad.push(raw.name + " is too large (" + fSize(file.size) + "). Photos must be 10 MB or smaller."); continue; }
+      P.files.push({ file: file, vid: vid, url: URL.createObjectURL(file) });
+    }
+    draw();
+    if (msgEl) msg(msgEl, bad.join(" "));
+  });
+  P.clear = () => { P.files.forEach((f) => URL.revokeObjectURL(f.url)); P.files = []; draw(); };
+  P.lock = (on) => { P.busy = on; box.classList.toggle("busy", on); };
+  return P;
+}
+
+/* ek-ek file Frappe upload_file se complaint par attach karo (private) */
+function uploadOne(file, docname, onPct) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    fd.append("is_private", "1");
+    fd.append("doctype", DOCTYPE);
+    fd.append("docname", docname);
+    fd.append("folder", "Home/Attachments");
+    const x = new XMLHttpRequest();
+    x.open("POST", "/api/method/upload_file");
+    x.setRequestHeader("Accept", "application/json");
+    x.setRequestHeader("X-Frappe-CSRF-Token", (window.frappe && window.frappe.csrf_token) || window.csrf_token || "");
+    x.upload.onprogress = (e) => { if (e.lengthComputable && onPct) onPct(e.loaded / e.total); };
+    x.onload = () => {
+      let j = {}; try { j = JSON.parse(x.responseText); } catch (e) {}
+      if (x.status >= 200 && x.status < 300 && j.message && j.message.file_url) { resolve(j.message); return; }
+      let why = "";
+      try { why = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) {}
+      if (x.status === 413) why = "File is larger than the server allows";
+      reject(new Error((why || j.exc_type || ("upload failed (" + x.status + ")")).replace(/<[^>]+>/g, "") + " \u2013 " + file.name));
+    };
+    x.onerror = () => reject(new Error("Network error while uploading " + file.name));
+    x.send(fd);
+  });
+}
+async function uploadAll(P, docname, btn) {
+  const out = [], n = P.files.length, label = btn ? btn.textContent : "";
+  for (let i = 0; i < n; i++) {
+    const show = (p) => { if (btn) btn.textContent = "Uploading " + (i + 1) + "/" + n + " \u00b7 " + Math.round(p * 100) + "%"; };
+    show(0);
+    out.push(await uploadOne(P.files[i].file, docname, show));
+  }
+  if (btn) btn.textContent = label;
+  return out;
+}
+
+/* gallery: photos / videos ke thumbnails; click se badi viewer */
+function gallery(files, title) {
+  if (!files || !files.length) return "";
+  return (title ? `<p class="ucd-sec">${title} <span>(${files.length})</span></p>` : "") +
+    '<div class="ucd-gal-grid">' + files.map((f) => {
+      const nm = f.file_name || String(f.url).split("/").pop();
+      const tip = esc(nm) + (f.by ? " \u00b7 " + esc(f.by) : "") + (f.on ? " \u00b7 " + fDate(f.on) + ", " + fTime(f.on) : "");
+      if (isImg(nm) || isImg(f.url)) return `<button type="button" class="ucd-th" data-u="${esc(f.url)}" data-n="${esc(nm)}" title="${tip}"><img src="${esc(f.url)}" loading="lazy" alt=""></button>`;
+      if (isVid(nm) || isVid(f.url)) return `<button type="button" class="ucd-th v" data-u="${esc(f.url)}" data-n="${esc(nm)}" title="${tip}"><video src="${esc(f.url)}#t=0.5" muted preload="metadata"></video><i>&#9654;</i></button>`;
+      return `<a class="ucd-th file" href="${esc(f.url)}" target="_blank" rel="noopener" title="${tip}"><b>${esc((nm.split(".").pop() || "file").toUpperCase())}</b><small>${esc(nm)}</small></a>`;
+    }).join("") + "</div>";
+}
+/* files ko 3 jagah baanto: complaint ke saath / reply ke saath / comment ke saath */
+function splitFiles(m) {
+  const inCm = {};
+  (m.comments || []).forEach((c) => (c.files || []).forEach((u) => (inCm[u] = 1)));
+  const made = pd(m.created), log = [], rep = [];
+  (m.files || []).forEach((f) => {
+    if (inCm[f.url]) return;
+    const t = pd(f.on);
+    if (m.owner && f.user === m.owner && made && t && (t - made) <= 30 * 60e3) log.push(f); else rep.push(f);
+  });
+  return { log: log, rep: rep };
+}
+
+/* viewer (lightbox) */
+const LB = { list: [], i: 0 };
+function lbShow() {
+  const f = LB.list[LB.i]; if (!f) return;
+  $("dLbName").textContent = f.n + (LB.list.length > 1 ? "  (" + (LB.i + 1) + " of " + LB.list.length + ")" : "");
+  $("dLbOpen").href = f.u;
+  $("dLbBody").innerHTML = isVid(f.n) || isVid(f.u)
+    ? `<video src="${esc(f.u)}" controls autoplay playsinline></video>`
+    : `<img src="${esc(f.u)}" alt="">`;
+  $("dLbPrev").hidden = $("dLbNext").hidden = LB.list.length < 2;
+}
+function lbOpen(btn) {
+  const grid = btn.closest(".ucd-gal-grid");
+  LB.list = Array.prototype.map.call(grid.querySelectorAll(".ucd-th[data-u]"), (b) => ({ u: b.dataset.u, n: b.dataset.n }));
+  LB.i = Math.max(0, LB.list.findIndex((x) => x.u === btn.dataset.u));
+  $("dLb").hidden = false;
+  lbShow();
+}
+function lbClose() { $("dLb").hidden = true; $("dLbBody").innerHTML = ""; }
+function lbStep(d) { if (LB.list.length < 2) return; LB.i = (LB.i + d + LB.list.length) % LB.list.length; lbShow(); }
+$("dDrawer").addEventListener("click", (e) => { const b = e.target.closest(".ucd-th[data-u]"); if (b) lbOpen(b); });
+$("dLbClose").addEventListener("click", lbClose);
+$("dLbPrev").addEventListener("click", () => lbStep(-1));
+$("dLbNext").addEventListener("click", () => lbStep(1));
+$("dLb").addEventListener("mousedown", (e) => { if (e.target === $("dLb") || e.target === $("dLbBody")) lbClose(); });
+/* viewer khula ho to Esc / tir sirf viewer ke liye (drawer band na ho) */
+document.addEventListener("keydown", (e) => {
+  if ($("dLb").hidden) return;
+  if (e.key === "Escape") { lbClose(); e.stopImmediatePropagation(); e.preventDefault(); }
+  else if (e.key === "ArrowLeft") lbStep(-1);
+  else if (e.key === "ArrowRight") lbStep(1);
+}, true);
+
+const cmPick = attPicker("dwCmPick", $("dwMsg"));
+
+/* ---------------- replies (koi bhi: Sales / Quality) -- ERPNext comments mein save ---------------- */
+const fWhen = (s) => s ? fDate(s) + ", " + fTime(s) : "";
+function drawComments(list, m) {
+  m = m || {};
+  const byUrl = {};
+  (m.files || []).forEach((f) => (byUrl[f.url] = f));
+  const sp = splitFiles(m);
+  $("dwAtt").innerHTML = gallery(sp.log, "Photos / videos with complaint");
+  $("dwReplyAtt").innerHTML = gallery(sp.rep, "Photos / videos with reply");
+  $("dwCmN").textContent = list.length ? "(" + list.length + ")" : "";
+  cmList = list;
+  $("dwCmList").innerHTML = list.length ? list.map((m) => `
+    <div class="ucd-cm-item${m.user === acc.user ? " me" : ""}" data-cm="${esc(m.name)}">
+      <div class="ucd-cm-av">${esc(String(m.by || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase())}</div>
+      <div class="ucd-cm-b"><div class="ucd-cm-h"><b>${esc(m.by)}</b><span>${fWhen(m.on)} &middot; ${ago(m.on)}${m.edited ? " &middot; <i>edited</i>" : ""}</span>
+        ${m.editable ? `<button type="button" class="ucd-cm-edit" data-edit="${esc(m.name)}" title="You can edit this reply until someone replies after it">Edit</button>` : ""}</div>
+      <div class="ucd-cm-body">${m.text ? `<div class="ucd-cm-t">${esc(m.text)}</div>` : ""}</div>${gallery((m.files || []).map((u) => byUrl[u] || { url: u }))}</div>
+    </div>`).join("") : '<div class="ucd-cm-none">No replies yet.</div>';
+}
+/* apna aakhri reply edit (jab tak uske baad koi reply nahi aaya) */
+let cmList = [];
+$("dwCmList").addEventListener("click", async (e) => {
+  const eb = e.target.closest("[data-edit]");
+  if (eb) {
+    const m = cmList.find((x) => x.name === eb.dataset.edit); if (!m) return;
+    const item = eb.closest(".ucd-cm-item"), body = item.querySelector(".ucd-cm-body");
+    eb.hidden = true;
+    body.innerHTML = `<div class="ucd-cm-ed"><textarea maxlength="2000">${esc(m.text || "")}</textarea>
+      <div class="ucd-cm-edb"><button type="button" class="ucd-btn ghost" data-ecancel="1">Cancel</button><button type="button" class="ucd-btn" data-esave="${esc(m.name)}">Save</button></div></div>`;
+    const ta = body.querySelector("textarea"); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    return;
+  }
+  if (e.target.closest("[data-ecancel]")) { if (st.cur) loadComments(st.cur.name); return; }
+  const sb = e.target.closest("[data-esave]");
+  if (sb) {
+    const c = st.cur; if (!c) return;
+    const t = sb.closest(".ucd-cm-ed").querySelector("textarea").value.trim();
+    sb.disabled = true; sb.textContent = "Saving\u2026";
+    try {
+      const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify({ action: "edit_comment", name: c.name, comment: sb.dataset.esave, text: t }) });
+      const m = (j && j.message) || {};
+      msg($("dwMsg"), "Reply updated.", "ok");
+      if (st.cur && st.cur.name === c.name) drawComments(m.comments || [], m);
+    } catch (err) {
+      msg($("dwMsg"), "Not saved: " + err.message);
+      if (st.cur) loadComments(st.cur.name);
+    }
+  }
+});
 async function loadComments(name) {
   $("dwCmN").textContent = "";
-  $("dwCmList").innerHTML = '<div class="ucd-cm-none">Loading comments&hellip;</div>';
+  $("dwCmList").innerHTML = '<div class="ucd-cm-none">Loading replies&hellip;</div>';
   try {
     const j = await api(ACCESS_API + "?action=comments&name=" + encodeURIComponent(name));
-    if (st.cur && st.cur.name === name) drawComments((j && j.message && j.message.comments) || []);
-  } catch (e) { $("dwCmList").innerHTML = '<div class="ucd-cm-none">Could not load comments: ' + esc(e.message) + "</div>"; }
+    const m = (j && j.message) || {};
+    if (st.cur && st.cur.name === name) drawComments(m.comments || [], m);
+  } catch (e) { $("dwCmList").innerHTML = '<div class="ucd-cm-none">Could not load replies: ' + esc(e.message) + "</div>"; }
 }
 $("dwCmSend").addEventListener("click", async () => {
   const c = st.cur, t = $("dwCmText").value.trim(), b = $("dwCmSend");
   if (!c) return;
-  if (t.length < 2) { msg($("dwMsg"), "Write a comment first."); return; }
-  b.disabled = true;
+  if (t.length < 2 && !cmPick.files.length) { msg($("dwMsg"), "Write a reply or add a photo / video first."); return; }
+  b.disabled = true; cmPick.lock(true);
   try {
-    const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify({ action: "comment", name: c.name, text: t }) });
+    const up = cmPick.files.length ? await uploadAll(cmPick, c.name, b) : [];
+    const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify({ action: "comment", name: c.name, text: t, files: up.map((f) => f.file_url) }) });
     $("dwCmText").value = "";
+    cmPick.clear();
     msg($("dwMsg"), "");
-    if (st.cur && st.cur.name === c.name) drawComments((j && j.message && j.message.comments) || []);
-  } catch (e) { msg($("dwMsg"), "Comment not posted: " + e.message); }
-  b.disabled = false;
+    const m = (j && j.message) || {};
+    /* pehla reply: status Open -> Replied, list bhi refresh */
+    if (m.status_changed) { b.textContent = "Send reply"; b.disabled = false; cmPick.lock(false); await load(c.name); msg($("dwMsg"), "Reply sent. Status is now Replied.", "ok"); return; }
+    if (st.cur && st.cur.name === c.name) drawComments(m.comments || [], m);
+  } catch (e) { msg($("dwMsg"), "Reply not sent: " + e.message); }
+  b.textContent = "Send reply";
+  b.disabled = false; cmPick.lock(false);
 });
 
-/* ---------------- ⚙️ access settings (System Manager) ---------------- */
+/* ---------------- \u2699\ufe0f access settings (System Manager) ---------------- */
 const LV = { admin: "System Manager", full: "Full", quality: "Quality", log: "Log \u00b7 Sales", view: "View" };
 const sv = { users: [], cand: [], pick: null };
 function openSettings() { $("sBg").hidden = false; lockScroll(true); msg($("sMsg"), ""); loadSettings(); }
@@ -491,7 +708,7 @@ async function loadSettings(body) {
   try {
     const j = await api(ACCESS_API, { method: "POST", body: JSON.stringify(body || { action: "list" }) });
     const m = (j && j.message) || {};
-    sv.users = m.users || []; sv.cand = m.candidates || [];
+    sv.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); sv.cand = m.candidates || [];
     drawSettings();
     return true;
   } catch (e) { msg($("sMsg"), (body ? "Not saved: " : "Could not load users: ") + e.message); return false; }
@@ -549,6 +766,42 @@ $("sList").addEventListener("click", async (e) => {
   if (await loadSettings({ action: "set", user: b.dataset.rm, level: "none" })) msg($("sMsg"), "Access removed for " + b.dataset.rm + ".", "ok");
 });
 $("dGear").addEventListener("click", openSettings);
+
+/* ---------------- Log Complaint popup ---------------- */
+function openLog() {
+  if (!acc.can_log) return;
+  const f = $("lgFrame");
+  $("lgLoad").hidden = false; f.style.visibility = "hidden";
+  f.src = "/log-complaint?embed=1&t=" + Date.now();
+  $("lgBg").hidden = false; lockScroll(true);
+}
+function closeLog() {
+  if ($("lgBg").hidden) return;
+  $("lgBg").hidden = true; $("lgFrame").src = "about:blank";
+  if (!st.cur) lockScroll(false);
+}
+$("lgFrame").addEventListener("load", () => {
+  if ($("lgFrame").src.indexOf("about:blank") >= 0) return;
+  $("lgLoad").hidden = true; $("lgFrame").style.visibility = "";
+});
+root.addEventListener("click", (e) => {
+  const a = e.target.closest('a[href^="/log-complaint"]');
+  if (!a || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  e.preventDefault(); openLog();
+});
+$("lgClose").addEventListener("click", closeLog);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLog(); });
+/* form ke andar se message: complaint save hua \u2192 popup band, list refresh, naya complaint khulo */
+window.addEventListener("message", (e) => {
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.type === "ucm-complaint-logged") {
+    closeLog();
+    load(e.data.name || undefined).then(() => {
+      msg($("dMsg"), (e.data.name ? e.data.name + " logged." : "Complaint logged."), "ok");
+      setTimeout(() => msg($("dMsg"), ""), 4000);
+    });
+  } else if (e.data.type === "ucm-complaint-close") closeLog();
+});
 $("sClose").addEventListener("click", closeSettings);
 $("sBg").addEventListener("mousedown", (e) => { if (e.target === $("sBg")) closeSettings(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSettings(); });
