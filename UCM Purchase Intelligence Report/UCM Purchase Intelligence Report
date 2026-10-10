@@ -7,7 +7,7 @@
 # "UCM Purchase Intelligence" web page ka backend (sirf VIEW):
 #   action = "me"    → mera access                 (koi bhi logged-in user)
 #   action = "data"  → report data                 (View access)
-#                      days, item_group, mode = below / all / nonmoving / dana
+#                      days, item_group, mode = below / all / nonmoving / moving / dana
 #   action = "purchase" → Purchase part (UCM Purchase History jaisa) (View access)
 #                      item_group (default Packaging Materials), pichhle 5 mahine
 #   action = "list"  → access wale users           (sirf System Manager)
@@ -91,7 +91,7 @@ elif pir_action == "list" or pir_action == "set":
         user_roles[u].append(row.get("role"))
     users = []
     if user_roles:
-        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())]},
+        for info in frappe.get_all("User", filters={"name": ["in", list(user_roles.keys())], "enabled": 1},
                                    fields=["name", "full_name", "enabled"], limit_page_length=0):
             r = user_roles.get(info.get("name")) or []
             users.append({"user": info.get("name"), "full_name": info.get("full_name") or info.get("name"),
@@ -114,13 +114,15 @@ elif pir_action == "data":
     if item_group not in ["", "Packaging Materials", "Master Batch", "Granuals"]:
         item_group = ""
     mode = frappe.form_dict.get("mode") or "below"
-    if mode not in ["below", "all", "nonmoving", "dana"]:
+    if mode not in ["below", "all", "nonmoving", "moving", "dana"]:
         mode = "below"
     show_items = "Show Below Reorder"
     if mode == "all":
         show_items = "Show All Items"
     elif mode == "nonmoving":
         show_items = "Non Moving"
+    elif mode == "moving":
+        show_items = "Moving"
     warehouse = PIR_WAREHOUSE
 
     to_date = frappe.utils.nowdate()
@@ -309,18 +311,38 @@ elif pir_action == "data":
                   )
                 GROUP BY sle.item_code
             ) cons ON cons.item_code = i.item_code
+            LEFT JOIN (
+                -- Repack se andar aaya maal (Moving tab ke liye): Repack in -> Delivery Note out asli consumption nahi
+                SELECT
+                    sle.item_code,
+                    SUM(sle.actual_qty) AS repack_in
+                FROM `tabStock Ledger Entry` sle
+                INNER JOIN `tabStock Entry` se ON se.name = sle.voucher_no
+                WHERE sle.docstatus = 1
+                  AND sle.actual_qty > 0
+                  AND sle.voucher_type = 'Stock Entry'
+                  AND se.purpose = 'Repack'
+                  AND sle.warehouse = %(warehouse)s
+                  AND sle.posting_date >= DATE_SUB(CURDATE(), INTERVAL (%(days)s - 1) DAY)
+                GROUP BY sle.item_code
+            ) rp ON rp.item_code = i.item_code
             WHERE i.disabled = 0
               AND i.has_variants = 0
               AND i.item_group IN ('Packaging Materials', 'Master Batch', 'Granuals')
               AND (%(item_group)s = '' OR i.item_group = %(item_group)s)
             GROUP BY i.item_code, i.item_name, i.description, i.item_group, i.stock_uom, i.custom_item_category,
-                     cons.total_consumption, cons.avg_daily, cons.last_consumption
+                     cons.total_consumption, cons.avg_daily, cons.last_consumption, rp.repack_in
             HAVING
                 %(show_items)s = 'Show All Items'
                 OR (
                     %(show_items)s = 'Non Moving'
                     AND IFNULL(cons.total_consumption, 0) = 0
                     AND IFNULL(SUM(b.actual_qty), 0) <> 0
+                )
+                OR (
+                    %(show_items)s = 'Moving'
+                    AND IFNULL(cons.total_consumption, 0) > 0
+                    AND IFNULL(cons.total_consumption, 0) > IFNULL(rp.repack_in, 0)
                 )
                 OR (
                     %(show_items)s = 'Show Below Reorder'
@@ -417,6 +439,9 @@ elif pir_action == "data":
                 "po_raised": po_raised,
                 "status": status,
             })
+
+    if mode == "moving":
+        out_rows = sorted(out_rows, key=lambda x: frappe.utils.flt(x.get("total_consumption")), reverse=True)
 
     frappe.response["message"] = {
         "rows": out_rows,
