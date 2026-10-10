@@ -23,6 +23,7 @@
 #   action = "ul_wos"    → us form ke liye chalu Work Order search · q
 #   action = "ul_molds"  → us form ke liye Mold Master search (Mold Detail) · q
 #   action = "ul_submit" (POST) → ek machine ki poori entry: MTM → Manufacture → Transfer to Quality → QI → final transfer
+#                          → Rejected ho to Repack (Rejected pcs WH Rejected se bahar, MIX Kg = pcs × Pcs Weight gm / 1000 → WH1)
 #                          · date, shift, plant, rows (qty = total, ok / hold / rej)
 #   action = "ul_delete" (POST) → page se bani Ultra entry ki poori chain ulte order mein Cancel · stock_entry (Manufacture)
 #   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
@@ -57,7 +58,7 @@ PW_CLOSE_ROLE = "UCM Prod Close Plan"   # "Delete & Close" access: Close Plan + 
 # Daily Production → Large Blow "Add Production Entry" (Stock Entry submit / delete): alag access, sabko ⚙️ se
 PW_ENTRY_ROLE = "UCM Prod Production Entry"
 # JS ke PROD_VER se match hona chahiye — alag ho to page par laal warning aati hai
-PW_VER = "10-Oct-2026 ultra-qc"
+PW_VER = "10-Oct-2026 ultra-repack"
 # Ultra "Add Production Entry": [key, Stock Entry field ka label (lowercase), label na mile to fieldname]
 UL_FIELDS = [["manpower", "no of manpower", ""], ["elec_hrs", "electricity hours", "custom_electricity_working_hours"],
              ["man_hrs", "manpower hours", "custom_manpower_hours"], ["elec_rate", "electricity cost per hour", ""],
@@ -804,6 +805,7 @@ elif pw_action == "lb_submit":
     if ls_opts.get("shift") and ls_shift_val not in ls_opts.get("shift") and ls_shift in ls_opts.get("shift").split("\n"):
         ls_shift_val = ls_shift
     ls_out = []
+    ls_seen = {}
     for row in ls_rows:
         mc = (row.get("machine") or "").strip()
         ic = (row.get("item_code") or "").strip()
@@ -819,15 +821,20 @@ elif pw_action == "lb_submit":
             frappe.throw(mc + ": select a product from the list.")
         if qty <= 0:
             frappe.throw(mc + ": enter the quantity.")
-        # is machine + date + shift ki entry pehle se to nahi?
+        # is machine + date + shift + product ki entry pehle se to nahi? (product change = doosra product chalega)
+        ls_key = mc + "|" + ic
+        if ls_key in ls_seen:
+            frappe.throw(mc + ": " + ic + " is entered twice for the same shift.")
+        ls_seen[ls_key] = 1
         ls_dup = frappe.db.sql("""
             SELECT se.name FROM `tabStock Entry` se
+            INNER JOIN `tabStock Entry Detail` sed ON sed.parent = se.name AND sed.item_code = %(ic)s AND IFNULL(sed.t_warehouse, '') != ''
             WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture' AND se.posting_date = %(d)s
               AND se.custom_workstation = %(m)s AND UPPER(REPLACE(IFNULL(se.custom_shift, ''), 'SHIFT', '')) LIKE %(s)s
             LIMIT 1
-        """, {"d": ls_date, "m": mc, "s": "%" + ls_shift + "%"}, as_dict=True)
+        """, {"d": ls_date, "m": mc, "s": "%" + ls_shift + "%", "ic": ic}, as_dict=True)
         if ls_dup:
-            frappe.throw(mc + " already has an entry for " + ls_date + " Shift " + ls_shift + ": " + ls_dup[0].name)
+            frappe.throw(mc + " already has an entry for " + ic + " on " + ls_date + " Shift " + ls_shift + ": " + ls_dup[0].name)
         ls_bom = frappe.db.get_value("Item", ic, "default_bom")
         if not ls_bom:
             ls_bl = frappe.get_all("BOM", filters={"item": ic, "is_active": 1, "is_default": 1, "docstatus": 1},
@@ -1146,6 +1153,16 @@ elif pw_action == "ul_delete":
     if ". MTM: " in ud_rm:
         ud_mtm = ud_rm.split(". MTM: ")[1].strip().split(" ")[0]
     ud_chain = []
+    # rejection repack (WH Rejected se maal leta hai) - sabse pehle cancel
+    for n in frappe.get_all("Stock Entry", filters={"stock_entry_type": "Repack", "docstatus": ["<", 2],
+                                                    "remarks": ["like", "Ultra rejection repack (web page) - " + ud_name + " %"]},
+                            pluck="name", limit_page_length=0):
+        ud_chain.append(["Stock Entry", n])
+    if ud_fins:
+        for n in frappe.get_all("Stock Entry", filters={"stock_entry_type": "Repack", "docstatus": ["<", 2], "custom_reference_stock_entry": ["in", ud_fins]},
+                                pluck="name", limit_page_length=0):
+            if ["Stock Entry", n] not in ud_chain:
+                ud_chain.append(["Stock Entry", n])
     for n in ud_fins:
         ud_chain.append(["Stock Entry", n])
     for n in ud_qmts:
@@ -1259,6 +1276,8 @@ elif pw_action == "ul_submit":
         us_rej = frappe.utils.flt(row.get("rej"))
         if us_ok < 0 or us_hold < 0 or us_rej < 0:
             frappe.throw(mc + ": Approved / Hold / Rejected cannot be negative.")
+        if us_rej > 0 and frappe.utils.flt(row.get("pcs_weight")) <= 0:
+            frappe.throw(mc + ": enter Pcs Weight (gm) - it is needed to put the rejected pcs back as MIX (Kg).")
         if abs(us_ok + us_hold + us_rej - qty) > 0.001:
             frappe.throw(mc + ": Approved + Hold + Rejected (" + str(us_ok + us_hold + us_rej) + ") must equal total qty (" + str(qty) + ").")
         # 15% over-production check (cumulative)
@@ -1385,9 +1404,15 @@ elif pw_action == "ul_submit":
         except Exception as e:
             frappe.throw(mc + " (" + wo + "): " + str(e))
         fg_qty = 0
+        us_batch = ""
+        us_has_sbf = frappe.get_meta("Stock Entry Detail").has_field("use_serial_batch_fields")
         for it in us_se.items:
             if it.is_finished_item:
                 fg_qty = fg_qty + frappe.utils.flt(it.qty)
+                if not us_batch:
+                    us_batch = it.get("batch_no") or ""
+                    if not us_batch and it.get("serial_and_batch_bundle"):
+                        us_batch = frappe.db.get_value("Serial and Batch Entry", {"parent": it.serial_and_batch_bundle}, "batch_no") or ""
         # ── Step 3: Transfer to Quality (app ka apna method, jaise form ka button) ──
         try:
             us_tq = frappe.call("dt_ultracraft_customization.public.py.stock_entry.transfer_to_quality", source_name=us_se.name)
@@ -1405,6 +1430,14 @@ elif pw_action == "ul_submit":
             us_qmt.set_posting_time = 1
             us_qmt.posting_date = us_date
             us_qmt.posting_time = frappe.utils.nowtime()
+            # Manufacture ka hi batch aage le jao (warna ERPNext WH3 ka purana batch utha leta hai)
+            if us_batch:
+                for it in us_qmt.items:
+                    if it.item_code == wo_i.production_item:
+                        if us_has_sbf:
+                            it.use_serial_batch_fields = 1
+                            it.serial_and_batch_bundle = None
+                        it.batch_no = us_batch
             if us_qmt.get("__islocal") or not us_qmt.name or not frappe.db.exists("Stock Entry", us_qmt.name):
                 us_qmt.insert()
             else:
@@ -1432,6 +1465,13 @@ elif pw_action == "ul_submit":
         if us_qmt.docstatus == 0:
             frappe.db.set_value("Stock Entry Detail", us_qrow.name, "quality_inspection", us_qi.name)
             us_qmt.reload()
+            if us_batch:
+                for it in us_qmt.items:
+                    if it.item_code == wo_i.production_item and (it.get("batch_no") or "") != us_batch:
+                        if us_has_sbf:
+                            it.use_serial_batch_fields = 1
+                            it.serial_and_batch_bundle = None
+                        it.batch_no = us_batch
             try:
                 us_qmt.submit()
             except Exception as e:
@@ -1444,6 +1484,13 @@ elif pw_action == "ul_submit":
         us_fin_name = us_fin[0].name
         if frappe.utils.cint(us_fin[0].docstatus) == 0:
             us_fd = frappe.get_doc("Stock Entry", us_fin_name)
+            if us_batch:
+                for it in us_fd.items:
+                    if it.item_code == wo_i.production_item:
+                        if us_has_sbf:
+                            it.use_serial_batch_fields = 1
+                            it.serial_and_batch_bundle = None
+                        it.batch_no = us_batch
             us_fd.set_posting_time = 1
             us_fd.posting_date = us_date
             us_fd.posting_time = frappe.utils.nowtime()
@@ -1452,9 +1499,49 @@ elif pw_action == "ul_submit":
                 us_fd.submit()
             except Exception as e:
                 frappe.throw(mc + " final QC transfer " + us_fin_name + ": " + str(e))
-        us_out.append({"machine": mc, "stock_entry": us_se.name, "work_order": wo, "qty": fg_qty or qty,
+        # ── Step 7: Rejection Repack - Rejected pcs (WH Rejected) -> MIX Kg (WH1), jaise STE/UCM/26-27/48582 ──
+        us_rp_name = ""
+        if us_rej > 0:
+            us_pw = frappe.utils.flt(row.get("pcs_weight"))
+            us_kg = round(us_rej * us_pw / 1000.0, 3)
+            us_mix = ""
+            for ri in frappe.get_all("Work Order Item", filters={"parent": wo}, fields=["item_code"], limit_page_length=0):
+                if (ri.item_code or "").upper().startswith("MIX-"):
+                    us_mix = ri.item_code
+                    break
+            if not us_mix and frappe.db.exists("Item", "MIX-" + wo_i.production_item):
+                us_mix = "MIX-" + wo_i.production_item
+            if not us_mix:
+                frappe.throw(mc + ": no MIX item found for " + wo_i.production_item + " (rejection repack). Nothing was saved.")
+            us_rjwh = "WH Rejected - UCM"
+            us_mixwh = "WH1 - UCM"
+            us_rp = frappe.get_doc({"doctype": "Stock Entry", "stock_entry_type": "Repack", "purpose": "Repack", "company": us_se.company,
+                                    "set_posting_time": 1, "posting_date": us_date, "posting_time": frappe.utils.nowtime(),
+                                    "remarks": "Ultra rejection repack (web page) - " + us_se.name + " / final transfer " + us_fin_name + ": " + str(frappe.utils.cint(us_rej)) +
+                                               " pcs x " + str(us_pw) + " gm = " + str(us_kg) + " Kg. By " + pw_user})
+            us_rrow = {"s_warehouse": us_rjwh, "item_code": wo_i.production_item, "qty": us_rej}
+            if us_batch:
+                if us_has_sbf:
+                    us_rrow["use_serial_batch_fields"] = 1
+                us_rrow["batch_no"] = us_batch
+            us_rp.append("items", us_rrow)
+            us_rp.append("items", {"t_warehouse": us_mixwh, "item_code": us_mix, "qty": us_kg, "is_finished_item": 1})
+            # final transfer se link (Reference Stock Entry)
+            if us_meta.get("custom_reference_stock_entry"):
+                us_rp.custom_reference_stock_entry = us_fin_name
+            for pr in [["workstation", mc], ["shift", us_shift_val]]:
+                fn = us_lbl.get(pr[0])
+                if fn:
+                    us_rp.set(fn, pr[1])
+            try:
+                us_rp.insert()
+                us_rp.submit()
+            except Exception as e:
+                frappe.throw(mc + " rejection repack (" + str(frappe.utils.cint(us_rej)) + " pcs -> " + str(us_kg) + " Kg " + us_mix + "): " + str(e))
+            us_rp_name = us_rp.name
+        us_out.append({"machine": mc, "stock_entry": us_se.name, "work_order": wo, "qty": fg_qty or qty, "repack": us_rp_name,
                        "mtm": us_mtm.name if us_mtm else "", "quality_transfer": us_qmt.name, "quality_inspection": us_qi.name,
-                       "final_transfer": us_fin_name, "ok": us_ok, "hold": us_hold, "rej": us_rej})
+                       "final_transfer": us_fin_name, "batch": us_batch, "ok": us_ok, "hold": us_hold, "rej": us_rej})
     frappe.response["message"] = {"date": us_date, "shift": us_shift, "plant": us_plant, "entries": us_out}
 
 # ───────────────────── 3. JOB CARD PERFORMANCE ─────────────────────
