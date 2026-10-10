@@ -907,3 +907,28 @@ b.neg, .neg { color: #c62828; font-weight: 700; } b.pos, .pos { color: #1e7e3a; 
 #pr-ulf .pr-lbf-bar { min-height: 46px; }
 #pr-ulf .pr-lbf-bar .why { font-size: 13.5px; line-height: 1.5; }
 #pr-ulf .pr-lbf-done { font-size: 13px; line-height: 1.6; }
+
+/* Ultra entry: column header list ke bahar - scroll karne par bhi apni jagah fix */
+#pr-ulf .pr-ulf-hwrap { flex: 0 0 auto; padding: 10px 20px 0; overflow: hidden; scrollbar-gutter: stable; }
+#pr-ulf .pr-ulf-hwrap:empty { display: none; }
+#pr-ulf .pr-ulf-hwrap .pr-ulf-head { border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0; background: #e6f4ff; box-shadow: 0 3px 6px -3px rgba(15,23,42,.2); position: relative; z-index: 2; }
+#pr-ulf .pr-lbf-body { padding-top: 0; scrollbar-gutter: stable; }
+#pr-ulf .pr-ulf-hwrap:not(:empty) + .pr-lbf-body .pr-ulf-grid { border-top: 0; border-radius: 0 0 12px 12px; }
+#pr-ulf .pr-ulf-hwrap:not(:empty) + .pr-lbf-body .pr-ulf-grid > .pr-ulf-row:first-child { border-top: 0; }
+
+/* Large Blow: + Product change / Remove */
+#pr-lbf .pr-lbf-pc { align-self: flex-start; margin-top: 4px; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid #b9dcf7; background: #fff; color: #1565a8; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+#pr-lbf .pr-lbf-pc:hover { background: #e6f4ff; }
+#pr-lbf .pr-lbf-rm { align-self: flex-start; margin-top: 4px; height: 22px; padding: 0 10px; border-radius: 6px; border: 1px solid #f1c4bf; background: #fff; color: #c62828; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+#pr-lbf .pr-lbf-rm:hover { background: #fdecea; }
+#pr-lbf .pr-lbf-rm.arm { background: #c62828; border-color: #c62828; color: #fff; }
+
+/* Entry popups: Date (< date >), Shift, Plant - ek hi line aur ek hi oonchai */
+#pr-ulf .pr-lbf-top, #pr-lbf .pr-lbf-top { align-items: flex-end; }
+#pr-ulf .pr-lbf-top .pr-f, #pr-lbf .pr-lbf-top .pr-f { justify-content: flex-end; }
+.pr-dnav { display: inline-flex; align-items: center; gap: 4px; height: 38px; }
+.pr-dnav .pr-nbtn { width: 32px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line2); border-radius: 9px; background: #fff; color: var(--pri-d); cursor: pointer; padding: 0; }
+.pr-dnav .pr-nbtn:hover:not(:disabled) { background: #e6f4ff; border-color: #b9dcf7; }
+.pr-dnav .pr-nbtn:disabled { opacity: .35; cursor: not-allowed; }
+#pr-ulf .pr-dnav input[type=date], #pr-lbf .pr-dnav input[type=date] { height: 38px; box-sizing: border-box; }
+#pr-ulf .pr-lbf-top .pr-seg2, #pr-lbf .pr-lbf-top .pr-seg2 { height: 38px; box-sizing: border-box; align-items: center; }
