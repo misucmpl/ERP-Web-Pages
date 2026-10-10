@@ -647,3 +647,32 @@ body.agr-busy #agr-refresh svg { animation: agrSpin .9s linear infinite; }
   .agr-cm .agr-cplan .row .arr { display: none; }
   .agr-cm .agr-cplan .row .tgt { grid-column: 2; }
 }
+
+
+/* ===== Raw Material Used · MIX Work Orders (Fender / Chain Set / Total) ===== */
+.agr-mix-w { margin: 0 20px 16px; border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
+.agr-mix-t { font-size: 13px; }
+.agr-mix-t th { font-size: 12px; vertical-align: bottom; }
+.agr-mix-t th.n .agr-link { justify-content: flex-end; width: 100%; color: var(--ink); font-weight: 700; font-size: 13px; }
+.agr-mix-t th.n .agr-link:hover { color: var(--pri); }
+.agr-mix-t th small.g, .agr-mix-t td small.g { display: block; font-size: 11px; font-weight: 500; color: var(--mut); }
+.agr-mix-t td { padding: 9px 12px; }
+.agr-mix-t td.it b { font-weight: 600; }
+.agr-mix-t td.n { font-size: 14px; font-weight: 600; }
+.agr-mix-t td .dash { color: #c9c3b6; font-weight: 500; }
+.agr-mix-t td i { font-style: normal; font-size: 11px; font-weight: 600; color: var(--mut); }
+.agr-mix-t td.tot-c { font-weight: 800; background: #fbfaf7; }
+.agr-mix-t tr.tot td { font-size: 14.5px; font-weight: 800; }
+.agr-mix-t tr.mixrow td { background: var(--in-l); color: var(--in); font-weight: 700; border-bottom: 0; }
+@media (max-width: 760px) { .agr-mix-w { margin: 0 10px 12px; } }
+@media print { .agr-mix { break-inside: avoid; } }
+/* ===== Dispatched In PCS / Set: Pcs + Kg ek row mein (2 column) ===== */
+.agr-card.is-si .agr-line.si { display: grid; grid-template-columns: minmax(0,1fr) 96px 96px; gap: 12px; align-items: center; }
+.agr-card.is-si .agr-line.si > b { text-align: right; white-space: nowrap; }
+.agr-card.is-si .agr-line.si > b.kg { color: var(--pri-d); }
+.agr-card.is-si .agr-line.si-h { padding: 2px 0 4px; border-bottom: 1px solid #f0ece4; }
+.agr-card.is-si .agr-line.si-h em { font-style: normal; text-align: right; font-size: 11.5px; font-weight: 600; color: var(--mut); }
+.agr-card.is-si .agr-line.si .dash { color: #c9c3b6; font-weight: 500; }
+.agr-card.is-si .agr-line.si.is-tot > span { white-space: nowrap; }
+.agr-card.is-si .agr-line.si.is-tot b small { font-size: 12px; font-weight: 600; color: var(--mut); }
+@media (max-width: 760px) { .agr-card.is-si .agr-line.si { grid-template-columns: minmax(0,1fr) 80px 80px; gap: 8px; } }
