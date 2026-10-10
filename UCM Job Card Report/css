@@ -652,3 +652,258 @@ b.neg, .neg { color: #c62828; font-weight: 700; } b.pos, .pos { color: #1e7e3a; 
 #pr-set .pr-urow .pr-clchip:disabled { opacity: .6; cursor: wait; }
 @media (max-width: 760px) { #pr-set .pr-urow .pr-clchip { margin-left: 0; } }
 @media (max-width: 760px) { #pr-set .pr-urow .pr-reps { flex-wrap: wrap; flex: 1 1 100%; } }
+.pr-nm-row { cursor: pointer; }
+.pr-nm-t tbody tr.pr-nm-row:hover td { background: var(--pri-l); }
+
+/* Large Blow: Add Production Entry form */
+#pr-lbf .pr-modal.pr-lbf { max-width: 1120px; display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+#pr-lbf.pr-modal-bg { padding-top: 16px; }
+.pr-lbf-top { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; padding: 12px 20px; border-bottom: 1px solid var(--line); background: #fbfdff; }
+.pr-lbf-top .pr-f { display: flex; flex-direction: column; gap: 4px; }
+.pr-lbf-top .pr-f > span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--mut); }
+#pr-lbf .pr-lbf-top input[type=date] { height: 36px; border: 1px solid var(--line2); border-radius: 9px; padding: 0 10px; font: inherit; }
+.pr-lbf-sum { margin-left: auto; text-align: right; font-size: 12.5px; color: var(--ink2); }
+.pr-lbf-sum b { display: block; font-size: 14px; color: var(--ink); }
+.pr-lbf-body { flex: 1 1 auto; overflow-y: auto; min-height: 120px; padding-top: 10px; }
+.pr-lbf-grid { display: grid; grid-template-columns: 28px 120px 150px minmax(180px, 1fr) 96px 86px 86px 86px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.pr-lbf-head, .pr-lbf-row { display: contents; }
+.pr-lbf-head > span { background: #e6f4ff; padding: 8px 8px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--on-pri); }
+.pr-lbf-row > span { padding: 7px 8px; border-top: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; font-size: 12.5px; min-width: 0; }
+.pr-lbf-head > .n, .pr-lbf-row > .n { text-align: right; align-items: flex-end; }
+.pr-lbf-row > .ck { align-items: center; }
+.pr-lbf-row > .ck svg { color: #1e7e3a; }
+.pr-lbf-row.done > span { background: #f3fbf5; }
+.pr-lbf-row.off > span { opacity: .45; }
+.pr-lbf-row .mc b { font-size: 13px; }
+.pr-lbf-row .st em { font-style: normal; font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 99px; align-self: flex-start; }
+.pr-lbf-row .st em.ok { background: #e6f4ea; color: #1e7e3a; }
+.pr-lbf-row .st em.cp { background: #fff3e6; color: #b8560c; }
+.pr-lbf-row .st em.nw { background: #eaf1fd; color: #1565a8; }
+.pr-lbf-row .st small, .pr-lbf-row .it small { font-size: 10.5px; color: var(--mut); margin-top: 2px; }
+.pr-lbf-row .st a { font-size: 11px; margin-top: 2px; }
+.pr-lbf-row .it b { font-size: 12.5px; }
+#pr-lbf .pr-lbf-row input[type=text], #pr-lbf .pr-lbf-row input[type=number] { width: 100%; height: 32px; border: 1px solid var(--line2); border-radius: 8px; padding: 0 8px; font: inherit; font-size: 12.5px; background: #fff; }
+#pr-lbf .pr-lbf-row input[type=number] { text-align: right; }
+#pr-lbf .pr-lbf-row input:focus { outline: none; border-color: var(--pri-d); box-shadow: 0 0 0 3px rgba(21,101,168,.12); }
+.pr-lbf-foot { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.pr-lbf-foot .why { flex: 1; font-size: 12.5px; color: var(--ink2); }
+.pr-lbf-foot .why.bad { color: #c62828; }
+@media (max-width: 760px) {
+  .pr-lbf-grid { display: block; }
+  .pr-lbf-head { display: none; }
+  .pr-lbf-row { display: flex; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--line); padding: 4px 0; }
+  .pr-lbf-grid .pr-lbf-row:first-of-type { border-top: 0; }
+  .pr-lbf-row > span { border-top: 0; padding: 4px 6px; background: none !important; }
+  .pr-lbf-row.done { background: #f3fbf5; }
+  .pr-lbf-row > .ck { flex: 0 0 30px; }
+  .pr-lbf-row > .mc { flex: 1 1 0; }
+  .pr-lbf-row > .st { flex: 1 1 0; }
+  .pr-lbf-row > .it { flex: 1 1 100%; }
+  .pr-lbf-row > .n { flex: 0 0 25%; }
+  .pr-lbf-sum { margin-left: 0; text-align: left; width: 100%; }
+}
+/* Add Production Entry: white product list + confirm */
+.pr-lbf-row .it .pr-pick { position: relative; display: block; width: 100%; }
+.pr-lbf-row .it .pr-pick-l { z-index: 20; max-height: 240px; }
+.pr-lbf-row .it .pr-pick-l b { font-size: 12px; font-weight: 600; }
+.pr-lbf-row .it .pr-pick-l small { font-size: 11px; }
+.pr-lbf-body { overflow-x: visible; }
+.pr-lbf-foot { flex-direction: column; align-items: stretch; gap: 8px; }
+.pr-lbf-bar { display: flex; align-items: center; gap: 12px; }
+.pr-lbf-bar .why { flex: 1; font-size: 12.5px; color: var(--ink2); }
+.pr-lbf-bar .why.bad { color: #c62828; }
+.pr-lbf-err { padding: 8px 12px; border-radius: 8px; background: #fdecea; color: #c62828; font-size: 12.5px; }
+.pr-lbf-done { padding: 8px 12px; border-radius: 8px; background: #e6f4ea; color: #1e7e3a; font-size: 12.5px; }
+.pr-lbf-conf { border: 1px solid #f5d38a; background: #fffbeb; border-radius: 12px; padding: 10px 12px; }
+.pr-lbf-conf .h b { display: block; font-size: 14px; color: #92400e; }
+.pr-lbf-conf .h span { display: block; font-size: 12px; color: #7a4b00; margin: 2px 0 8px; }
+.pr-lbf-conf table { background: #fff; }
+.pr-lbf-conf td small { display: block; font-size: 10.5px; color: var(--mut); }
+.pr-lbf-conf .act { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+#ucm-prod .pr-btn.is-go, .pr-modal-bg .pr-btn.is-go { background: #1e7e3a; color: #fff; border-color: #1e7e3a; }
+#pr-lbf .pr-lbf-foot { max-height: 55vh; overflow-y: auto; }
+.pr-lbf-grid { overflow: visible; }
+.pr-lbf-head > span:first-child { border-top-left-radius: 11px; }
+.pr-lbf-head > span:last-child { border-top-right-radius: 11px; }
+#pr-lbf .pr-modal.is-confirm .pr-lbf-body { display: none; }
+#pr-lbf .pr-modal.is-confirm .pr-lbf-foot { max-height: none; flex: 1 1 auto; overflow-y: auto; }
+#pr-lbf .pr-lbf-row .pr-pick-l { z-index: 1200; }
+#pr-lbf .pr-btn.is-go { color: #fff !important; }
+#pr-lbf .pr-btn.is-go:disabled { opacity: .6; }
+/* Entered entry: Delete */
+#pr-lbf .pr-lbf-del { align-self: flex-start; margin-top: 4px; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid #f1c4bf; background: #fff; color: #c62828; font-size: 11px; font-weight: 700; cursor: pointer; }
+#pr-lbf .pr-lbf-del:hover { background: #fdecea; }
+#pr-lbf .pr-lbf-del.arm { background: #c62828; border-color: #c62828; color: #fff; }
+#pr-lbf .pr-lbf-del:disabled { opacity: .6; cursor: wait; }
+/* Production Entry chip (green) */
+#pr-set .pr-urow .pr-clchip.is-entry { border-color: #b7dfc3; color: #1e7e3a; margin-left: 4px; }
+#pr-set .pr-urow .pr-clchip.is-entry:hover { background: #e6f4ea; }
+#pr-set .pr-urow .pr-clchip.is-entry.on { background: #1e7e3a; border: 1px solid #1e7e3a; color: #fff; }
+#pr-set .pr-modal { max-width: 1100px; }
+#pr-set .pr-urow .nm { min-width: 150px; max-width: 200px; overflow: hidden; }
+#pr-set .pr-urow .nm small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+/* ===== Ultra: Add Production Entry (New / Old Plant) ===== */
+#ucm-prod .pr-band #pr-dp-analysis:not([hidden]) ~ #pr-lb-add { margin-left: 0; }
+#pr-ulf .pr-modal.pr-ulf { max-width: 1720px; width: 80vw; min-width: min(1100px, 100%); display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+#pr-ulf.pr-modal-bg { padding: 12px !important; }
+#pr-ulf .pr-lbf-top input[type=date] { height: 36px; border: 1px solid var(--line2); border-radius: 9px; padding: 0 10px; font: inherit; }
+.pr-ulf-grid { border: 1px solid var(--line); border-radius: 12px; }
+.pr-ulf-head, .pr-ulf-row { display: grid; grid-template-columns: 30px 100px 190px minmax(300px, 1fr) 110px 96px 96px 96px; }
+.pr-ulf-head > span { background: #e6f4ff; padding: 8px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--on-pri); }
+.pr-ulf-head > span:first-child { border-top-left-radius: 11px; }
+.pr-ulf-head > span:last-child { border-top-right-radius: 11px; }
+.pr-ulf-row { border-top: 1px solid var(--line); padding-bottom: 6px; }
+.pr-ulf-row > span { padding: 7px 8px 4px; display: flex; flex-direction: column; justify-content: center; font-size: 12.5px; min-width: 0; }
+.pr-ulf-head > .n, .pr-ulf-row > .n { text-align: right; align-items: flex-end; }
+.pr-ulf-row.done { background: #f3fbf5; }
+.pr-ulf-row.off > *:not(.ck) { opacity: .45; }
+.pr-ulf-row > .ck { align-items: center; }
+.pr-ulf-row > .ck svg { color: #1e7e3a; }
+.pr-ulf-row .mc b { font-size: 13px; }
+.pr-ulf-row .st em { font-style: normal; font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 99px; align-self: flex-start; }
+.pr-ulf-row .st em.ok { background: #e6f4ea; color: #1e7e3a; }
+.pr-ulf-row .st em.cp { background: #fff3e6; color: #b8560c; }
+.pr-ulf-row .st em.nw { background: #eaf1fd; color: #1565a8; }
+.pr-ulf-row .st small, .pr-ulf-row .it small { font-size: 10.5px; color: var(--mut); margin-top: 2px; }
+.pr-ulf-row .st small.bad { color: #c62828; font-weight: 600; white-space: normal; line-height: 1.3; }
+.pr-ulf-row .st a { font-size: 11px; margin-top: 2px; }
+.pr-ulf-row .it b { font-size: 12.5px; }
+.pr-ulf-row .it .pr-pick { position: relative; display: block; width: 100%; }
+#pr-ulf .pr-ulf-row input[type=text], #pr-ulf .pr-ulf-row input[type=number], #pr-ulf .pr-ulf-row select { width: 100%; height: 32px; border: 1px solid var(--line2); border-radius: 8px; padding: 0 8px; font: inherit; font-size: 12.5px; background: #fff; color: var(--ink); }
+#pr-ulf .pr-ulf-row input[type=number] { text-align: right; }
+#pr-ulf .pr-ulf-row input:focus, #pr-ulf .pr-ulf-row select:focus { outline: none; border-color: var(--pri-d); box-shadow: 0 0 0 3px rgba(21,101,168,.12); }
+.pr-ulf-sub { grid-column: 3 / -1; display: grid; grid-template-columns: auto repeat(3, minmax(64px, 90px)) minmax(200px, 1fr) minmax(170px, 1fr); gap: 6px; padding: 0 8px 2px; }
+.pr-ulf-sub label { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; font-weight: 400; }
+.pr-ulf-sub label span { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pr-ulf .pr-ulf-sub input, #pr-ulf .pr-ulf-sub select { height: 28px; font-size: 12px; }
+.pr-ulf-sub.ro { display: block; font-size: 11.5px; color: var(--mut); padding: 0 8px 2px; }
+#pr-ulf .pr-ulf-pc { align-self: flex-start; margin-top: 4px; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid #b9dcf7; background: #fff; color: #1565a8; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+#pr-ulf .pr-ulf-pc:hover { background: #e6f4ff; }
+#pr-ulf .pr-lbf-del { align-self: flex-start; margin-top: 4px; height: 22px; padding: 0 9px; border-radius: 6px; border: 1px solid #f1c4bf; background: #fff; color: #c62828; font-size: 11px; font-weight: 700; cursor: pointer; }
+#pr-ulf .pr-lbf-del:hover { background: #fdecea; }
+#pr-ulf .pr-lbf-del.arm { background: #c62828; border-color: #c62828; color: #fff; }
+#pr-ulf .pr-lbf-del:disabled { opacity: .6; cursor: wait; }
+#pr-ulf .pr-pick-l { z-index: 1200; }
+#pr-ulf .pr-pick-l b { font-size: 12px; font-weight: 600; }
+#pr-ulf .pr-pick-l small { font-size: 11px; }
+#pr-ulf .pr-lbf-foot { max-height: 55vh; overflow-y: auto; }
+#pr-ulf .pr-modal.is-confirm .pr-lbf-body { display: none; }
+#pr-ulf .pr-modal.is-confirm .pr-lbf-foot { max-height: none; flex: 1 1 auto; overflow-y: auto; }
+#pr-ulf .pr-btn.is-go { color: #fff !important; }
+#pr-ulf .pr-btn.is-go:disabled { opacity: .6; }
+@media (max-width: 760px) {
+  .pr-ulf-head { display: none; }
+  .pr-ulf-row { display: flex; flex-wrap: wrap; align-items: center; padding: 4px 0 8px; }
+  .pr-ulf-grid .pr-ulf-row:first-of-type { border-top: 0; }
+  .pr-ulf-row > span { padding: 4px 6px; }
+  .pr-ulf-row > .ck { flex: 0 0 30px; }
+  .pr-ulf-row > .mc, .pr-ulf-row > .st { flex: 1 1 0; }
+  .pr-ulf-row > .it { flex: 1 1 100%; }
+  .pr-ulf-row > .n { flex: 0 0 25%; }
+  .pr-ulf-sub { flex: 1 1 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pr-ulf-sub label:nth-last-of-type(-n+2) { grid-column: span 3; }
+}
+/* Submit: machine no ke neeche chhota button */
+.pr-ulf-row > .mc { justify-content: flex-start; gap: 6px; }
+#pr-ulf .pr-ulf-go { align-self: flex-start; height: 24px; padding: 0 12px; border-radius: 6px; border: 1px solid #1e7e3a; background: #1e7e3a; color: #fff; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+#pr-ulf .pr-ulf-go:hover { background: #17692f; }
+#pr-ulf .pr-ulf-go:disabled { background: #eef1f5; border-color: #dde3ea; color: #9aa6b4; cursor: not-allowed; }
+#pr-ulf .pr-ulf-go.arm { background: #c2620a; border-color: #c2620a; }
+
+/* Daily Production band: sab filters + buttons ek hi line mein (Ultra mein Plant + 30 Kg ke saath bhi) */
+@media (min-width: 1200px) {
+  #ucm-prod [data-band="daily"] .pr-filters { flex-wrap: nowrap; gap: 10px 12px; }
+  #ucm-prod [data-band="daily"] .pr-f { flex: 0 0 auto; gap: 7px; }
+  #ucm-prod [data-band="daily"] .pr-seg2 button { padding: 0 11px; }
+  #ucm-prod [data-band="daily"] .pr-f select { min-width: 0; width: 128px; }
+  #ucm-prod [data-band="daily"] .pr-dates input { width: 128px; padding: 0 6px; }
+  #ucm-prod [data-band="daily"] .pr-dates { gap: 4px; }
+  #ucm-prod [data-band="daily"] .pr-nav b { min-width: 0; padding: 0 4px; white-space: nowrap; }
+  #ucm-prod [data-band="daily"] .pr-btn, #ucm-prod [data-band="daily"] .pr-chk { flex: 0 0 auto; padding: 0 11px; }
+}
+@media (min-width: 1200px) and (max-width: 1920px) {
+  #ucm-prod [data-band="daily"] .pr-f > span { display: none; }   /* labels hata ke jagah bachao */
+}
+@media (min-width: 1200px) and (max-width: 1500px) {
+  #ucm-prod [data-band="daily"] .pr-btn span { display: none; }   /* Daily Analysis: sirf icon */
+  #ucm-prod [data-band="daily"] .pr-seg2 button { padding: 0 8px; font-size: 12.5px; }
+}
+.pr-ulf-sub .pr-pick { position: relative; display: block; width: 100%; }
+
+/* Daily band: Daily Analysis + Production Entry = icon button, hover par naam */
+#ucm-prod [data-band="daily"] #pr-dp-analysis, #ucm-prod [data-band="daily"] #pr-lb-add {
+  position: relative; width: 36px; height: 34px; padding: 0 !important; justify-content: center; flex: 0 0 36px; gap: 0; }
+#ucm-prod [data-band="daily"] #pr-lb-add { background: #1565a8; color: #fff !important; border: 1px solid #1565a8; }
+#ucm-prod [data-band="daily"] #pr-lb-add:hover { background: #0b4a7d; }
+#ucm-prod [data-band="daily"] #pr-dp-analysis:disabled { opacity: .45; cursor: not-allowed; }
+#ucm-prod [data-band="daily"] .pr-tip {
+  display: flex !important; flex-direction: column; align-items: flex-end; gap: 1px;
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;
+  padding: 6px 10px; border-radius: 7px; background: #0f172a; color: #cbd5e1;
+  font-size: 11px; font-weight: 500; white-space: nowrap; text-transform: none; letter-spacing: 0;
+  box-shadow: 0 8px 20px -8px rgba(15,23,42,.45);
+  opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .15s, transform .15s; }
+#ucm-prod [data-band="daily"] .pr-tip b { color: #fff; font-size: 12px; font-weight: 700; }
+#ucm-prod [data-band="daily"] .pr-tip::before { content: ""; position: absolute; top: -5px; right: 13px; width: 10px; height: 10px; background: #0f172a; transform: rotate(45deg); }
+#ucm-prod [data-band="daily"] #pr-dp-analysis:hover .pr-tip, #ucm-prod [data-band="daily"] #pr-lb-add:hover .pr-tip,
+#ucm-prod [data-band="daily"] #pr-dp-analysis:focus-visible .pr-tip, #ucm-prod [data-band="daily"] #pr-lb-add:focus-visible .pr-tip { opacity: 1; transform: none; }
+/* < 30 Kg checkbox baaki controls ki line mein */
+#ucm-prod [data-band="daily"] .pr-chk { margin: 0; height: 34px; align-self: center; font-weight: 600; }
+#ucm-prod [data-band="daily"] .pr-chk input { margin: 0; }
+@media (max-width: 760px) {
+  #ucm-prod [data-band="daily"] #pr-dp-analysis, #ucm-prod [data-band="daily"] #pr-lb-add { width: 44px; flex: 0 0 44px; }
+  #ucm-prod [data-band="daily"] .pr-tip { right: auto; left: 0; }
+}
+
+/* < 30 Kg: checkbox ki jagah ON / OFF switch */
+#ucm-prod .pr-tgl { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 8px; border: 1px solid var(--line2); border-radius: 9px; background: #fff; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink2); white-space: nowrap; flex: 0 0 auto; }
+#ucm-prod .pr-tgl i { position: relative; width: 30px; height: 18px; border-radius: 99px; background: #cbd5e1; transition: background .15s; flex: 0 0 30px; }
+#ucm-prod .pr-tgl i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+#ucm-prod .pr-tgl:hover { border-color: var(--pri-b); color: var(--pri-d); }
+#ucm-prod .pr-tgl.on { background: #e6f4ff; border-color: #b9dcf7; color: #0b4a7d; }
+#ucm-prod .pr-tgl.on i { background: #1565a8; }
+#ucm-prod .pr-tgl.on i::after { transform: translateX(12px); }
+@media print { #ucm-prod .pr-tgl { display: none !important; } }
+/* Daily band: date / plant standard size (stretch nahi), buttons right side */
+@media (min-width: 1200px) {
+  #ucm-prod [data-band="daily"] .pr-dates input { width: 140px; flex: 0 0 140px; }
+  #ucm-prod [data-band="daily"] .pr-f > select { width: 140px; }
+}
+
+/* Product change ki extra row: Remove */
+#pr-ulf .pr-ulf-rm { align-self: flex-start; height: 22px; padding: 0 10px; border-radius: 6px; border: 1px solid #f1c4bf; background: #fff; color: #c62828; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+#pr-ulf .pr-ulf-rm:hover { background: #fdecea; }
+#pr-ulf .pr-ulf-rm.arm { background: #c62828; border-color: #c62828; color: #fff; }
+
+/* Entered row: CT / Cavity / Pcs Wt / Mold item ke neeche (alag line nahi) */
+.pr-ulf-row.done { padding-bottom: 4px; }
+.pr-ulf-row.done > .it { justify-content: flex-start; }
+.pr-ulf-spec { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.pr-ulf-spec em { font-style: normal; font-size: 10.5px; color: var(--mut); background: #fff; border: 1px solid #d6eadb; border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+.pr-ulf-spec em b { color: var(--ink); font-weight: 700; font-size: 11px; }
+@media (max-width: 760px) { #pr-ulf .pr-modal.pr-ulf { width: 100%; min-width: 0; } }
+
+/* Ultra entry: Approved / Hold / Rejected (ek box mein) */
+.pr-ulf-split { display: grid; grid-template-columns: repeat(3, 84px); gap: 6px; padding: 0 8px 0 0; margin-right: 2px; border-right: 1px dashed var(--line2); }
+.pr-ulf-split label:first-child span { color: #1e7e3a; }
+.pr-ulf-split label:nth-child(2) span { color: #b8560c; }
+.pr-ulf-split label:nth-child(3) span { color: #c62828; }
+.pr-ulf-split.bad input { border-color: #e57373 !important; background: #fff5f5 !important; }
+.pr-ulf-spec em.q { border-color: transparent; }
+.pr-ulf-spec em.q.ok { background: #e6f4ea; } .pr-ulf-spec em.q.ok b { color: #1e7e3a; }
+.pr-ulf-spec em.q.hd { background: #fff3e6; } .pr-ulf-spec em.q.hd b { color: #b8560c; }
+.pr-ulf-spec em.q.rj { background: #fdecea; } .pr-ulf-spec em.q.rj b { color: #c62828; }
+@media (max-width: 760px) { .pr-ulf-split { grid-column: span 3; border-right: 0; padding: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Ultra entry: error saaf dikhe (footer + machine ki row) */
+#pr-ulf .pr-lbf-err { font-size: 13px; line-height: 1.45; padding: 10px 14px; border: 1px solid #f5c2bd; white-space: normal; word-break: break-word; max-height: none; }
+.pr-ulf-err { grid-column: 2 / -1; margin: 6px 8px 2px; padding: 8px 12px; border-radius: 8px; background: #fdecea; border: 1px solid #f5c2bd; color: #b71c1c; font-size: 12.5px; line-height: 1.45; white-space: normal; word-break: break-word; }
+.pr-ulf-err b { color: #b71c1c; }
+#pr-ulf .pr-ulf-row input.bad { border-color: #e57373 !important; background: #fff5f5 !important; color: #b71c1c; }
+
+/* Ultra entry: neeche ki message patti - dabe nahi, poora text dikhe */
+#pr-ulf .pr-lbf-foot { flex: 0 0 auto; min-height: 76px; max-height: 40vh; padding: 14px 22px 16px; justify-content: center; }
+#pr-ulf .pr-lbf-bar { min-height: 46px; }
+#pr-ulf .pr-lbf-bar .why { font-size: 13.5px; line-height: 1.5; }
+#pr-ulf .pr-lbf-done { font-size: 13px; line-height: 1.6; }
