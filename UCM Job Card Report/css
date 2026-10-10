@@ -932,3 +932,17 @@ b.neg, .neg { color: #c62828; font-weight: 700; } b.pos, .pos { color: #1e7e3a; 
 .pr-dnav .pr-nbtn:disabled { opacity: .35; cursor: not-allowed; }
 #pr-ulf .pr-dnav input[type=date], #pr-lbf .pr-dnav input[type=date] { height: 38px; box-sizing: border-box; }
 #pr-ulf .pr-lbf-top .pr-seg2, #pr-lbf .pr-lbf-top .pr-seg2 { height: 38px; box-sizing: border-box; align-items: center; }
+
+/* Hold Check: date button */
+#ucm-prod .pr-hc-date { border: 0; background: none; padding: 0; font: inherit; font-weight: 700; color: var(--pri-d); text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+#ucm-prod .pr-hc-date:hover { color: #0b4a7d; text-decoration-style: solid; }
+#pr-ulf .pr-lbf-top .pr-f[hidden] { display: none !important; }
+
+/* Entry row: saare boxes upar ki ek hi line mein (Status column lamba ho tab bhi) */
+#pr-ulf .pr-ulf-row:not(.done) > span { justify-content: flex-start; }
+
+/* Hold Check: Approved / Hold / Rejected ... Job Card column ke theek neeche se, line ke end tak */
+#pr-ulf.is-hold .pr-ulf-sub { grid-column: 4 / -1; grid-template-columns: auto repeat(3, minmax(64px, 1fr)) minmax(200px, 2fr); }
+/* Hold Check: Machine + Status do line mein phaile, taaki doosri line upar aa jaaye (beech ka gap nahi) */
+#pr-ulf.is-hold .pr-ulf-row:not(.done) > .ck, #pr-ulf.is-hold .pr-ulf-row:not(.done) > .mc, #pr-ulf.is-hold .pr-ulf-row:not(.done) > .st { grid-row: span 2; }
+#pr-ulf.is-hold .pr-ulf-row:not(.done) .pr-ulf-sub { padding-top: 0; }
