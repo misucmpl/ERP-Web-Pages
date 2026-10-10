@@ -10,7 +10,7 @@
   "use strict";
   var d = document, w = window;
   var API = "/api/method/ucm_production_web";
-  var PROD_VER = "10-Oct-2026 ultra-repack";   /* server script ke PW_VER se match hona chahiye */
+  var PROD_VER = "10-Oct-2026 hold-check";   /* server script ke PW_VER se match hona chahiye */
   var JC_API = "/api/method/ucm_job_card_detail";
   var CT_API = "/api/method/ucm_std_vs_actual_ct_detail";
   var IH_API = "/api/method/ucm_item_history_api";
@@ -133,7 +133,7 @@
   };
   (function restore() {
     var pl = store("dp-plant"); if (PLANTS.indexOf(pl) >= 0) S.dp.plant = pl;
-    var sg0 = store("dp-seg"); if (sg0 === "large" || sg0 === "eco" || sg0 === "asm") S.dp.seg = sg0;
+    var sg0 = store("dp-seg"); if (sg0 === "large" || sg0 === "eco" || sg0 === "hold" || sg0 === "asm") S.dp.seg = sg0;
     if (store("jc-seg") === "large") S.jlb.seg = "large";
     var js0 = store("jc-sort"); if (js0 && /^(jc_desc|jc_asc|start_desc|pending|approved|product|party)$/.test(js0)) S.jc.sort = js0;
   })();
@@ -172,7 +172,7 @@
 
       /* ---- Daily Production ---- */
       '<section class="pr-band" data-band="daily" hidden><div class="pr-filters">' +
-        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-dp-seg"><button type="button" data-seg="ultra">Ultra</button><button type="button" data-seg="large">Large Blow</button><button type="button" data-seg="eco">Eco Blow</button><button type="button" data-seg="asm">Assembly</button></div></div>' +
+        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-dp-seg"><button type="button" data-seg="ultra">Ultra</button><button type="button" data-seg="large">Large Blow</button><button type="button" data-seg="eco">Eco Blow</button><button type="button" data-seg="hold">Hold Check</button><button type="button" data-seg="asm">Assembly</button></div></div>' +
         '<div class="pr-f"><span>Day</span><div class="pr-nav">' +
           '<button type="button" class="pr-nbtn" id="pr-dp-prev" title="Previous day">' + I.left + '</button><b id="pr-dp-day"></b>' +
           '<button type="button" class="pr-nbtn" id="pr-dp-next" title="Next day">' + I.right + "</button></div></div>" +
@@ -486,7 +486,7 @@
     /* Add Production Entry (Ultra + Large Blow): sirf "Production Entry" / "Delete & Close" access wale */
     $("#pr-lb-add").hidden = !(S.acc && (S.acc.can_prod_entry || S.acc.can_delete_entry));
     if (S.dp.seg === "eco" || S.dp.seg === "asm") $("#pr-lb-add").hidden = true;   /* Eco Blow / Assembly: abhi sirf dekhna */
-    $("#pr-lb-add .pr-tip").innerHTML = "<b>Production Entry</b>" + (ul ? "Add Ultra entry \u00b7 New / Old Plant" : "Add Large Blow entry");
+    $("#pr-lb-add .pr-tip").innerHTML = "<b>Production Entry</b>" + (ul ? "Add Ultra entry \u00b7 New / Old Plant" : S.dp.seg === "hold" ? "Add Hold Check entry (M/C Pending Clear)" : "Add Large Blow entry");
     $("#pr-dp-analysis").hidden = !ul;   /* Daily Analysis sirf Ultra ke liye */
     $("#pr-dp-analysis").disabled = !single;
     $("#pr-dp-analysis .pr-tip").innerHTML = "<b>Daily Analysis</b>" + (single ? "Product change by machine \u00b7 " + esc(nice(S.dp.from)) : "Pick a single day to use it");
@@ -494,7 +494,7 @@
   function shiftDay(n) { var t = addDays(S.dp.from, n); S.dp.from = t; S.dp.to = t; syncDpBand(); syncSub(); loadDp(); }
   async function loadDp() {
     if (S.dp.seg === "large" || S.dp.seg === "eco") return loadLb();   /* Large Blow + Eco Blow */
-    var asm = S.dp.seg === "asm", plant = asm ? "Assembly" : S.dp.plant, lt = !asm && S.dp.lt;
+    var asm = S.dp.seg === "asm", hc = S.dp.seg === "hold", plant = asm ? "Assembly" : hc ? "M/C Pending Clear" : S.dp.plant, lt = !asm && !hc && S.dp.lt;
     var my = ++S.dp.seq, el = mainEl("daily");
     if (!S.dp.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
     try {
@@ -565,12 +565,13 @@
   function renderDpTable() {
     var list = dpVisible(), st = dpStats(list), dt = S.dp.dates[S.dp.di];
     $("#pr-dp-title").textContent = "Production entries (" + list.length + ")";
-    $("#pr-dp-sub").textContent = (dt ? dayName(dt) + ", " + nice(dt) : (S.dp.from === S.dp.to ? nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to))) + " \u00b7 " + (S.dp.seg === "asm" ? "Assembly" : S.dp.plant === "All" ? "All plants (excl. Assembly)" : S.dp.plant) + (S.dp.lt && S.dp.seg === "ultra" ? " \u00b7 Prod below 30 Kg \u00b7 click Job Card for item history" : " \u00b7 click a Job Card for production details");
+    $("#pr-dp-sub").textContent = (dt ? dayName(dt) + ", " + nice(dt) : (S.dp.from === S.dp.to ? nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to))) + " \u00b7 " + (S.dp.seg === "asm" ? "Assembly" : S.dp.seg === "hold" ? "Hold Check (M/C Pending Clear) \u00b7 click a date to add entries" : S.dp.plant === "All" ? "All plants (excl. Assembly)" : S.dp.plant) + (S.dp.lt && S.dp.seg === "ultra" ? " \u00b7 Prod below 30 Kg \u00b7 click Job Card for item history" : " \u00b7 click a Job Card for production details");
     if (!list.length) { $("#pr-dp-tw").innerHTML = '<div class="pr-empty">' + ((S.dp.rows || []).length ? "No entry matches the search." : "No production entries for these filters.") + "</div>"; $("#pr-dp-ml").innerHTML = ""; return; }
     var h = '<table class="pr-t pr-dp-t"><thead><tr><th>Date / Shift</th><th>Job Card</th><th>M/C No</th><th>Item</th><th class="n">Produced</th><th class="n">Accepted</th><th class="n">Rejected</th><th class="n">Prod (Kg)</th><th>QC Status</th><th class="n">MP / Elec Hrs</th><th>Stock Entry</th></tr></thead><tbody>';
     list.forEach(function (r) {
       var pc = r.entry_type === "Pending Clear";
-      h += "<tr" + (pc ? ' class="is-pc"' : "") + '><td class="dt">' + esc(short(r.production_date)) + " " + shiftBadge(r.shift) + (pc ? '<small><span class="pr-et pc">Pending Clear</span></small>' : "") + "</td>" +
+      var hcClick = S.dp.seg === "hold" && S.acc && (S.acc.can_prod_entry || S.acc.can_delete_entry);
+      h += "<tr" + (pc ? ' class="is-pc"' : "") + '><td class="dt">' + (hcClick ? '<button type="button" class="pr-hc-date" data-hcdate="' + esc(r.production_date) + '" data-hcshift="' + esc(r.shift || "") + '" title="Open Hold Check entries for this date">' + esc(short(r.production_date)) + "</button>" : esc(short(r.production_date))) + " " + shiftBadge(r.shift) + (pc ? '<small><span class="pr-et pc">Pending Clear</span></small>' : "") + "</td>" +
         "<td>" + dpTrigger(r) + "<small>" + esc(r.production_plan || "") + "</small></td>" +
         '<td class="mc">' + (r.workstation ? docLink("Workstation", r.workstation, shortMachine(r.workstation)) : '<span class="mut">\u2013</span>') + "</td>" +
         '<td class="it">' + docLink("Item", r.item_code, r.item_name) + "<small>PW " + nq(r.pw) + " g \u00b7 " + esc(r.uom || "") + "</small></td>" +
@@ -1444,7 +1445,7 @@
      Entry = Work Order ke against "Manufacture" Stock Entry (QC baad mein pehle jaisa)
      =================================================================== */
   var ULF = { date: "", shift: "A", plant: "New Plant", data: null, rows: [], seq: 0, wos: {}, meta: {}, done: [], rates: {}, molds: {} };
-  function ulfMc(ws) { return "M/C " + machineOf(ws); }
+  function ulfMc(ws) { return /pending\s*clear/i.test(ws || "") ? "Pending Clear" : "M/C " + machineOf(ws); }
   function pickPos(el, box) {
     var rc = el.getBoundingClientRect(), below = w.innerHeight - rc.bottom;
     box.style.position = "fixed"; box.style.left = rc.left + "px"; box.style.width = Math.max(rc.width, 360) + "px"; box.style.right = "auto";
@@ -1466,7 +1467,7 @@
   }
   /* usi shift mein product change: hours / manpower / rates pichhli entry se, product + qty naya */
   function ulfExtra(r) {
-    var e = r.entries[r.entries.length - 1], x = ulfBlank(r.machine, "extra");
+    var e = r.entries ? r.entries[r.entries.length - 1] : r, x = ulfBlank(r.machine, "extra");
     x.manpower = lbfNum(e.manpower);
     return x;
   }
@@ -1521,20 +1522,25 @@
       } catch (e) { }
     }, 180);
   }
-  function openUlf() {
-    var m = $("#pr-ulf");
+  function openUlf(mode) {
+    var m = $("#pr-ulf"), hc = mode === "hold";
+    ULF.mode = hc ? "hold" : "ultra";
+    m.classList.toggle("is-hold", hc);
     ULF.date = ULF.date || today;
-    if (S.dp.plant === "New Plant" || S.dp.plant === "Old Plant") ULF.plant = S.dp.plant;
+    if (hc) ULF.plant = "M/C Pending Clear";
+    else if (S.dp.plant === "New Plant" || S.dp.plant === "Old Plant") ULF.plant = S.dp.plant;
+    else if (ULF.plant !== "New Plant" && ULF.plant !== "Old Plant") ULF.plant = "New Plant";
     ULF.data = null; ULF.rows = []; ULF.done = []; ULF.confirm = false; ULF.err = "";
     $(".pr-modal", m).innerHTML =
-      '<div class="pr-mh"><div><h3>Ultra · Add Production Entry</h3><p>Pick the date, shift and plant. Machines already entered for that shift are shown as done. The rest are copied from their last shift – change only what is different. One Submit per machine makes the material transfer, the Manufacture entry and the full QC (Approved / Hold / Rejected).</p></div>' +
+      '<div class="pr-mh"><div>' + (hc ? "<h3>Hold Check \u00b7 Add Entry</h3><p>Entries on <b>M/C Pending Clear</b> for the date and shift. Fill a blank row, use <b>+ Add product</b> for more products. One Submit per row makes the material transfer, the Manufacture entry and the full QC (Approved / Hold / Rejected), same as Ultra.</p>"
+        : "<h3>Ultra \u00b7 Add Production Entry</h3><p>Pick the date, shift and plant. Machines already entered for that shift are shown as done. The rest are copied from their last shift \u2013 change only what is different. One Submit per machine makes the material transfer, the Manufacture entry and the full QC (Approved / Hold / Rejected).</p>") + "</div>" +
         '<button type="button" class="pr-ibtn" id="pr-ulf-x" title="Close">' + I.x + "</button></div>" +
       '<div class="pr-lbf-top"><div class="pr-f"><span>Date</span><div class="pr-dnav" id="pr-ulf-dnav">' +
           '<button type="button" class="pr-nbtn" data-dd="-1" title="Previous day">' + I.left + '</button>' +
           '<input type="date" id="pr-ulf-date" value="' + esc(ULF.date) + '" max="' + today + '">' +
           '<button type="button" class="pr-nbtn" data-dd="1" title="Next day">' + I.right + "</button></div></div>" +
         '<div class="pr-f"><span>Shift</span><div class="pr-seg2" id="pr-ulf-shift"><button type="button" data-sh="A">Shift A</button><button type="button" data-sh="B">Shift B</button></div></div>' +
-        '<div class="pr-f"><span>Plant</span><div class="pr-seg2" id="pr-ulf-plant"><button type="button" data-pl="New Plant">New Plant</button><button type="button" data-pl="Old Plant">Old Plant</button></div></div>' +
+        '<div class="pr-f"' + (hc ? " hidden" : "") + '><span>Plant</span><div class="pr-seg2" id="pr-ulf-plant"><button type="button" data-pl="New Plant">New Plant</button><button type="button" data-pl="Old Plant">Old Plant</button></div></div>' +
         '<div class="pr-lbf-sum" id="pr-ulf-sum"></div></div>' +
       '<div class="pr-ulf-hwrap" id="pr-ulf-hwrap"></div>' +
       '<div class="pr-mb pr-lbf-body" id="pr-ulf-body"></div>' +
@@ -1653,7 +1659,9 @@
       ULF.data = m; ULF.meta = m.field_meta || {}; ULF.rows = []; ULF.confirm = false; ULF.err = "";
       (m.machines || []).forEach(function (x) {
         ULF.rates[x.machine] = x.rates || {};
+        if (x.current && x.current.length && ULF.mode === "hold") { ULF.rows.push({ machine: x.machine, mode: "entered", entries: x.current }); ULF.rows.push(ulfBlank(x.machine)); return; }
         if (x.current && x.current.length) { ULF.rows.push({ machine: x.machine, mode: "entered", entries: x.current }); return; }
+        if (ULF.mode === "hold") { ULF.rows.push(ulfBlank(x.machine)); return; }
         ULF.rows.push(x.previous ? ulfFromEntry(x.machine, x.previous) : ulfBlank(x.machine));
       });
       drawUlf();
@@ -1693,7 +1701,7 @@
           return '<div class="pr-ulf-row done"><span class="ck">' + (k ? "" : I.check) + '</span><span class="mc">' + (k ? "" : "<b>" + mc + "</b>") + "</span>" +
             '<span class="st"><em class="ok">Entered</em>' + docLink("Stock Entry", en.stock_entry) + (en.has_qc && !en.qc ? "<small>QC started</small>" : "") +
               (en.by_page && S.acc && S.acc.can_delete_entry ? '<button type="button" class="pr-lbf-del" data-del="' + esc(en.stock_entry) + '" title="Cancel the whole entry: final QC transfer, quality transfer, QI, Manufacture and material transfer">Delete</button>' : "") +
-              (last && can ? '<button type="button" class="pr-ulf-pc" data-pc="' + i + '" title="Machine changed product in this shift – add another entry">+ Product change</button>' : "") + "</span>" +
+              (last && can ? '<button type="button" class="pr-ulf-pc" data-pc="' + i + '" title="Machine changed product in this shift – add another entry">' + (ULF.mode === "hold" ? "+ Add product" : "+ Product change") + "</button>" : "") + "</span>" +
             '<span class="it"><b>' + esc((en.job_card_no ? en.job_card_no + " · " : "") + en.item_name) + "</b><small>" + esc(en.work_order) + "</small>" +
               '<span class="pr-ulf-spec"><em>CT <b>' + nq(en.cycle_time) + ' s</b></em><em>Cavity <b>' + nq(en.cavity) + '</b></em><em>Pcs Wt <b>' + nq(en.pcs_weight) + "</b></em>" +
                 (en.mold ? "<em>Mold <b>" + esc(en.mold) + "</b></em>" : "") + (en.reason ? "<em>Extra MP <b>" + esc(en.reason) + "</b></em>" : "") +
@@ -1705,7 +1713,9 @@
       }
       var src = r.mode === "copy" ? '<em class="cp">Copied</em><small>from ' + esc(short(r.from.posting_date)) + (r.from.shift_letter ? " · " + esc(r.from.shift_letter) : "") + "</small>" +
           (!r.from.wo_open ? '<small class="bad">Last WO ' + esc(r.from.work_order) + " is " + esc(r.from.wo_status) + " – pick a running one</small>" : "")
-        : r.mode === "extra" ? '<em class="nw">Product change</em><small>2nd entry this shift</small>' : '<em class="nw">New</em><small>no earlier entry</small>';
+        : r.mode === "extra" ? '<em class="nw">' + (ULF.mode === "hold" ? "Another product" : "Product change") + "</em><small>" + (ULF.mode === "hold" ? "extra row" : "2nd entry this shift") + "</small>"
+        : ULF.mode === "hold" ? '<em class="nw">New entry</em><small>fill and submit</small>' + (S.acc && S.acc.can_prod_entry ? '<button type="button" class="pr-ulf-pc" data-pc="' + i + '" title="Add one more product row">+ Add product</button>' : "")
+        : '<em class="nw">New</em><small>no earlier entry</small>';
       var lastP = r.mode === "copy" && !r.from.wo_open ? "Last: " + (r.from.job_card_no || r.from.item_name || "") : "Job Card No or product…";
       h += '<div class="pr-ulf-row' + (r.on ? "" : " off") + '" data-i="' + i + '">' +
         '<span class="ck"></span>' +
@@ -1719,7 +1729,7 @@
         '<div class="pr-ulf-sub"><div class="pr-ulf-split' + (ulfSplitBad(r) && +r.qty > 0 ? " bad" : "") + '" title="Approved + Hold + Rejected must equal Qty">' +
           ulfSub("Approved", ulfNum(r, "ok", "OK")) + ulfSub("Hold", ulfNum(r, "hold", "0")) + ulfSub("Rejected", ulfNum(r, "rej", "0")) + "</div>" +
           ulfSub("CT (sec)", ulfNum(r, "cycle_time", "CT")) + ulfSub("Cavity", ulfNum(r, "cavity", "Cav")) + ulfSub("Pcs Weight", ulfNum(r, "pcs_weight", "PW")) +
-          ulfSub("Mold Detail", '<span class="pr-pick"><input type="text" data-f="mold" autocomplete="off" value="' + esc(r.mold) + '" placeholder="Type mold\u2026"><span class="pr-pick-l" hidden></span></span>') + ulfSub("Extra Manpower Reason", ulfField(r, "reason", "Reason")) + "</div>" +
+          ulfSub("Mold Detail", '<span class="pr-pick"><input type="text" data-f="mold" autocomplete="off" value="' + esc(r.mold) + '" placeholder="Type mold\u2026"><span class="pr-pick-l" hidden></span></span>') + (ULF.mode === "hold" ? "" : ulfSub("Extra Manpower Reason", ulfField(r, "reason", "Reason"))) + "</div>" +
         (r.err ? '<div class="pr-ulf-err"><b>Not submitted:</b> ' + esc(r.err) + "</div>" : "") + "</div>";
     });
     var hw = $("#pr-ulf-hwrap"), hcut = h.indexOf("</div>") + 6;
@@ -1731,7 +1741,7 @@
     var done = 0, todo = 0, bad = 0;
     ULF.rows.forEach(function (r) { if (r.mode === "entered") { done += r.entries.length; return; } todo++; if (ulfBad(r)) bad++; });
     var m = ULF.data || {};
-    $("#pr-ulf-sum").innerHTML = ULF.data ? "<b>" + esc(nice(m.date)) + " \u00b7 Shift " + esc(m.shift) + " \u00b7 " + esc(m.plant) + "</b><span>" + done + " entered \u00b7 " + todo + " to enter</span>" : "";
+    $("#pr-ulf-sum").innerHTML = ULF.data ? "<b>" + esc(nice(m.date)) + " \u00b7 Shift " + esc(m.shift) + " \u00b7 " + esc(ULF.mode === "hold" ? "Hold Check" : m.plant) + "</b><span>" + done + " entered \u00b7 " + todo + " to enter</span>" : "";
     var foot = $("#pr-ulf-foot"); if (!foot) return;
     if (!ULF.data) { foot.innerHTML = ""; return; }
     var err = ULF.err ? '<div class="pr-lbf-err">' + esc(ULF.err) + "</div>" : "";
@@ -1820,7 +1830,9 @@
     if (e.target.closest("#pr-dp-next")) { shiftDay(1); return; }
     if (e.target.closest("#pr-dp-lt")) { S.dp.lt = S.dp.lt ? 0 : 1; syncDpBand(); syncSub(); loadDp(); return; }   /* < 30 Kg on / off */
     if (e.target.closest("#pr-dp-analysis")) { openAnalysis(); return; }
-    if (e.target.closest("#pr-lb-add")) { if (S.dp.seg === "large") openLbf(); else if (S.dp.seg === "ultra") openUlf(); return; }
+    if (e.target.closest("#pr-lb-add")) { if (S.dp.seg === "large") openLbf(); else if (S.dp.seg === "ultra") openUlf(); else if (S.dp.seg === "hold") openUlf("hold"); return; }
+    var hcd = e.target.closest("[data-hcdate]");   /* Hold Check: date par click -> us din ka entry form */
+    if (hcd) { ULF.date = hcd.getAttribute("data-hcdate"); var hsh = String(hcd.getAttribute("data-hcshift") || "").toUpperCase().replace("SHIFT", "").trim(); if (hsh === "A" || hsh === "B") ULF.shift = hsh; openUlf("hold"); return; }
     if ((b = e.target.closest("[data-pg]"))) { var n = S.dp.di + (+b.getAttribute("data-pg")); if (n >= 0 && n < S.dp.dates.length) { S.dp.di = n; renderDp(); } return; }
     if ((b = e.target.closest("[data-di]"))) { S.dp.di = +b.getAttribute("data-di"); renderDp(); return; }
     if (e.target.closest("#pr-dp-csv")) { dpCSV(); return; }
@@ -1893,7 +1905,7 @@
   /* --- section switch --- */
   function syncSub() {
     var sub = S.sec === "jobcard" ? (S.jlb.seg === "large" ? "Job Card \u00b7 Large Blow \u00b7 " + jlbLabel() : "Job Card \u00b7 Ultra \u00b7 " + (S.jc.status === "All" ? "All status" : S.jc.status) + " \u00b7 " + jcScope())
-      : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : S.dp.seg === "eco" ? "Eco Blow" : S.dp.seg === "asm" ? "Assembly" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
+      : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : S.dp.seg === "eco" ? "Eco Blow" : S.dp.seg === "hold" ? "Hold Check" : S.dp.seg === "asm" ? "Assembly" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
       : S.sec === "perf" ? "Performance \u00b7 " + monthOf(S.pf.from, S.pf.to) + " \u00b7 " + (S.pf.status === "All" ? "All status" : S.pf.status)
       : S.sec === "nonmoving" ? "Non Moving \u00b7 " + monthOf(S.nm.from, S.nm.to) + " \u00b7 " + S.nm.wh + " \u00b7 " + S.nm.ig
       : "Planning \u00b7 " + ((PL_MONTHS.filter(function (m) { return m[0] === S.pl.month; })[0] || [0, "All months"])[1]);
