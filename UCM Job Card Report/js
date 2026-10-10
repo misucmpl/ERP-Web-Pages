@@ -10,7 +10,7 @@
   "use strict";
   var d = document, w = window;
   var API = "/api/method/ucm_production_web";
-  var PROD_VER = "10-Oct-2026 ultra-qc";   /* server script ke PW_VER se match hona chahiye */
+  var PROD_VER = "10-Oct-2026 ultra-repack";   /* server script ke PW_VER se match hona chahiye */
   var JC_API = "/api/method/ucm_job_card_detail";
   var CT_API = "/api/method/ucm_std_vs_actual_ct_detail";
   var IH_API = "/api/method/ucm_item_history_api";
@@ -1189,21 +1189,37 @@
        nahi hai               -> machine ki pichhli entry copy (editable)
      =================================================================== */
   var LBF = { date: "", shift: "A", data: null, rows: [], seq: 0, items: {} };
+  function addDay(s, n) { var p = String(s).split("-"), x = new Date(+p[0], +p[1] - 1, +p[2]); x.setDate(x.getDate() + n); return iso(x); }
+  function dnavSync(sel, dt) { var nx = $(sel + ' [data-dd="1"]'); if (nx) nx.disabled = dt >= today; }   /* aage ki date nahi */
   function lbfNum(v) { return v == null || v === "" ? "" : String(Math.round((+v || 0) * 100) / 100); }
+  /* usi shift mein product change: manpower + rates pichhli se, product / qty / hours naye */
+  function lbfExtra(machine, src) {
+    return { machine: machine, mode: "extra", on: true, item_code: "", item_name: "", uom: "", qty: "", electricity_hours: "", manpower_hours: "",
+      manpower: lbfNum(src && src.manpower), elec_rate: (src && src.elec_rate) || 125, wage_rate: (src && src.wage_rate) || 70 };
+  }
   function openLbf() {
     var m = $("#pr-lbf");
     LBF.date = LBF.date || today; LBF.data = null; LBF.rows = []; LBF.done = []; LBF.confirm = false; LBF.err = "";
     $(".pr-modal", m).innerHTML =
       '<div class="pr-mh"><div><h3>Large Blow \u00b7 Add Production Entry</h3><p>Pick the date and shift. Machines already entered for that shift are shown as done. The rest are copied from their last shift \u2013 change only what is different.</p></div>' +
         '<button type="button" class="pr-ibtn" id="pr-lbf-x" title="Close">' + I.x + "</button></div>" +
-      '<div class="pr-lbf-top"><label class="pr-f"><span>Date</span><input type="date" id="pr-lbf-date" value="' + esc(LBF.date) + '"></label>' +
+      '<div class="pr-lbf-top"><div class="pr-f"><span>Date</span><div class="pr-dnav" id="pr-lbf-dnav">' +
+          '<button type="button" class="pr-nbtn" data-dd="-1" title="Previous day">' + I.left + '</button>' +
+          '<input type="date" id="pr-lbf-date" value="' + esc(LBF.date) + '" max="' + today + '">' +
+          '<button type="button" class="pr-nbtn" data-dd="1" title="Next day">' + I.right + "</button></div></div>" +
         '<div class="pr-f"><span>Shift</span><div class="pr-seg2" id="pr-lbf-shift"><button type="button" data-sh="A">Shift A</button><button type="button" data-sh="B">Shift B</button></div></div>' +
         '<div class="pr-lbf-sum" id="pr-lbf-sum"></div></div>' +
       '<div class="pr-mb pr-lbf-body" id="pr-lbf-body"></div>' +
       '<div class="pr-lbf-foot" id="pr-lbf-foot"></div>';
     m.hidden = false; lock(true);
     $("#pr-lbf-x").addEventListener("click", closeLbf);
-    $("#pr-lbf-date").addEventListener("change", function () { if (this.value) { LBF.date = this.value; LBF.done = []; loadLbf(); } });
+    $("#pr-lbf-date").addEventListener("change", function () { if (this.value) { LBF.date = this.value > today ? today : this.value; this.value = LBF.date; LBF.done = []; dnavSync("#pr-lbf-dnav", LBF.date); loadLbf(); } });
+    $("#pr-lbf-dnav").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-dd]"); if (!b || b.disabled) return;
+      var nd = addDay(LBF.date, +b.getAttribute("data-dd")); if (nd > today) return;
+      LBF.date = nd; $("#pr-lbf-date").value = nd; LBF.done = []; dnavSync("#pr-lbf-dnav", nd); loadLbf();
+    });
+    dnavSync("#pr-lbf-dnav", LBF.date);
     $("#pr-lbf-shift").addEventListener("click", function (e) { var b = e.target.closest("[data-sh]"); if (!b) return; LBF.shift = b.getAttribute("data-sh"); LBF.done = []; loadLbf(); });
     var body = $("#pr-lbf-body");
     body.addEventListener("input", function (e) {
@@ -1233,6 +1249,24 @@
     /* Entered entry: Delete (2 baar click) -> cancel + delete */
     var delT;
     body.addEventListener("click", async function (e) {
+      var pc = e.target.closest("[data-lpc]");
+      if (pc) {
+        var pi = +pc.getAttribute("data-lpc"), pr = LBF.rows[pi]; if (!pr) return;
+        var srcE = pr.mode === "entered" ? pr.entries[pr.entries.length - 1] : pr;
+        var at = pi + 1; while (LBF.rows[at] && LBF.rows[at].mode === "extra" && LBF.rows[at].machine === pr.machine) at++;
+        LBF.rows.splice(at, 0, lbfExtra(pr.machine, srcE)); drawLbf(); return;
+      }
+      var rmb = e.target.closest("[data-lrm]");
+      if (rmb) {   /* extra row hatao; data bhara ho to pehle confirm */
+        var ri = +rmb.getAttribute("data-lrm"), rr = LBF.rows[ri]; if (!rr || rr.mode !== "extra") return;
+        var filled = !!(rr.item_code || rr.qty || rr.electricity_hours || rr.manpower_hours);
+        if (filled && !rmb.classList.contains("arm")) {
+          rmb.classList.add("arm"); rmb.textContent = "Data filled \u2013 remove?";
+          setTimeout(function () { if (rmb.isConnected) { rmb.classList.remove("arm"); rmb.textContent = "Remove"; } }, 4000);
+          return;
+        }
+        LBF.rows.splice(ri, 1); drawLbf(); return;
+      }
       var b = e.target.closest("[data-del]"); if (!b || b.disabled) return;
       if (!b.classList.contains("arm")) {
         $$("#pr-lbf .pr-lbf-del.arm").forEach(function (x) { x.classList.remove("arm"); x.textContent = "Delete"; });
@@ -1332,17 +1366,22 @@
     var h = '<div class="pr-lbf-head"><span></span><span>Machine</span><span>Status</span><span>Product</span><span class="n">Qty</span><span class="n">Elec Hrs</span><span class="n">Man Hrs</span><span class="n">Manpower</span></div>';
     LBF.rows.forEach(function (r, i) {
       var mc = esc(shortMachine(r.machine) || r.machine);
+      var canAdd = !!(S.acc && S.acc.can_prod_entry);
+      var pcBtn = canAdd ? '<button type="button" class="pr-lbf-pc" data-lpc="' + i + '" title="Machine changed product in this shift \u2013 add another entry">+ Product change</button>' : "";
       if (r.mode === "entered") {
         h += r.entries.map(function (en, k) {
+          var last = k === r.entries.length - 1;
           return '<div class="pr-lbf-row done"><span class="ck">' + (k ? "" : I.check) + "</span><span class=\"mc\">" + (k ? "" : "<b>" + mc + "</b>") + "</span>" +
             '<span class="st"><em class="ok">Entered</em>' + docLink("Stock Entry", en.stock_entry) +
-              (en.by_page && S.acc && S.acc.can_delete_entry ? '<button type="button" class="pr-lbf-del" data-del="' + esc(en.stock_entry) + '" title="Cancel and delete this Stock Entry">Delete</button>' : "") + "</span>" +
+              (en.by_page && S.acc && S.acc.can_delete_entry ? '<button type="button" class="pr-lbf-del" data-del="' + esc(en.stock_entry) + '" title="Cancel and delete this Stock Entry">Delete</button>' : "") + (last ? pcBtn : "") + "</span>" +
             '<span class="it"><b>' + esc(en.item_name) + "</b><small>" + esc(en.item_code) + "</small></span>" +
             '<span class="n">' + nq(en.qty) + " <small>" + esc(en.uom || "") + '</small></span><span class="n">' + nq(en.electricity_hours) + '</span><span class="n">' + nq(en.manpower_hours) + '</span><span class="n">' + nq(en.manpower) + "</span></div>";
         }).join("");
         return;
       }
-      var src = r.mode === "copy" ? '<em class="cp">Copied</em><small>from ' + esc(short(r.from.posting_date)) + (r.from.shift_letter ? " \u00b7 " + esc(r.from.shift_letter) : "") + "</small>" : '<em class="nw">New</em><small>no earlier entry</small>';
+      var src = r.mode === "copy" ? '<em class="cp">Copied</em><small>from ' + esc(short(r.from.posting_date)) + (r.from.shift_letter ? " \u00b7 " + esc(r.from.shift_letter) : "") + "</small>" + pcBtn
+        : r.mode === "extra" ? '<em class="nw">Product change</em><small>another product this shift</small><button type="button" class="pr-lbf-rm" data-lrm="' + i + '" title="Remove this extra row (nothing is saved yet)">Remove</button>'
+        : '<em class="nw">New</em><small>no earlier entry</small>' + pcBtn;
       function inp(f, ph) { return '<input type="number" min="0" step="any" data-f="' + f + '" value="' + esc(r[f]) + '" placeholder="' + ph + '">'; }
       h += '<div class="pr-lbf-row' + (r.on ? "" : " off") + '" data-i="' + i + '">' +
         '<span class="ck"><input type="checkbox" data-f="on"' + (r.on ? " checked" : "") + ' title="Machine running this shift"></span>' +
@@ -1362,6 +1401,12 @@
       todo++;
       if (!r.item_code || !LBF.items[r.item_code] || !(+r.qty > 0)) bad++;
     });
+    var seenMI = {}, dupMI = 0;
+    LBF.rows.forEach(function (r) {
+      var ks = r.mode === "entered" ? r.entries.map(function (en) { return en.item_code; }) : (r.on && r.item_code ? [r.item_code] : []);
+      ks.forEach(function (ic) { var k = r.machine + "|" + ic; if (seenMI[k]) dupMI++; seenMI[k] = 1; });
+    });
+    if (dupMI) bad += dupMI;
     var m = LBF.data || {};
     $("#pr-lbf-sum").innerHTML = LBF.data ? '<b>' + esc(nice(m.date)) + " \u00b7 Shift " + esc(m.shift) + "</b><span>" + done + " entered \u00b7 " + todo + " to enter" + (off ? " \u00b7 " + off + " not running" : "") + "</span>" : "";
     var foot = $("#pr-lbf-foot"); if (!foot) return;
@@ -1386,7 +1431,7 @@
       foot.innerHTML = err + '<div class="pr-lbf-bar"><span class="why">You can delete entries here. Adding entries needs Production Entry access.</span></div>';
       return;
     }
-    foot.innerHTML = err + done + '<div class="pr-lbf-bar"><span class="why' + (bad ? " bad" : "") + '">' + (bad ? bad + " machine" + (bad > 1 ? "s need" : " needs") + " a product from the list and a qty." : (todo ? todo + " machine" + (todo > 1 ? "s" : "") + " ready. Review and submit to create the Stock Entries." : "Nothing to enter for this shift.")) + "</span>" +
+    foot.innerHTML = err + done + '<div class="pr-lbf-bar"><span class="why' + (bad ? " bad" : "") + '">' + (bad ? bad + " row" + (bad > 1 ? "s need" : " needs") + " a product from the list and a qty" + (dupMI ? " (same product twice on one machine in this shift is not allowed)" : "") + "." : (todo ? todo + " machine" + (todo > 1 ? "s" : "") + " ready. Review and submit to create the Stock Entries." : "Nothing to enter for this shift.")) + "</span>" +
       '<button type="button" class="pr-btn" data-lact="review"' + (bad || !todo ? " disabled" : "") + ">Review & Submit</button></div>";
   }
   $("#pr-lbf").addEventListener("mousedown", function (e) { if (e.target === this) closeLbf(); });
@@ -1426,7 +1471,7 @@
     return x;
   }
   function ulfSplitBad(r) { return Math.abs((+r.ok || 0) + (+r.hold || 0) + (+r.rej || 0) - (+r.qty || 0)) > 0.001 || (+r.ok || 0) < 0 || (+r.hold || 0) < 0 || (+r.rej || 0) < 0; }
-  function ulfBad(r) { return !r.wo || !ULF.wos[r.wo] || !(+r.qty > 0) || !!(r.mold && !ULF.molds[r.mold]) || ulfSplitBad(r) || ulfAnyOptBad(r); }
+  function ulfBad(r) { return !r.wo || !ULF.wos[r.wo] || !(+r.qty > 0) || !!(r.mold && !ULF.molds[r.mold]) || ulfSplitBad(r) || ulfAnyOptBad(r) || ((+r.rej || 0) > 0 && !(+r.pcs_weight > 0)); }
   function ulfCost(r) {
     var rt = ULF.rates[r.machine] || {}, er = +rt.elec_rate || 125, wr = +rt.wage_rate || 60;   /* Workstation ke rate */
     return { er: er, wr: wr, e: (+r.elec_hrs || 0) * er, m: (+r.manpower || 0) * (+r.man_hrs || 0) * wr };
@@ -1484,15 +1529,25 @@
     $(".pr-modal", m).innerHTML =
       '<div class="pr-mh"><div><h3>Ultra · Add Production Entry</h3><p>Pick the date, shift and plant. Machines already entered for that shift are shown as done. The rest are copied from their last shift – change only what is different. One Submit per machine makes the material transfer, the Manufacture entry and the full QC (Approved / Hold / Rejected).</p></div>' +
         '<button type="button" class="pr-ibtn" id="pr-ulf-x" title="Close">' + I.x + "</button></div>" +
-      '<div class="pr-lbf-top"><label class="pr-f"><span>Date</span><input type="date" id="pr-ulf-date" value="' + esc(ULF.date) + '" max="' + today + '"></label>' +
+      '<div class="pr-lbf-top"><div class="pr-f"><span>Date</span><div class="pr-dnav" id="pr-ulf-dnav">' +
+          '<button type="button" class="pr-nbtn" data-dd="-1" title="Previous day">' + I.left + '</button>' +
+          '<input type="date" id="pr-ulf-date" value="' + esc(ULF.date) + '" max="' + today + '">' +
+          '<button type="button" class="pr-nbtn" data-dd="1" title="Next day">' + I.right + "</button></div></div>" +
         '<div class="pr-f"><span>Shift</span><div class="pr-seg2" id="pr-ulf-shift"><button type="button" data-sh="A">Shift A</button><button type="button" data-sh="B">Shift B</button></div></div>' +
         '<div class="pr-f"><span>Plant</span><div class="pr-seg2" id="pr-ulf-plant"><button type="button" data-pl="New Plant">New Plant</button><button type="button" data-pl="Old Plant">Old Plant</button></div></div>' +
         '<div class="pr-lbf-sum" id="pr-ulf-sum"></div></div>' +
+      '<div class="pr-ulf-hwrap" id="pr-ulf-hwrap"></div>' +
       '<div class="pr-mb pr-lbf-body" id="pr-ulf-body"></div>' +
       '<div class="pr-lbf-foot" id="pr-ulf-foot"></div>';
     m.hidden = false; lock(true);
     $("#pr-ulf-x").addEventListener("click", closeUlf);
-    $("#pr-ulf-date").addEventListener("change", function () { if (this.value) { ULF.date = this.value; ULF.done = []; loadUlf(); } });
+    $("#pr-ulf-date").addEventListener("change", function () { if (this.value) { ULF.date = this.value > today ? today : this.value; this.value = ULF.date; ULF.done = []; dnavSync("#pr-ulf-dnav", ULF.date); loadUlf(); } });
+    $("#pr-ulf-dnav").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-dd]"); if (!b || b.disabled) return;
+      var nd = addDay(ULF.date, +b.getAttribute("data-dd")); if (nd > today) return;
+      ULF.date = nd; $("#pr-ulf-date").value = nd; ULF.done = []; dnavSync("#pr-ulf-dnav", nd); loadUlf();
+    });
+    dnavSync("#pr-ulf-dnav", ULF.date);
     $("#pr-ulf-shift").addEventListener("click", function (e) { var b = e.target.closest("[data-sh]"); if (!b) return; ULF.shift = b.getAttribute("data-sh"); ULF.done = []; loadUlf(); });
     $("#pr-ulf-plant").addEventListener("click", function (e) { var b = e.target.closest("[data-pl]"); if (!b) return; ULF.plant = b.getAttribute("data-pl"); ULF.done = []; loadUlf(); });
     var body = $("#pr-ulf-body");
@@ -1591,7 +1646,7 @@
     var my = ++ULF.seq;
     $$("#pr-ulf-shift [data-sh]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-sh") === ULF.shift); });
     $$("#pr-ulf-plant [data-pl]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-pl") === ULF.plant); });
-    $("#pr-ulf-body").innerHTML = loadingHTML(); $("#pr-ulf-foot").innerHTML = ""; $("#pr-ulf-sum").innerHTML = "";
+    $("#pr-ulf-body").innerHTML = loadingHTML(); $("#pr-ulf-foot").innerHTML = ""; if ($("#pr-ulf-hwrap")) $("#pr-ulf-hwrap").innerHTML = ""; $("#pr-ulf-sum").innerHTML = "";
     try {
       var m = await api({ action: "ul_form", date: ULF.date, shift: ULF.shift, plant: ULF.plant });
       if (!m || my !== ULF.seq) return;
@@ -1627,9 +1682,9 @@
   }
   function ulfSub(l, x) { return "<label><span>" + l + "</span>" + x + "</label>"; }
   function drawUlf() {
-    if (!ULF.rows.length) { $("#pr-ulf-body").innerHTML = '<div class="pr-empty">No ' + esc(ULF.plant) + ' machines found. Workstations with "' + esc(ULF.plant) + '" in the name are used as the machine list.</div>'; drawUlfSum(); return; }
+    if (!ULF.rows.length) { if ($("#pr-ulf-hwrap")) $("#pr-ulf-hwrap").innerHTML = ""; $("#pr-ulf-body").innerHTML = '<div class="pr-empty">No ' + esc(ULF.plant) + ' machines found. Workstations with "' + esc(ULF.plant) + '" in the name are used as the machine list.</div>'; drawUlfSum(); return; }
     var can = !!(S.acc && S.acc.can_prod_entry);
-    var h = '<div class="pr-ulf-head"><span></span><span>Machine</span><span>Status</span><span>Job Card No \u00b7 Item</span><span class="n">Qty</span><span class="n">Elec Hrs</span><span class="n">Man Hrs</span><span class="n">Manpower</span></div>';
+    var h = '<div class="pr-ulf-head"><span></span><span>Machine</span><span>Status</span><span>Job Card No \u00b7 Item</span><span class="n">Manf. Qty</span><span class="n">Elec Hrs</span><span class="n">Man Hrs</span><span class="n">Manpower</span></div>';
     ULF.rows.forEach(function (r, i) {
       var mc = esc(ulfMc(r.machine));
       if (r.mode === "entered") {
@@ -1660,13 +1715,15 @@
         '<span class="st">' + src + "</span>" +
         '<span class="it"><span class="pr-pick"><input type="text" data-f="wo" autocomplete="off" value="' + esc(r.wo ? (r.jc || r.wo) : "") + '" placeholder="' + esc(lastP) + '"><span class="pr-pick-l" hidden></span></span>' +
           '<small class="nm">' + esc(r.wo ? r.item_name + " · " + r.wo : "") + "</small></span>" +
-        '<span class="n">' + ulfNum(r, "qty", "Qty") + '</span><span class="n">' + ulfNum(r, "elec_hrs", "Elec hrs") + '</span><span class="n">' + ulfNum(r, "man_hrs", "Man hrs") + '</span><span class="n">' + ulfNum(r, "manpower", "Manpower") + "</span>" +
+        '<span class="n">' + ulfNum(r, "qty", "Mfg Qty") + '</span><span class="n">' + ulfNum(r, "elec_hrs", "Elec hrs") + '</span><span class="n">' + ulfNum(r, "man_hrs", "Man hrs") + '</span><span class="n">' + ulfNum(r, "manpower", "Manpower") + "</span>" +
         '<div class="pr-ulf-sub"><div class="pr-ulf-split' + (ulfSplitBad(r) && +r.qty > 0 ? " bad" : "") + '" title="Approved + Hold + Rejected must equal Qty">' +
           ulfSub("Approved", ulfNum(r, "ok", "OK")) + ulfSub("Hold", ulfNum(r, "hold", "0")) + ulfSub("Rejected", ulfNum(r, "rej", "0")) + "</div>" +
           ulfSub("CT (sec)", ulfNum(r, "cycle_time", "CT")) + ulfSub("Cavity", ulfNum(r, "cavity", "Cav")) + ulfSub("Pcs Weight", ulfNum(r, "pcs_weight", "PW")) +
           ulfSub("Mold Detail", '<span class="pr-pick"><input type="text" data-f="mold" autocomplete="off" value="' + esc(r.mold) + '" placeholder="Type mold\u2026"><span class="pr-pick-l" hidden></span></span>') + ulfSub("Extra Manpower Reason", ulfField(r, "reason", "Reason")) + "</div>" +
         (r.err ? '<div class="pr-ulf-err"><b>Not submitted:</b> ' + esc(r.err) + "</div>" : "") + "</div>";
     });
+    var hw = $("#pr-ulf-hwrap"), hcut = h.indexOf("</div>") + 6;
+    if (hw) { hw.innerHTML = h.slice(0, hcut); h = h.slice(hcut); }
     $("#pr-ulf-body").innerHTML = '<div class="pr-ulf-grid">' + h + "</div>";
     drawUlfSum();
   }
@@ -1683,7 +1740,7 @@
       foot.innerHTML = err + '<div class="pr-lbf-bar"><span class="why">You can delete entries here. Adding entries needs Production Entry access.</span></div>';
       return;
     }
-    foot.innerHTML = err + dn + '<div class="pr-lbf-bar"><span class="why">' + (todo ? "Submit one machine at a time: fill the row, click its <b>Submit</b>, then <b>Confirm</b>. One Submit makes the material transfer, Manufacture and the full QC." + (bad ? " " + bad + " machine" + (bad > 1 ? "s still need" : " still needs") + " a job card from the list, a qty, and Approved + Hold + Rejected = Qty (mold, if filled, must be picked from the list)." : "") : "Nothing left to enter for this shift.") + "</span></div>";
+    foot.innerHTML = err + dn + '<div class="pr-lbf-bar"><span class="why">' + (todo ? "Submit one machine at a time: fill the row, click its <b>Submit</b>, then <b>Confirm</b>. One Submit makes the material transfer, Manufacture and the full QC." + (bad ? " " + bad + " machine" + (bad > 1 ? "s still need" : " still needs") + " a job card from the list, a qty, Approved + Hold + Rejected = Qty, and Pcs Weight when there is a rejection (mold, if filled, must be picked from the list)." : "") : "Nothing left to enter for this shift.") + "</span></div>";
   }
   function ulfSyncBtn(row, r) {
     var sb = row.querySelector("[data-sub]"); if (!sb || ULF.busy) return;
@@ -1697,7 +1754,8 @@
       var c = ulfCost(r);
       b.classList.add("arm"); b.textContent = "Confirm?";
       b.title = ulfMc(r.machine) + " \u00b7 " + (r.jc || r.wo) + " \u00b7 Total " + nq(r.qty) + " = OK " + nq(r.ok) + " + Hold " + nq(+r.hold || 0) + " + Rej " + nq(+r.rej || 0) +
-        " \u00b7 Elec " + inr(c.e) + " + Manpower " + inr(c.m) + " \u2013 click again: material transfer, manufacture, QC";
+        ((+r.rej || 0) > 0 ? " \u00b7 Rejected " + nq(+r.rej) + " pcs \u2192 " + nq(Math.round((+r.rej) * (+r.pcs_weight || 0)) / 1000) + " Kg MIX to WH1" : "") +
+        " \u00b7 Elec " + inr(c.e) + " + Manpower " + inr(c.m) + " \u2013 click again: material transfer, manufacture, QC" + ((+r.rej || 0) > 0 ? ", rejection repack" : "");
       clearTimeout(ulfSubT); ulfSubT = setTimeout(function () { if (b.isConnected && !ULF.busy) { b.classList.remove("arm"); b.textContent = "Submit"; } }, 5000);
       return;
     }
