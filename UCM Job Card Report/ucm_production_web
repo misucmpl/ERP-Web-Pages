@@ -11,11 +11,20 @@
 #   action = "analysis"  → Daily Analysis (ek din + pichla din, plant All + Pending Clear)  · date
 #   action = "largeblow" → Large Blow production: "Manufacture" Stock Entry (BOM se, bina Work Order),
 #                          FG "WH7 - UCM" mein · from_date, to_date  (ya month = YYYY-MM / "all")
+#   action = "largeblow" + kind = "eco" → Eco Blow production: Manufacture entries jinki Workstation ke naam mein
+#                          "Eco Blow" hai (Large Blow / Ultra se alag) · from_date, to_date
 #   action = "lb_form"   → Large Blow "Add Production Entry" form: har machine ki is shift ki entry,
 #                          na ho to pichhli shift ki entry (copy ke liye) · date, shift = A / B
 #   action = "lb_items"  → us form ke liye FG-BLO product search · q
 #   action = "lb_submit" (POST) → form ki machines ki "Manufacture" Stock Entries banao + Submit · date, shift, rows
-#   action = "lb_delete" (POST) → is page se bani Large Blow Stock Entry cancel + delete · stock_entry
+#   action = "lb_delete" (POST) → is page se bani Large Blow / Ultra Stock Entry cancel + delete · stock_entry
+#   action = "ul_form"   → Ultra "Add Production Entry" form: New / Old Plant ki har machine ki is shift ki entry,
+#                          na ho to pichhli shift ki entry (copy ke liye) · date, shift = A / B, plant
+#   action = "ul_wos"    → us form ke liye chalu Work Order search · q
+#   action = "ul_molds"  → us form ke liye Mold Master search (Mold Detail) · q
+#   action = "ul_submit" (POST) → ek machine ki poori entry: MTM → Manufacture → Transfer to Quality → QI → final transfer
+#                          · date, shift, plant, rows (qty = total, ok / hold / rej)
+#   action = "ul_delete" (POST) → page se bani Ultra entry ki poori chain ulte order mein Cancel · stock_entry (Manufacture)
 #   action = "performance" → UCM Job Card Perfomance Report · from_date, to_date, status_filter, item_code
 #   action = "planning"  → UCM Production Planning     · month (YYYY-MM, blank = sab), item_code
 #   action = "nonmoving" → UCM Non Moving FG Item          · from_date, to_date (WH2 - UCM, Ultra fix)
@@ -48,7 +57,13 @@ PW_CLOSE_ROLE = "UCM Prod Close Plan"   # "Delete & Close" access: Close Plan + 
 # Daily Production → Large Blow "Add Production Entry" (Stock Entry submit / delete): alag access, sabko ⚙️ se
 PW_ENTRY_ROLE = "UCM Prod Production Entry"
 # JS ke PROD_VER se match hona chahiye — alag ho to page par laal warning aati hai
-PW_VER = "09-Oct-2026 delete-close"
+PW_VER = "10-Oct-2026 ultra-qc"
+# Ultra "Add Production Entry": [key, Stock Entry field ka label (lowercase), label na mile to fieldname]
+UL_FIELDS = [["manpower", "no of manpower", ""], ["elec_hrs", "electricity hours", "custom_electricity_working_hours"],
+             ["man_hrs", "manpower hours", "custom_manpower_hours"], ["elec_rate", "electricity cost per hour", ""],
+             ["wage_rate", "wage cost per hour", ""], ["cycle_time", "cycle time (in sec)", ""],
+             ["pcs_weight", "pcs weight", "custom_pcs_weight"], ["cavity", "cavity", ""],
+             ["reason", "extra manpower reasons", ""], ["mold", "mold detail", ""]]
 
 pw_user = frappe.session.user
 if pw_user == "Guest":
@@ -622,17 +637,25 @@ elif pw_action == "largeblow" or pw_action == "lb_form":
         lb_md = frappe.utils.getdate(lb_month + "-01")
         lb_f["from_date"] = str(frappe.utils.get_first_day(lb_md))
         lb_f["to_date"] = str(frappe.utils.get_last_day(lb_md))
+    # kind = "eco": Eco Blow machines (Workstation naam mein "Eco Blow"), FG row = finished item
+    # warna Large Blow: FG WH7 mein, Ultra nahi, aur Eco Blow machines nahi
+    lb_kind = "eco" if (pw_action == "largeblow" and frappe.form_dict.get("kind") == "eco") else "large"
+    if lb_kind == "eco":
+        lb_join = "sed.parent = se.name AND sed.is_finished_item = 1"
+        lb_where = "AND IFNULL(se.custom_workstation, '') LIKE '%%Eco Blow%%'"
+    else:
+        lb_join = "sed.parent = se.name AND sed.t_warehouse = %(wh)s AND IFNULL(sed.s_warehouse, '') = ''"
+        lb_where = "AND IFNULL(item.item_group, '') != 'ultra' AND IFNULL(se.custom_workstation, '') NOT LIKE '%%Eco Blow%%'"
     lb_rows = frappe.db.sql("""
         SELECT se.*, sed.item_code AS lb_item_code, sed.item_name AS lb_item_name,
                sed.qty AS lb_qty, sed.uom AS lb_uom, u.first_name AS lb_created_by
         FROM `tabStock Entry` se
-        INNER JOIN `tabStock Entry Detail` sed
-            ON sed.parent = se.name AND sed.t_warehouse = %(wh)s AND IFNULL(sed.s_warehouse, '') = ''
+        INNER JOIN `tabStock Entry Detail` sed ON """ + lb_join + """
         INNER JOIN `tabItem` item ON item.name = sed.item_code
         LEFT JOIN `tabUser` u ON u.name = se.owner
         WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture'
           AND se.posting_date BETWEEN %(from_date)s AND %(to_date)s
-          AND IFNULL(item.item_group, '') != 'ultra'
+          """ + lb_where + """
         ORDER BY se.posting_date, se.posting_time
     """, lb_f, as_dict=True)
 
@@ -875,8 +898,15 @@ elif pw_action == "lb_delete":
     if not ld_name or not frappe.db.exists("Stock Entry", ld_name):
         frappe.throw("Stock Entry not found.")
     ld = frappe.get_doc("Stock Entry", ld_name)
-    if "Large Blow production entry (web page)" not in (ld.get("remarks") or "") or ld.stock_entry_type != "Manufacture":
+    ld_rm = ld.get("remarks") or ""
+    if ld.stock_entry_type != "Manufacture" or ("Large Blow production entry (web page)" not in ld_rm
+                                                and "Ultra production entry (web page)" not in ld_rm):
         frappe.throw(ld_name + " was not created from this page, so it cannot be deleted here. Cancel it in ERPNext.")
+    # Ultra: QC (Material Transfer) ban chuki ho to pehle wo cancel karo
+    ld_qc = frappe.get_all("Stock Entry", filters={"custom_reference_stock_entry": ld_name, "docstatus": ["<", 2]},
+                           pluck="name", limit_page_length=1)
+    if ld_qc:
+        frappe.throw(ld_name + " already has a QC entry (" + ld_qc[0] + "). Cancel that first.")
     try:
         if ld.docstatus == 1:
             ld.cancel()
@@ -896,6 +926,536 @@ elif pw_action == "lb_items":
     frappe.response["message"] = frappe.get_all("Item", filters={"disabled": 0, "name": ["like", "FG-BLO%"]},
                                                 or_filters=lbi_or, fields=["name", "item_name", "stock_uom"],
                                                 order_by="item_name asc", limit_page_length=20)
+
+elif pw_action == "ul_form":
+    # ═════ Ultra "Add Production Entry" form: New Plant / Old Plant ═════
+    # Har machine: is date + shift ki entry ho to "Entered", na ho to pichhli shift ki entry (copy ke liye).
+    # Field ke naam Stock Entry ke label se dhoondhe jaate hain (UL_FIELDS).
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    uf_date = str(frappe.utils.getdate(frappe.form_dict.get("date") or frappe.utils.nowdate()))
+    uf_shift = (frappe.form_dict.get("shift") or "A").strip().upper()
+    if uf_shift not in ["A", "B"]:
+        frappe.throw("Select Shift A or B.")
+    uf_plant = frappe.form_dict.get("plant") or "New Plant"
+    if uf_plant not in ["New Plant", "Old Plant"]:
+        frappe.throw("Select New Plant or Old Plant.")
+    uf_lbl = {}
+    uf_fmeta = {}
+    uf_fetch = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        lk = (df.label or "").strip().lower()
+        if lk and lk not in uf_lbl:
+            uf_lbl[lk] = df.fieldname
+        uf_fmeta[df.fieldname] = {"fieldtype": df.fieldtype, "options": df.options or ""}
+        uf_fetch[df.fieldname] = df.fetch_from or ""
+    uf_fld = {}
+    for pr in UL_FIELDS:
+        fn = uf_lbl.get(pr[1]) or ""
+        if not fn:
+            for lk in uf_lbl:
+                if lk.startswith(pr[1].split(" (")[0]):
+                    fn = uf_lbl[lk]
+                    break
+        if not fn:
+            fn = pr[2]
+        uf_fld[pr[0]] = fn
+    uf_rows = frappe.db.sql("""
+        SELECT se.*, sed.item_code AS ul_item_code, sed.item_name AS ul_item_name, sed.qty AS ul_qty, sed.uom AS ul_uom,
+               wo.status AS ul_wo_status, wo.docstatus AS ul_wo_docstatus, wo.production_plan AS ul_pp,
+               IFNULL(pp.custom_ucm_job_card_no, '') AS ul_jc
+        FROM `tabStock Entry` se
+        INNER JOIN `tabStock Entry Detail` sed ON sed.parent = se.name AND sed.is_finished_item = 1
+        INNER JOIN `tabWork Order` wo ON wo.name = se.work_order
+        LEFT JOIN `tabProduction Plan` pp ON pp.name = wo.production_plan
+        INNER JOIN `tabItem` item ON item.name = sed.item_code
+        WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture'
+          AND se.posting_date BETWEEN %(f)s AND %(t)s
+          AND item.item_group IN ('ultra') AND sed.item_code NOT LIKE 'MIX%%'
+          AND se.custom_workstation LIKE %(pl)s AND se.custom_workstation NOT LIKE '%%Eco Blow%%'
+        ORDER BY se.posting_date, se.posting_time
+    """, {"f": str(frappe.utils.add_days(uf_date, -60)), "t": uf_date, "pl": "%" + uf_plant + "%"}, as_dict=True)
+    uf_list = []
+    for r in uf_rows:
+        sv = (r.get("custom_shift") or "").upper().replace("SHIFT", "").replace("-", "").strip()
+        sl = sv if sv in ["A", "B"] else ""
+        pd = str(r.get("posting_date") or "")
+        ws_open = r.get("ul_wo_docstatus") == 1 and r.get("ul_wo_status") in ["Not Started", "In Process"]
+        e = {"stock_entry": r.get("name"), "posting_date": pd, "shift_letter": sl,
+             "sk": pd + ("1" if sl == "A" else ("2" if sl == "B" else "0")) + str(r.get("posting_time") or ""),
+             "machine": r.get("custom_workstation") or "",
+             "work_order": r.get("work_order") or "", "wo_status": r.get("ul_wo_status") or "", "wo_open": 1 if ws_open else 0,
+             "production_plan": r.get("ul_pp") or "", "job_card_no": r.get("ul_jc") or "",
+             "item_code": r.get("ul_item_code") or "", "item_name": r.get("ul_item_name") or r.get("ul_item_code") or "",
+             "qty": frappe.utils.flt(r.get("ul_qty")), "uom": r.get("ul_uom") or "",
+             "by_page": 1 if "Ultra production entry (web page)" in (r.get("remarks") or "") else 0, "has_qc": 0}
+        for pr in UL_FIELDS:
+            fn = uf_fld[pr[0]]
+            v = r.get(fn) if fn else None
+            if pr[0] in ["reason", "mold"]:
+                e[pr[0]] = v or ""
+            else:
+                e[pr[0]] = frappe.utils.flt(v) if v is not None else None
+        uf_list.append(e)
+    uf_key = uf_date + ("1" if uf_shift == "A" else "2")
+    uf_cur = {}
+    uf_prev = {}
+    for e in uf_list:
+        mc = e["machine"]
+        if not mc:
+            continue
+        if e["posting_date"] == uf_date and e["shift_letter"] == uf_shift:
+            if mc not in uf_cur:
+                uf_cur[mc] = []
+            uf_cur[mc].append(e)
+        elif e["sk"][:11] < uf_key:
+            if mc not in uf_prev or e["sk"] > uf_prev[mc]["sk"]:
+                uf_prev[mc] = e
+    # Entered entry: QC (OK / Hold / Rejected) Quality Inspection se
+    uf_cn = []
+    for mc in uf_cur:
+        for e in uf_cur[mc]:
+            uf_cn.append(e["stock_entry"])
+    if uf_cn:
+        uf_qc = {}
+        for q in frappe.get_all("Stock Entry", filters={"custom_reference_stock_entry": ["in", uf_cn], "docstatus": ["<", 2]},
+                                fields=["custom_reference_stock_entry"], limit_page_length=0):
+            uf_qc[q.get("custom_reference_stock_entry")] = 1
+        for mc in uf_cur:
+            for e in uf_cur[mc]:
+                e["has_qc"] = 1 if uf_qc.get(e["stock_entry"]) else 0
+        uf_qmap = {}
+        for q in frappe.db.sql("""
+            SELECT se.custom_reference_stock_entry AS mfg, qi.custom_pass_qty AS ok, qi.custom_hold_qty AS hold, qi.custom_rejected_qty AS rej
+            FROM `tabStock Entry` se
+            INNER JOIN `tabQuality Inspection` qi ON qi.reference_type = 'Stock Entry' AND qi.reference_name = se.name AND qi.docstatus = 1
+            WHERE se.custom_reference_stock_entry IN %(n)s AND se.docstatus < 2
+        """, {"n": uf_cn}, as_dict=True):
+            uf_qmap[q.mfg] = q
+        for mc in uf_cur:
+            for e in uf_cur[mc]:
+                q = uf_qmap.get(e["stock_entry"])
+                if q:
+                    e["qc"] = {"ok": frappe.utils.flt(q.ok), "hold": frappe.utils.flt(q.hold), "rej": frappe.utils.flt(q.rej)}
+    # machines: "New Plant" / "Old Plant" naam wale Workstation, number ke order mein (Assembly nahi)
+    uf_ws = []
+    for wsn in frappe.get_all("Workstation", filters={"name": ["like", "%" + uf_plant + "%"]}, pluck="name", limit_page_length=0):
+        if "assembly" in wsn.lower() or "eco blow" in wsn.lower():
+            continue
+        dg = ""
+        for ch in wsn.split("-")[0]:
+            if ch.isdigit():
+                dg = dg + ch
+        uf_ws.append([frappe.utils.cint(dg) if dg else 999, wsn])
+    uf_ws = sorted(uf_ws)
+    uf_machines = []
+    for x in uf_ws:
+        uf_machines.append(x[1])
+    uf_out = []
+    for mc in uf_machines:
+        uf_out.append({"machine": mc, "current": uf_cur.get(mc) or [], "previous": uf_prev.get(mc)})
+    for mc in uf_cur:
+        if mc not in uf_machines:
+            uf_out.append({"machine": mc, "current": uf_cur[mc], "previous": uf_prev.get(mc)})
+    # Elec / Wage rate: Workstation (custom_workstation) se — Stock Entry field ka "Fetch From",
+    # na mile to ERPNext Workstation ke hour_rate_electricity / hour_rate_labour
+    uf_rsrc = {}
+    for k in [["elec_rate", "hour_rate_electricity"], ["wage_rate", "hour_rate_labour"]]:
+        ff = uf_fetch.get(uf_fld.get(k[0]) or "") or ""
+        uf_rsrc[k[0]] = ff.split(".")[1] if "." in ff else k[1]
+    for x in uf_out:
+        wsd = {}
+        try:
+            wsd = frappe.db.get_value("Workstation", x["machine"], [uf_rsrc["elec_rate"], uf_rsrc["wage_rate"]], as_dict=True) or {}
+        except Exception:
+            wsd = {}
+        x["rates"] = {"elec_rate": frappe.utils.flt(wsd.get(uf_rsrc["elec_rate"])) or 125,
+                      "wage_rate": frappe.utils.flt(wsd.get(uf_rsrc["wage_rate"])) or 60}
+    uf_meta_out = {}
+    for pr in UL_FIELDS:
+        uf_meta_out[pr[0]] = uf_fmeta.get(uf_fld.get(pr[0]) or "")
+    frappe.response["message"] = {"date": uf_date, "shift": uf_shift, "plant": uf_plant, "machines": uf_out, "fields": uf_fld,
+                                  "field_meta": uf_meta_out}
+
+elif pw_action == "ul_molds":
+    # Ultra form: Mold Detail = Mold Master (Stock Entry ke "Mold Detail" Link field ka doctype)
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    um_dt = "Mold Master"
+    for df in frappe.get_meta("Stock Entry").fields:
+        if (df.label or "").strip().lower() == "mold detail" and df.fieldtype == "Link" and df.options:
+            um_dt = df.options
+            break
+    um_q = (frappe.form_dict.get("q") or "").strip()
+    um_tf = frappe.get_meta(um_dt).title_field or ""
+    um_fields = ["name"]
+    if um_tf and um_tf != "name":
+        um_fields.append(um_tf)
+    um_or = None
+    if um_q:
+        um_or = [["name", "like", "%" + um_q + "%"]]
+        if len(um_fields) > 1:
+            um_or.append([um_tf, "like", "%" + um_q + "%"])
+    um_out = []
+    for m in frappe.get_all(um_dt, fields=um_fields, or_filters=um_or, order_by="name asc", limit_page_length=30):
+        um_out.append({"name": m.get("name"), "title": (m.get(um_tf) if len(um_fields) > 1 else "") or ""})
+    frappe.response["message"] = um_out
+
+elif pw_action == "ul_wos":
+    # Ultra form: chalu Work Orders (Not Started / In Process) - Job Card No, WO, product se search
+    if not pw_access["daily"]:
+        frappe.throw("You do not have access to the Daily Production report.")
+    uw_q = (frappe.form_dict.get("q") or "").strip()
+    frappe.response["message"] = frappe.db.sql("""
+        SELECT wo.name, wo.production_item AS item_code, IFNULL(i.item_name, wo.production_item) AS item_name, i.stock_uom,
+               wo.status, wo.qty, wo.produced_qty, wo.production_plan, IFNULL(pp.custom_ucm_job_card_no, '') AS job_card_no,
+               i.custom_cycle_time AS cycle_time, i.custom_cavity AS cavity, i.weight_per_unit AS pcs_weight
+        FROM `tabWork Order` wo
+        INNER JOIN `tabItem` i ON i.name = wo.production_item
+        LEFT JOIN `tabProduction Plan` pp ON pp.name = wo.production_plan
+        WHERE wo.docstatus = 1 AND wo.status IN ('Not Started', 'In Process')
+          AND i.item_group IN ('ultra') AND wo.production_item NOT LIKE 'MIX%%'
+          AND (%(q)s = '' OR wo.name LIKE %(lq)s OR wo.production_item LIKE %(lq)s OR i.item_name LIKE %(lq)s
+               OR pp.custom_ucm_job_card_no LIKE %(lq)s)
+        ORDER BY wo.modified DESC
+        LIMIT 30
+    """, {"q": uw_q, "lq": "%" + uw_q + "%"}, as_dict=True)
+
+elif pw_action == "ul_delete":
+    # Ultra entry (page se bani) ki poori chain Cancel - ulte order mein:
+    # final QC transfer -> Quality transfer -> Quality Inspection -> Manufacture -> Material Transfer for Manufacture
+    # (final transfer cancel par app WO ka rework khud wapas karta hai). Documents delete nahi hote, sirf Cancel.
+    if not pw_can_delete:
+        frappe.throw("You do not have Delete & Close access.")
+    ud_name = (frappe.form_dict.get("stock_entry") or "").strip()
+    if not ud_name or not frappe.db.exists("Stock Entry", ud_name):
+        frappe.throw("Stock Entry not found.")
+    ud_m = frappe.get_doc("Stock Entry", ud_name)
+    ud_rm = ud_m.get("remarks") or ""
+    if ud_m.stock_entry_type != "Manufacture" or "Ultra production entry (web page)" not in ud_rm:
+        frappe.throw(ud_name + " was not created from this page, so it cannot be cancelled here. Cancel it in ERPNext.")
+    ud_qmts = frappe.get_all("Stock Entry", filters={"custom_reference_stock_entry": ud_name, "docstatus": ["<", 2]}, pluck="name", limit_page_length=0)
+    ud_qis = []
+    if ud_qmts:
+        ud_qis = frappe.get_all("Quality Inspection", filters={"reference_type": "Stock Entry", "reference_name": ["in", ud_qmts], "docstatus": ["<", 2]},
+                                pluck="name", limit_page_length=0)
+    ud_fins = []
+    if ud_qis:
+        ud_fins = frappe.get_all("Stock Entry", filters={"custom_quality_inspection": ["in", ud_qis], "docstatus": ["<", 2]}, pluck="name", limit_page_length=0)
+    ud_mtm = ""
+    if ". MTM: " in ud_rm:
+        ud_mtm = ud_rm.split(". MTM: ")[1].strip().split(" ")[0]
+    ud_chain = []
+    for n in ud_fins:
+        ud_chain.append(["Stock Entry", n])
+    for n in ud_qmts:
+        ud_chain.append(["Stock Entry", n])
+    for n in ud_qis:
+        ud_chain.append(["Quality Inspection", n])
+    ud_chain.append(["Stock Entry", ud_name])
+    if ud_mtm and frappe.db.exists("Stock Entry", ud_mtm):
+        ud_chain.append(["Stock Entry", ud_mtm])
+    ud_done = []
+    for pr in ud_chain:
+        d = frappe.get_doc(pr[0], pr[1])
+        if d.docstatus == 1:
+            try:
+                d.cancel()
+            except Exception as e:
+                frappe.throw("Could not cancel " + pr[1] + ": " + str(e) + " (nothing was cancelled)")
+            ud_done.append(pr[1])
+        elif d.docstatus == 0:
+            frappe.delete_doc(pr[0], pr[1])
+            ud_done.append(pr[1])
+    frappe.response["message"] = {"cancelled": ud_done}
+
+elif pw_action == "ul_submit":
+    # ═════ Ultra: ek machine ki poori entry, ERPNext jaisa hi (6 steps) ═════
+    # 1. Material Transfer for Manufacture (WH1 -> WH3) - WO ki bachi qty tak (total aur bachi mein jo kam ho)
+    #    pehle RM stock check: kam ho to "Raw material short"
+    # 2. Manufacture - FG = total pcs; RM consume = step 1 mein jitna transfer hua
+    #    15% (Manufacturing Settings) se zyada over-production ho to rok do: "Overproduction % badhao"
+    # 3. Transfer to Quality (dt_ultracraft_customization ka apna method) -> 4. Quality Inspection (OK / Hold / Rej)
+    # 5. Material Transfer submit -> 6. final transfer (app banata hai) submit -> app WO ka rework khud update karta hai
+    # Koi bhi step fail ho to kuch nahi banta (poori request rollback).
+    if not pw_can_entry:
+        frappe.throw("You do not have Production Entry access. Ask a System Manager to give it from the access settings.")
+    us_date = str(frappe.utils.getdate(frappe.form_dict.get("date") or frappe.utils.nowdate()))
+    if us_date > frappe.utils.nowdate():
+        frappe.throw("Production date cannot be in the future.")
+    us_shift = (frappe.form_dict.get("shift") or "").strip().upper()
+    if us_shift not in ["A", "B"]:
+        frappe.throw("Select Shift A or B.")
+    us_plant = frappe.form_dict.get("plant") or ""
+    if us_plant not in ["New Plant", "Old Plant"]:
+        frappe.throw("Select New Plant or Old Plant.")
+    us_rows = frappe.form_dict.get("rows") or []
+    if isinstance(us_rows, str):
+        us_rows = frappe.parse_json(us_rows)
+    if not us_rows:
+        frappe.throw("Nothing to submit.")
+    if len(us_rows) > 1:
+        frappe.throw("Submit one machine at a time.")
+    us_lbl = {}
+    us_opts = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        lk = (df.label or "").strip().lower()
+        if lk and lk not in us_lbl:
+            us_lbl[lk] = df.fieldname
+            us_opts[lk] = df.options or ""
+    us_fld = {}
+    for pr in UL_FIELDS:
+        fn = us_lbl.get(pr[1]) or ""
+        if not fn:
+            for lk in us_lbl:
+                if lk.startswith(pr[1].split(" (")[0]):
+                    fn = us_lbl[lk]
+                    break
+        if not fn:
+            fn = pr[2]
+        us_fld[pr[0]] = fn
+    us_meta = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        us_meta[df.fieldname] = {"fieldtype": df.fieldtype, "options": df.options or "", "label": df.label or ""}
+    us_shift_val = "SHIFT " + us_shift
+    if us_opts.get("shift") and us_shift_val not in us_opts.get("shift") and us_shift in us_opts.get("shift").split("\n"):
+        us_shift_val = us_shift
+    # Elec / Wage rate Workstation se (page se nahi aata)
+    us_fetch = {}
+    for df in frappe.get_meta("Stock Entry").fields:
+        us_fetch[df.fieldname] = df.fetch_from or ""
+    us_rsrc = {}
+    for k in [["elec_rate", "hour_rate_electricity"], ["wage_rate", "hour_rate_labour"]]:
+        ff = us_fetch.get(us_fld.get(k[0]) or "") or ""
+        us_rsrc[k[0]] = ff.split(".")[1] if "." in ff else k[1]
+    us_out = []
+    for row in us_rows:
+        mc = (row.get("machine") or "").strip()
+        wo = (row.get("work_order") or "").strip()
+        qty = frappe.utils.flt(row.get("qty"))
+        eh = frappe.utils.flt(row.get("elec_hrs"))
+        mh = frappe.utils.flt(row.get("man_hrs"))
+        mp = frappe.utils.flt(row.get("manpower"))
+        us_wsd = {}
+        try:
+            us_wsd = frappe.db.get_value("Workstation", mc, [us_rsrc["elec_rate"], us_rsrc["wage_rate"]], as_dict=True) or {}
+        except Exception:
+            us_wsd = {}
+        er = frappe.utils.flt(us_wsd.get(us_rsrc["elec_rate"])) or 125
+        wr = frappe.utils.flt(us_wsd.get(us_rsrc["wage_rate"])) or 60
+        if not mc or not frappe.db.exists("Workstation", mc):
+            frappe.throw("Machine not found: " + mc)
+        if us_plant.lower() not in mc.lower() or "eco blow" in mc.lower():
+            frappe.throw(mc + " is not a " + us_plant + " machine.")
+        if not wo or not frappe.db.exists("Work Order", wo):
+            frappe.throw(mc + ": select a running work order from the list.")
+        wo_i = frappe.db.get_value("Work Order", wo, ["docstatus", "status", "production_item"], as_dict=True)
+        if frappe.utils.cint(wo_i.docstatus) != 1 or wo_i.status not in ["Not Started", "In Process"]:
+            frappe.throw(mc + ": work order " + wo + " is " + (wo_i.status or "not submitted") + ". Pick a running one.")
+        if qty <= 0:
+            frappe.throw(mc + ": enter the quantity.")
+        us_ok = frappe.utils.flt(row.get("ok"))
+        us_hold = frappe.utils.flt(row.get("hold"))
+        us_rej = frappe.utils.flt(row.get("rej"))
+        if us_ok < 0 or us_hold < 0 or us_rej < 0:
+            frappe.throw(mc + ": Approved / Hold / Rejected cannot be negative.")
+        if abs(us_ok + us_hold + us_rej - qty) > 0.001:
+            frappe.throw(mc + ": Approved + Hold + Rejected (" + str(us_ok + us_hold + us_rej) + ") must equal total qty (" + str(qty) + ").")
+        # 15% over-production check (cumulative)
+        us_wo = frappe.db.get_value("Work Order", wo, ["qty", "produced_qty", "material_transferred_for_manufacturing", "skip_transfer"], as_dict=True)
+        us_pct = frappe.utils.flt(frappe.db.get_single_value("Manufacturing Settings", "overproduction_percentage_for_work_order"))
+        us_woq = frappe.utils.flt(us_wo.qty)
+        us_after = frappe.utils.flt(us_wo.produced_qty) + qty
+        if us_woq > 0 and us_after > us_woq * (1 + us_pct / 100.0) + 0.001:
+            us_need = frappe.utils.ceil((us_after / us_woq - 1) * 100)
+            frappe.throw("Overproduction: Work Order " + wo + " qty is " + frappe.utils.fmt_money(us_woq, precision=0) +
+                         ", total made will be " + frappe.utils.fmt_money(us_after, precision=0) + " (" + str(us_need) + "% extra). Allowed is only " +
+                         str(frappe.utils.cint(us_pct)) + "%. Increase Overproduction Percentage for Work Order in Manufacturing Settings to at least " +
+                         str(us_need) + "%, then submit again.")
+        us_dup = frappe.db.sql("""
+            SELECT se.name FROM `tabStock Entry` se
+            WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture' AND se.posting_date = %(d)s
+              AND se.custom_workstation = %(m)s AND se.work_order = %(w)s
+              AND UPPER(REPLACE(IFNULL(se.custom_shift, ''), 'SHIFT', '')) LIKE %(s)s
+            LIMIT 1
+        """, {"d": us_date, "m": mc, "w": wo, "s": "%" + us_shift + "%"}, as_dict=True)
+        if us_dup:
+            frappe.throw(mc + " already has an entry for " + wo + " on " + us_date + " Shift " + us_shift + ": " + us_dup[0].name)
+        e_cost = round(eh * er, 2)
+        m_cost = round(mp * mh * wr, 2)
+        us_mk = "erpnext.manufacturing.doctype.work_order.work_order.make_stock_entry"
+        # ── Step 1: Material Transfer for Manufacture (WO ki bachi qty tak) ──
+        us_mtm = None
+        us_mtm_map = {}
+        us_mtm_qty = min(qty, us_woq - frappe.utils.flt(us_wo.material_transferred_for_manufacturing))
+        if not frappe.utils.cint(us_wo.skip_transfer) and us_mtm_qty > 0:
+            try:
+                us_mtm = frappe.get_doc(frappe.call(us_mk, work_order_id=wo, purpose="Material Transfer for Manufacture", qty=us_mtm_qty))
+            except Exception as e:
+                frappe.throw(mc + " (" + wo + ") material transfer: " + str(e))
+            us_short = []
+            for it in us_mtm.items:
+                if not it.s_warehouse:
+                    continue
+                have = frappe.utils.flt(frappe.db.get_value("Bin", {"item_code": it.item_code, "warehouse": it.s_warehouse}, "actual_qty"))
+                if have + 0.0001 < frappe.utils.flt(it.qty):
+                    us_short.append(it.item_code + ": need " + str(round(frappe.utils.flt(it.qty), 3)) + " " + (it.uom or "") +
+                                    ", " + it.s_warehouse + " has " + str(round(have, 3)))
+            if us_short:
+                frappe.throw("Raw material short for " + str(frappe.utils.cint(us_mtm_qty)) + " pcs (" + wo + "): " + "; ".join(us_short))
+            us_mtm.set_posting_time = 1
+            us_mtm.posting_date = us_date
+            us_mtm.posting_time = frappe.utils.nowtime()
+            us_mtm.remarks = "Ultra production entry (web page) - material transfer for " + mc + ", " + us_date + " Shift " + us_shift + ". By " + pw_user
+            try:
+                us_mtm.insert()
+                us_mtm.submit()
+            except Exception as e:
+                frappe.throw(mc + " (" + wo + ") material transfer: " + str(e))
+            for it in us_mtm.items:
+                us_mtm_map[it.item_code] = frappe.utils.flt(us_mtm_map.get(it.item_code)) + frappe.utils.flt(it.qty)
+        # ── Step 2: Manufacture (FG = total; RM = jitna step 1 mein gaya) ──
+        try:
+            us_se = frappe.get_doc(frappe.call(us_mk, work_order_id=wo, purpose="Manufacture", qty=qty))
+        except Exception as e:
+            frappe.throw(mc + " (" + wo + "): " + str(e))
+        if us_mtm_map:
+            for it in us_se.items:
+                if it.s_warehouse and not it.is_finished_item and not it.get("is_scrap_item") and it.item_code in us_mtm_map:
+                    it.qty = us_mtm_map[it.item_code]
+                    it.transfer_qty = frappe.utils.flt(it.qty) * (frappe.utils.flt(it.conversion_factor) or 1)
+        us_se.set_posting_time = 1
+        us_se.posting_date = us_date
+        us_se.posting_time = frappe.utils.nowtime()
+        us_se.remarks = ("Ultra production entry (web page) - " + mc + ", " + us_date + " Shift " + us_shift + ". By " + pw_user +
+                         (". MTM: " + us_mtm.name if us_mtm else ""))
+        us_vals = {"manpower": mp, "elec_hrs": eh, "man_hrs": mh, "elec_rate": er, "wage_rate": wr,
+                   "cycle_time": frappe.utils.flt(row.get("cycle_time")), "cavity": frappe.utils.flt(row.get("cavity")),
+                   "pcs_weight": frappe.utils.flt(row.get("pcs_weight")),
+                   "reason": (row.get("reason") or "").strip(), "mold": (row.get("mold") or "").strip()}
+        # Select / Int field (jaise CT, Cavity = "1".."50"): decimal nahi, option mein hona chahiye
+        for k in us_vals:
+            fn = us_fld.get(k)
+            if not fn:
+                continue
+            v = us_vals[k]
+            fm = us_meta.get(fn) or {}
+            if fm.get("fieldtype") == "Select" and k not in ["reason", "mold"]:
+                fv = frappe.utils.flt(v)
+                v = "" if not fv else (str(frappe.utils.cint(fv)) if fv == frappe.utils.cint(fv) else str(fv))
+                fo = (fm.get("options") or "").split("\n")
+                if v and v not in fo:
+                    frappe.throw(mc + ": " + (fm.get("label") or k) + " cannot be " + v + ". Allowed: " + ", ".join([o for o in fo if o][:3]) + " ... " + ([o for o in fo if o] or [""])[-1])
+            elif fm.get("fieldtype") == "Int":
+                v = frappe.utils.cint(v)
+            us_se.set(fn, v)
+        for pr in [["workstation", mc], ["shift", us_shift_val],
+                   ["total cost of electricity", e_cost], ["total cost of manpower", m_cost],
+                   ["total cost", e_cost + m_cost], ["total working hours per manpower", mp * mh]]:
+            fn = us_lbl.get(pr[0])
+            if fn:
+                us_se.set(fn, pr[1])
+        if not us_lbl.get("workstation"):
+            us_se.set("custom_workstation", mc)
+        if not us_lbl.get("shift"):
+            us_se.set("custom_shift", us_shift_val)
+        # Additional Costs: is machine ki pichhli Ultra entry jaisi lines
+        us_prev = frappe.db.sql("""
+            SELECT se.name FROM `tabStock Entry` se
+            WHERE se.docstatus = 1 AND se.stock_entry_type = 'Manufacture' AND se.custom_workstation = %(m)s
+              AND IFNULL(se.work_order, '') != ''
+            ORDER BY se.posting_date DESC, se.posting_time DESC LIMIT 1
+        """, {"m": mc}, as_dict=True)
+        if us_prev:
+            for ac in frappe.db.sql("""
+                SELECT expense_account, description FROM `tabLanded Cost Taxes and Charges`
+                WHERE parent = %(p)s AND parenttype = 'Stock Entry' ORDER BY idx
+            """, {"p": us_prev[0].name}, as_dict=True):
+                ds = (ac.description or "").lower()
+                if "elec" in ds:
+                    amt = e_cost
+                elif "man" in ds or "wage" in ds or "labour" in ds:
+                    amt = m_cost
+                else:
+                    continue
+                us_se.append("additional_costs", {"expense_account": ac.expense_account, "description": ac.description, "amount": amt})
+        try:
+            us_se.insert()
+            us_se.submit()
+        except Exception as e:
+            frappe.throw(mc + " (" + wo + "): " + str(e))
+        fg_qty = 0
+        for it in us_se.items:
+            if it.is_finished_item:
+                fg_qty = fg_qty + frappe.utils.flt(it.qty)
+        # ── Step 3: Transfer to Quality (app ka apna method, jaise form ka button) ──
+        try:
+            us_tq = frappe.call("dt_ultracraft_customization.public.py.stock_entry.transfer_to_quality", source_name=us_se.name)
+        except Exception as e:
+            frappe.throw(mc + " (" + wo + ") transfer to quality: " + str(e))
+        if not us_tq:
+            frappe.throw(mc + ": Transfer to Quality returned nothing for " + us_se.name)
+        if isinstance(us_tq, str):
+            us_qmt = frappe.get_doc("Stock Entry", us_tq)
+        elif isinstance(us_tq, dict):
+            us_qmt = frappe.get_doc(us_tq)
+        else:
+            us_qmt = us_tq
+        if us_qmt.docstatus == 0:
+            us_qmt.set_posting_time = 1
+            us_qmt.posting_date = us_date
+            us_qmt.posting_time = frappe.utils.nowtime()
+            if us_qmt.get("__islocal") or not us_qmt.name or not frappe.db.exists("Stock Entry", us_qmt.name):
+                us_qmt.insert()
+            else:
+                us_qmt.save()
+        us_qrow = None
+        for it in us_qmt.items:
+            if it.item_code == wo_i.production_item and it.t_warehouse:
+                us_qrow = it
+                break
+        if not us_qrow:
+            frappe.throw(mc + ": Transfer to Quality entry " + us_qmt.name + " has no row for " + wo_i.production_item)
+        # ── Step 4: Quality Inspection (OK / Hold / Rejected) ──
+        us_qi = frappe.get_doc({"doctype": "Quality Inspection", "inspection_type": "Incoming", "reference_type": "Stock Entry",
+                                "reference_name": us_qmt.name, "item_code": us_qrow.item_code, "sample_size": 0,
+                                "inspected_by": pw_user, "report_date": us_date, "status": "Accepted", "manual_inspection": 1,
+                                "child_row_reference": us_qrow.name})
+        for pr in [["custom_total_inspection_qty", qty], ["custom_pass_qty", us_ok], ["custom_hold_qty", us_hold], ["custom_rejected_qty", us_rej]]:
+            us_qi.set(pr[0], pr[1])
+        try:
+            us_qi.insert()
+            us_qi.submit()
+        except Exception as e:
+            frappe.throw(mc + " quality inspection: " + str(e))
+        # ── Step 5: Quality transfer submit ──
+        if us_qmt.docstatus == 0:
+            frappe.db.set_value("Stock Entry Detail", us_qrow.name, "quality_inspection", us_qi.name)
+            us_qmt.reload()
+            try:
+                us_qmt.submit()
+            except Exception as e:
+                frappe.throw(mc + " transfer to quality " + us_qmt.name + ": " + str(e))
+        # ── Step 6: final transfer (WH2 / Hold / Rejected) - app banata hai; draft ho to submit ──
+        us_fin = frappe.get_all("Stock Entry", filters={"custom_quality_inspection": us_qi.name, "docstatus": ["<", 2]},
+                                fields=["name", "docstatus"], limit_page_length=5)
+        if not us_fin:
+            frappe.throw(mc + ": the final QC transfer was not created after " + us_qi.name + ". Nothing was saved. Do this entry in ERPNext and tell the developer.")
+        us_fin_name = us_fin[0].name
+        if frappe.utils.cint(us_fin[0].docstatus) == 0:
+            us_fd = frappe.get_doc("Stock Entry", us_fin_name)
+            us_fd.set_posting_time = 1
+            us_fd.posting_date = us_date
+            us_fd.posting_time = frappe.utils.nowtime()
+            try:
+                us_fd.save()
+                us_fd.submit()
+            except Exception as e:
+                frappe.throw(mc + " final QC transfer " + us_fin_name + ": " + str(e))
+        us_out.append({"machine": mc, "stock_entry": us_se.name, "work_order": wo, "qty": fg_qty or qty,
+                       "mtm": us_mtm.name if us_mtm else "", "quality_transfer": us_qmt.name, "quality_inspection": us_qi.name,
+                       "final_transfer": us_fin_name, "ok": us_ok, "hold": us_hold, "rej": us_rej})
+    frappe.response["message"] = {"date": us_date, "shift": us_shift, "plant": us_plant, "entries": us_out}
 
 # ───────────────────── 3. JOB CARD PERFORMANCE ─────────────────────
 elif pw_action == "performance":
