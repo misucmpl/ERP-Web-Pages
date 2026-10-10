@@ -58,7 +58,7 @@ PW_CLOSE_ROLE = "UCM Prod Close Plan"   # "Delete & Close" access: Close Plan + 
 # Daily Production → Large Blow "Add Production Entry" (Stock Entry submit / delete): alag access, sabko ⚙️ se
 PW_ENTRY_ROLE = "UCM Prod Production Entry"
 # JS ke PROD_VER se match hona chahiye — alag ho to page par laal warning aati hai
-PW_VER = "10-Oct-2026 ultra-repack"
+PW_VER = "10-Oct-2026 hold-check"
 # Ultra "Add Production Entry": [key, Stock Entry field ka label (lowercase), label na mile to fieldname]
 UL_FIELDS = [["manpower", "no of manpower", ""], ["elec_hrs", "electricity hours", "custom_electricity_working_hours"],
              ["man_hrs", "manpower hours", "custom_manpower_hours"], ["elec_rate", "electricity cost per hour", ""],
@@ -518,7 +518,7 @@ elif pw_action == "daily" or pw_action == "analysis":
     runs = []
     if pw_action == "daily":
         dp_plant = frappe.form_dict.get("plant") or "All"
-        if dp_plant not in ["All", "New Plant", "Old Plant", "Assembly", "Pending Clear"]:
+        if dp_plant not in ["All", "New Plant", "Old Plant", "Assembly", "Pending Clear", "M/C Pending Clear"]:
             dp_plant = "All"
         dp_from = frappe.form_dict.get("from_date") or today_s
         dp_to = frappe.form_dict.get("to_date") or today_s
@@ -945,7 +945,7 @@ elif pw_action == "ul_form":
     if uf_shift not in ["A", "B"]:
         frappe.throw("Select Shift A or B.")
     uf_plant = frappe.form_dict.get("plant") or "New Plant"
-    if uf_plant not in ["New Plant", "Old Plant"]:
+    if uf_plant not in ["New Plant", "Old Plant", "M/C Pending Clear"]:
         frappe.throw("Select New Plant or Old Plant.")
     uf_lbl = {}
     uf_fmeta = {}
@@ -1130,7 +1130,7 @@ elif pw_action == "ul_wos":
 
 elif pw_action == "ul_delete":
     # Ultra entry (page se bani) ki poori chain Cancel - ulte order mein:
-    # final QC transfer -> Quality transfer -> Quality Inspection -> Manufacture -> Material Transfer for Manufacture
+    # rejection repack -> final QC transfer -> Quality Inspection -> Quality transfer -> Manufacture -> Material Transfer for Manufacture
     # (final transfer cancel par app WO ka rework khud wapas karta hai). Documents delete nahi hote, sirf Cancel.
     if not pw_can_delete:
         frappe.throw("You do not have Delete & Close access.")
@@ -1165,10 +1165,11 @@ elif pw_action == "ul_delete":
                 ud_chain.append(["Stock Entry", n])
     for n in ud_fins:
         ud_chain.append(["Stock Entry", n])
-    for n in ud_qmts:
-        ud_chain.append(["Stock Entry", n])
+    # QI pehle: QI cancel hone par ERPNext quality transfer ki row se QI ka link hata deta hai, tab transfer cancel hota hai
     for n in ud_qis:
         ud_chain.append(["Quality Inspection", n])
+    for n in ud_qmts:
+        ud_chain.append(["Stock Entry", n])
     ud_chain.append(["Stock Entry", ud_name])
     if ud_mtm and frappe.db.exists("Stock Entry", ud_mtm):
         ud_chain.append(["Stock Entry", ud_mtm])
@@ -1204,7 +1205,7 @@ elif pw_action == "ul_submit":
     if us_shift not in ["A", "B"]:
         frappe.throw("Select Shift A or B.")
     us_plant = frappe.form_dict.get("plant") or ""
-    if us_plant not in ["New Plant", "Old Plant"]:
+    if us_plant not in ["New Plant", "Old Plant", "M/C Pending Clear"]:
         frappe.throw("Select New Plant or Old Plant.")
     us_rows = frappe.form_dict.get("rows") or []
     if isinstance(us_rows, str):
@@ -1298,7 +1299,7 @@ elif pw_action == "ul_submit":
               AND UPPER(REPLACE(IFNULL(se.custom_shift, ''), 'SHIFT', '')) LIKE %(s)s
             LIMIT 1
         """, {"d": us_date, "m": mc, "w": wo, "s": "%" + us_shift + "%"}, as_dict=True)
-        if us_dup:
+        if us_dup and us_plant != "M/C Pending Clear":
             frappe.throw(mc + " already has an entry for " + wo + " on " + us_date + " Shift " + us_shift + ": " + us_dup[0].name)
         e_cost = round(eh * er, 2)
         m_cost = round(mp * mh * wr, 2)
@@ -1396,6 +1397,8 @@ elif pw_action == "ul_submit":
                 elif "man" in ds or "wage" in ds or "labour" in ds:
                     amt = m_cost
                 else:
+                    continue
+                if amt <= 0:
                     continue
                 us_se.append("additional_costs", {"expense_account": ac.expense_account, "description": ac.description, "amount": amt})
         try:
