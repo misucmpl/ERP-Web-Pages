@@ -88,6 +88,7 @@
     { k: "below", label: "Below Reorder", short: "Below", hint: "Stock below reorder level (with an Auto Indent)" },
     { k: "all", label: "All Items", short: "All", hint: "Every Packaging, Master Batch and Granuals item" },
     { k: "nonmoving", label: "Non Moving", short: "Non Moving", hint: "Stock in hand but no consumption in the period" },
+    { k: "moving", label: "Moving", short: "Moving", hint: "Items consumed in the period, highest consumption first" },
     { k: "dana", label: "Dana", short: "Dana", hint: "Granuals grouped by Dana category" }
   ];
   var GROUPS = [["", "All Groups"], ["Packaging Materials", "Packaging"], ["Master Batch", "Master Batch"], ["Granuals", "Granuals"]];
@@ -372,7 +373,7 @@
     } else chip.hidden = true;
 
     if (!S.rows.length) {
-      var msg = S.mode === "below" ? "Nothing is below its reorder level right now." : S.mode === "nonmoving" ? "No non-moving items in this period." : "No items found.";
+      var msg = S.mode === "below" ? "Nothing is below its reorder level right now." : S.mode === "nonmoving" ? "No non-moving items in this period." : S.mode === "moving" ? "No item was consumed in this period." : "No items found.";
       $("#pir-tw").innerHTML = '<div class="pir-empty is-good">' + I.ok + esc(msg) + "</div>";
       $("#pir-mlist").innerHTML = ""; return;
     }
@@ -489,8 +490,7 @@
 
     var codes = isDana ? members.map(function (m) { return m.item_code; }) : [r.item_code];
     Promise.all(codes.map(function (code) {
-      var p = { item_code: code, warehouse: WAREHOUSE, days: S.days };
-      if (isDana) p.used_in_days = S.days;
+      var p = { item_code: code, warehouse: WAREHOUSE, days: S.days, used_in_days: S.days };
       return call(PANEL_API, p).then(function (m) {
         if (m && m.transactions) m.transactions.forEach(function (t) { if (!t.item_code) t.item_code = code; });
         return m;
@@ -581,6 +581,16 @@
         "<div><em>Lead Time</em><b>" + lt + "</b></div>" +
       "</div></div>";
   }
+  /* Used In Products: sirf chuni hui period (days) ke Work Orders */
+  function usedInPeriod(list, f) {
+    return (list || []).map(function (p) {
+      var all = p.work_orders || [];
+      var wo = all.filter(function (x) { var dd = String(x.date || "").split(" ")[0]; return !/^\d{4}-\d{2}-\d{2}$/.test(dd) || dd >= f; });
+      var tot = wo.length === all.length ? (+p.total_qty_consumed || 0) : wo.reduce(function (s, x) { return s + (+x.qty || 0); }, 0);
+      return { product_code: p.product_code, product_name: p.product_name, total_qty_consumed: tot, work_orders: wo };
+    }).filter(function (p) { return p.work_orders.length; })
+      .sort(function (a, b) { return b.total_qty_consumed - a.total_qty_consumed; });
+  }
   function usedInHTML(list, label) {
     if (!list || !list.length) return sec("Used In Products \u2014 " + label, '<div class="pir-none">No Work Order consumption found in ' + esc(label.toLowerCase()) + ".</div>");
     return sec("Used In Products \u2014 " + label + " (" + list.length + ")", list.map(function (p, i) {
@@ -616,7 +626,7 @@
         "<div><em>Material Issue</em><b>" + num(b.issue) + "</b></div></div>");
       html += consumptionByProduct(pay.used_in_products, lbl);
     } else {
-      html += usedInHTML(pay.used_in_products, "Last 6 Months");
+      html += usedInHTML(usedInPeriod(pay.used_in_products, f), lbl);
     }
     /* transactions */
     var tin = 0, tout = 0; tx.forEach(function (t) { var q = +t.actual_qty || 0; if (q > 0) tin += q; else tout -= q; });
@@ -969,7 +979,7 @@
   async function settingsCall(body) {
     try {
       var m = await api(body, "POST"); if (!m) return false;
-      SV.users = m.users || []; SV.cand = m.candidates || [];
+      SV.users = (m.users || []).filter(function (u) { return u.enabled !== 0 && u.enabled !== false; }); SV.cand = m.candidates || [];
       $("#pir-set-list").innerHTML = SV.users.length ? SV.users.map(function (u) {
         return '<div class="pir-urow' + (u.enabled ? "" : " off") + '"><span class="av">' + esc(initials(u.full_name || u.user)) + '</span><div class="nm"><b>' + esc(u.full_name) + "</b><small>" + esc(u.user) + (u.enabled ? "" : " \u00b7 disabled") + "</small></div>" +
           (u.level === "admin" ? '<span class="tag admin">System Manager</span><span class="rm"></span>' : '<span class="tag">View</span><button type="button" class="rm" data-rm="' + esc(u.user) + '" title="Remove access">' + I.x + "</button>") + "</div>";
