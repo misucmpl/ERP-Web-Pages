@@ -576,3 +576,12 @@ body.pir-busy #pir-refresh svg { animation: pirSpin .9s linear infinite; }
   .pir-chart svg .lb { font-size: 13px; }
   .pir-chart svg .vl { font-size: 13px; }
 }
+
+/* ===== Access popup screen mein fit: page scroll nahi, sirf user list andar scroll ===== */
+#pir-set.pir-modal-bg { align-items: center !important; padding: 16px !important; overflow: hidden !important; }
+#pir-set .pir-modal { display: flex; flex-direction: column; max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); }
+#pir-set .pir-mh { flex: 0 0 auto; }
+#pir-set .pir-mb { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#pir-set .pir-mb > * { flex: 0 0 auto; }
+#pir-set .pir-ulist { flex: 1 1 auto !important; min-height: 72px; overflow-y: auto !important; overscroll-behavior: contain; scrollbar-width: thin; }
+@media (max-width: 760px) { #pir-set.pir-modal-bg { padding: 0 !important; align-items: stretch !important; } #pir-set .pir-modal { max-height: 100vh; max-height: 100dvh; border-radius: 0; } }
