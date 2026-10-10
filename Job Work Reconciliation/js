@@ -12,7 +12,7 @@
   var root = d.getElementById("ucm-agr");
   if (!root) return;
   /* version check: browser console mein UCM_AGR_VERSION likhne par dikhta hai */
-  var AGR_VER = "09-Oct-2026 \u00b7 v3.2";
+  var AGR_VER = "10-Oct-2026 \u00b7 SI kg column";
   w.UCM_AGR_VERSION = AGR_VER;
   try { console.info("[UCM AG] JS version: " + AGR_VER); } catch (e) { }
 
@@ -96,9 +96,12 @@
     "DISPATCHED In PCS/SET": { title: "Material Dispatched \u2013 Sales Invoice", kicker: "Dispatched \u00b7 PCS / Set", f: function (r) { return r.category === "dispatched" && r.source === "Sales Invoice"; }, rate: true },
     "MFG_FENDER": { title: "Fender \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received" && r.mfg_key === "MFG_FENDER"; }, entryType: true, hideAmount: true },
     "MFG_CHAIN_SET": { title: "Chain Set \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received" && r.mfg_key === "MFG_CHAIN_SET"; }, entryType: true, hideAmount: true },
-    "MFG_ALL": { title: "Manufacturing \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received"; }, entryType: true, hideAmount: true }
+    "MFG_ALL": { title: "Manufacturing \u2013 Total In Ward (WH2 \u2013 UCM)", kicker: "Manufacturing", f: function (r) { return r.category === "mfg_received"; }, entryType: true, hideAmount: true },
+    "MIX_FENDER": { title: "Fender \u2013 Raw Material Used in MIX", kicker: "MIX Work Orders", f: function (r) { return r.category === "mix_used" && r.mix_key === "fender"; }, entryType: true, hideAmount: true },
+    "MIX_CHAIN": { title: "Chain Set \u2013 Raw Material Used in MIX", kicker: "MIX Work Orders", f: function (r) { return r.category === "mix_used" && r.mix_key === "chain"; }, entryType: true, hideAmount: true },
+    "MIX_ALL": { title: "Raw Material Used in MIX \u2013 Fender + Chain Set", kicker: "MIX Work Orders", f: function (r) { return r.category === "mix_used"; }, entryType: true, hideAmount: true }
   };
-  var ROUTE = { "Sales Invoice": "sales-invoice", "Delivery Note": "delivery-note", "Purchase Receipt": "purchase-receipt", "Stock Entry": "stock-entry" };
+  var ROUTE = { "Fender \u00b7 MIX": "stock-entry", "Chain Set \u00b7 MIX": "stock-entry", "Sales Invoice": "sales-invoice", "Delivery Note": "delivery-note", "Purchase Receipt": "purchase-receipt", "Stock Entry": "stock-entry" };
 
   /* --------- shell --------- */
   root.innerHTML =
@@ -131,7 +134,7 @@
     try {
       var m = await api({ action: "data", customer: S.customer, from_date: S.from, to_date: S.to });
       if (!m) return;
-      S.rows = m.rows || []; S.detail = m.detail || [];
+      S.rows = m.rows || []; S.detail = m.detail || []; S.mix = m.mix || null;
       S.customerName = m.customer_name || S.customer;
       render();
     } catch (e) {
@@ -224,12 +227,21 @@
       }).join("")
         : '<div class="agr-none">No manufacturing entries</div>') + "</article>";
 
-    var siRows = byRank(bSi ? bSi.rows : []), siTot = 0, siAmt = 0;
-    siRows.forEach(function (r) { siTot += +r.qty || 0; });
+    /* Dispatched In PCS / Set: ek hi row mein Pcs aur Kg (alag column), Total kg mein (bina decimal) */
+    var SI_KG = { fender: 0.600, chain: 0.2375 };   /* 1 pc ka wazan (kg) */
+    function siKgPer(t) { t = String(t || "").toLowerCase(); return t.indexOf("fender") >= 0 ? SI_KG.fender : t.indexOf("chain") >= 0 ? SI_KG.chain : 0; }
+    function kgDown(v) { return Math.floor((+v || 0) + 1e-6); }   /* 40,061.5 -> 40,061 */
+    var siRows = byRank(bSi ? bSi.rows : []), siKgTot = 0, siAmt = 0;
     S.detail.forEach(function (r) { if (r.category === "dispatched" && r.source === "Sales Invoice") siAmt += +r.amount || 0; });
     var cSi = '<article class="agr-card is-si"><div class="agr-card-h">' + link("DISPATCHED In PCS/SET", "<span>Dispatched In PCS / Set</span>" + I.chev) + "<em>Sales Invoice \u00b7 " + esc(S.customer) + "</em></div>" +
-      (siRows.length ? siRows.map(function (r) { return '<div class="agr-line"><span>' + esc(tc(r.section)) + "</span><b>" + q(r.qty) + "</b></div>"; }).join("") +
-        '<div class="agr-line is-tot"><span>Total \u00b7 ' + inr(siAmt) + "</span><b>" + q(siTot) + "</b></div>"
+      (siRows.length ? '<div class="agr-line si si-h"><span></span><em>In Pcs</em><em>In Kg</em></div>' +
+        siRows.map(function (r) {
+          var nm = tc(r.section), base = nm.toLowerCase() === "chain set" ? "Chain Set" : nm;
+          var per = siKgPer(r.section), kg = kgDown((+r.qty || 0) * per);
+          siKgTot += kg;
+          return '<div class="agr-line si"><span>' + esc(base) + "</span><b>" + qi(r.qty) + '</b><b class="kg">' + (per ? qi(kg) : '<span class="dash">\u2013</span>') + "</b></div>";
+        }).join("") +
+        '<div class="agr-line si is-tot"><span>Total \u00b7 ' + inr0(siAmt) + '</span><b></b><b class="kg">' + qi(siKgTot) + " <small>kg</small></b></div>"
         : '<div class="agr-none">No invoices in this period</div>') + "</article>";
 
     function docs(cat, src) { var u = {}; S.detail.forEach(function (r) { if (r.category === cat && (!src || r.source === src) && r.voucher) u[r.voucher] = 1; }); return Object.keys(u).length; }
@@ -250,7 +262,38 @@
         }).join("") + "</article>";
     }).join("");
 
-    $("#agr-main").innerHTML = recon + '<section class="agr-cards">' + cMfg + cSi + cDocs + extra + "</section>";
+    /* -- 3. MIX Work Orders: backend mein actual raw material (item-wise, Fender / Chain Set / Total) -- */
+    var mixSec = "";
+    if (S.mix && S.mix.products) {
+      var MP = S.mix.products, MI = S.mix.items || {}, codes = Object.keys(MI);
+      /* sabse zyada use hua item pehle */
+      function itTot(c) { var s = 0; MP.forEach(function (p) { s += +(p.items || {})[c] || 0; }); return s; }
+      codes.sort(function (a, b) { return itTot(b) - itTot(a); });
+      var colT = MP.map(function () { return 0; }), grand = 0;
+      var body = codes.map(function (c) {
+        var tot = 0;
+        var cells = MP.map(function (p, i) { var v = +(p.items || {})[c] || 0; colT[i] += v; tot += v; return '<td class="n">' + (v ? qi(v) : '<span class="dash">\u2013</span>') + "</td>"; }).join("");
+        grand += tot;
+        return '<tr><td class="it"><b>' + esc(c) + "</b>" + (MI[c].item_name && MI[c].item_name !== c ? '<small class="g">' + esc(MI[c].item_name) + "</small>" : "") + "</td>" + cells +
+          '<td class="n tot-c">' + qi(tot) + ' <i>' + esc(MI[c].uom || "") + "</i></td></tr>";
+      }).join("");
+      var mixKg = MP.map(function (p) { return +p.mix_kg || 0; }), mixAll = mixKg.reduce(function (a, b) { return a + b; }, 0);
+      var head = '<tr><th>Raw Material</th>' + MP.map(function (p) {
+        var k = p.key === "fender" ? "MIX_FENDER" : "MIX_CHAIN";
+        return '<th class="n">' + link(k, esc(p.label) + I.chev) + '<small class="g">' + (p.work_orders || []).length + " WO \u00b7 " + (p.entries || 0) + ((p.entries || 0) === 1 ? " entry" : " entries") + "</small></th>";
+      }).join("") + '<th class="n">' + link("MIX_ALL", "Total" + I.chev) + "</th></tr>";
+      mixSec = '<section class="agr-recon agr-mix"><div class="agr-sec-h"><div><h2>Raw Material Used \u00b7 MIX Work Orders</h2>' +
+          "<p>Backend consumption from Manufacture entries that made MIX for Fender and Chain Set (item-wise kg)</p></div>" +
+          '<span class="agr-period">' + esc(longDate(S.from)) + " \u2013 " + esc(longDate(S.to)) + "</span></div>" +
+        (codes.length
+          ? '<div class="agr-mix-w"><table class="agr-t agr-mix-t"><thead>' + head + "</thead><tbody>" + body +
+              '<tr class="tot"><td>Total Raw Material</td>' + colT.map(function (v) { return '<td class="n">' + qi(v) + "</td>"; }).join("") + '<td class="n">' + qi(grand) + " <i>kg</i></td></tr>" +
+              '<tr class="mixrow"><td>MIX Produced</td>' + mixKg.map(function (v) { return '<td class="n">' + qi(v) + "</td>"; }).join("") + '<td class="n">' + qi(mixAll) + " <i>kg</i></td></tr>" +
+            "</tbody></table></div>"
+          : '<div class="agr-none big">No MIX work order entries in this period</div>') +
+        "</section>";
+    }
+    $("#agr-main").innerHTML = recon + '<section class="agr-cards">' + cMfg + cSi + cDocs + extra + "</section>" + mixSec;
     $$(".agr-sub").forEach(function (el) { el.textContent = (S.customerName || S.customer) + " \u00b7 " + longDate(S.from) + " \u2013 " + longDate(S.to); });
   }
 
