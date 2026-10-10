@@ -10,6 +10,7 @@
   "use strict";
   var d = document, w = window;
   var API = "/api/method/ucm_production_web";
+  var PROD_VER = "10-Oct-2026 ultra-qc";   /* server script ke PW_VER se match hona chahiye */
   var JC_API = "/api/method/ucm_job_card_detail";
   var CT_API = "/api/method/ucm_std_vs_actual_ct_detail";
   var IH_API = "/api/method/ucm_item_history_api";
@@ -74,6 +75,7 @@
     box: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>',
     cal: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg>',
     chart: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>',
+    add: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 8v8M8 12h8"/></svg>',
     check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>'
   };
 
@@ -87,7 +89,12 @@
     var j = await r.json().catch(function () { return {}; });
     if (!r.ok) {
       var reason = "";
-      try { reason = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { }
+      try {
+        var msgs = JSON.parse(j._server_messages || "[]").map(function (x) { try { return JSON.parse(x); } catch (e) { return { message: String(x) }; } });
+        var hard = msgs.filter(function (x) { return !(x.alert || x.indicator === "orange" || x.indicator === "yellow" || x.indicator === "blue"); });
+        reason = ((hard.length ? hard : msgs)[(hard.length ? hard : msgs).length - 1] || {}).message || "";
+      } catch (e) { }
+      if (!reason && j.exception) reason = String(j.exception).replace(/^[\w.]+:\s*/, "");
       if (!reason && j.exc_type === "DoesNotExistError") reason = "Server Script not found";
       throw new Error((reason || j.exc_type || ("Server error " + r.status)).replace(/<[^>]+>/g, ""));
     }
@@ -108,7 +115,7 @@
   var PL_MONTHS = [];
   (function () { for (var i = 0; i < 9; i++) { var m = (6 + i) % 12, y = 2026 + (6 + i >= 12 ? 1 : 0); PL_MONTHS.push([y + "-" + pad(m + 1), MONTH[m] + " " + y]); } })();
   var JC_STATUSES = ["All", "Production Not Started", "In Progress", "Hold", "Completed", "Assembled"];
-  var PLANTS = ["All", "New Plant", "Old Plant", "Assembly", "Pending Clear"];
+  var PLANTS = ["All", "New Plant", "Old Plant"];   /* sirf Ultra; Assembly = alag segment */
   var JC_MONTHS = [];
   (function () { for (var i = 0; i < 12; i++) { var m = (3 + i) % 12, y = 2026 + (3 + i >= 12 ? 1 : 0); JC_MONTHS.push([y + "-" + pad(m + 1), MONTH[m] + " " + y]); } })();
   var today = iso(new Date());
@@ -126,7 +133,7 @@
   };
   (function restore() {
     var pl = store("dp-plant"); if (PLANTS.indexOf(pl) >= 0) S.dp.plant = pl;
-    if (store("dp-seg") === "large") S.dp.seg = "large";
+    var sg0 = store("dp-seg"); if (sg0 === "large" || sg0 === "eco" || sg0 === "asm") S.dp.seg = sg0;
     if (store("jc-seg") === "large") S.jlb.seg = "large";
     var js0 = store("jc-sort"); if (js0 && /^(jc_desc|jc_asc|start_desc|pending|approved|product|party)$/.test(js0)) S.jc.sort = js0;
   })();
@@ -165,14 +172,15 @@
 
       /* ---- Daily Production ---- */
       '<section class="pr-band" data-band="daily" hidden><div class="pr-filters">' +
-        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-dp-seg"><button type="button" data-seg="ultra">Ultra</button><button type="button" data-seg="large">Large Blow</button></div></div>' +
+        '<div class="pr-f"><span>Segment</span><div class="pr-seg2" id="pr-dp-seg"><button type="button" data-seg="ultra">Ultra</button><button type="button" data-seg="large">Large Blow</button><button type="button" data-seg="eco">Eco Blow</button><button type="button" data-seg="asm">Assembly</button></div></div>' +
         '<div class="pr-f"><span>Day</span><div class="pr-nav">' +
           '<button type="button" class="pr-nbtn" id="pr-dp-prev" title="Previous day">' + I.left + '</button><b id="pr-dp-day"></b>' +
           '<button type="button" class="pr-nbtn" id="pr-dp-next" title="Next day">' + I.right + "</button></div></div>" +
         '<div class="pr-f"><span>Period</span><div class="pr-dates"><input type="date" id="pr-dp-from"><i>to</i><input type="date" id="pr-dp-to"></div></div>' +
         '<div class="pr-f pr-ultra-only"><span>Plant</span><select id="pr-dp-plant">' + opts(PLANTS.map(function (p) { return [p, p === "All" ? "All Plants" : p]; }), S.dp.plant) + "</select></div>" +
-        '<label class="pr-chk pr-ultra-only" title="Only entries with Prod(Kg) below 30 \u2013 click Job Card to see item history"><input type="checkbox" id="pr-dp-lt"><span>Less than 30 Kg</span></label>' +
-        '<button type="button" class="pr-btn is-soft" id="pr-dp-analysis" title="Product change by machine \u2013 single day only">' + I.chart + "<span>Daily Analysis</span></button>" +
+        '<button type="button" class="pr-tgl pr-ultra-only" id="pr-dp-lt" aria-pressed="false" title="Only entries with Prod(Kg) below 30 \u2013 click Job Card to see item history"><i></i><span>&lt; 30 Kg</span></button>' +
+        '<button type="button" class="pr-btn is-soft" id="pr-dp-analysis">' + I.chart + '<span class="pr-tip">Daily Analysis</span></button>' +
+        '<button type="button" class="pr-btn" id="pr-lb-add" hidden>' + I.add + '<span class="pr-tip">Production Entry</span></button>' +
       "</div></section>" +
       '<main class="pr-main" data-main="daily" hidden></main>' +
 
@@ -209,7 +217,9 @@
     "</div>" +
     '<div class="pr-scrim" id="pr-scrim"></div>' +
     '<aside class="pr-drawer" id="pr-drawer" aria-hidden="true"></aside>' +
-    '<div class="pr-modal-bg" id="pr-set" hidden><div class="pr-modal" role="dialog" aria-label="Access settings"></div></div>';
+    '<div class="pr-modal-bg" id="pr-set" hidden><div class="pr-modal" role="dialog" aria-label="Access settings"></div></div>' +
+    '<div class="pr-modal-bg" id="pr-lbf" hidden><div class="pr-modal pr-lbf" role="dialog" aria-label="Add production entry"></div></div>' +
+    '<div class="pr-modal-bg" id="pr-ulf" hidden><div class="pr-modal pr-ulf" role="dialog" aria-label="Add Ultra production entry"></div></div>';
 
   function mainEl(k) { return $('[data-main="' + k + '"]'); }
   function loadingHTML() { return '<div class="pr-empty"><span class="pr-spin"></span>Loading\u2026</div>'; }
@@ -373,7 +383,7 @@
     $("#pr-jc-title").textContent = (S.jc.card === "all" ? "Job cards" : JC_CARDS[S.jc.card]) + " (" + list.length + ")";
     $("#pr-jc-sub").textContent = jcScope() + " \u00b7 click a Job Card No for production details";
     if (!list.length) { $("#pr-jc-tw").innerHTML = '<div class="pr-empty">' + ((S.jc.rows || []).length ? "No job card matches this filter." : "No job cards for these filters.") + "</div>"; $("#pr-jc-ml").innerHTML = ""; return; }
-    var adm = !!(S.acc && S.acc.can_close_plan);   /* Close button: sirf "Close Plan" access wale */
+    var adm = !!(S.acc && S.acc.can_close_plan);   /* Close button: sirf "Delete & Close" access wale */
     var h = '<table class="pr-t"><thead><tr><th>Plan No</th><th>Job Card No</th><th>Party</th><th>Item</th><th class="n">MR Planned</th><th class="n">Manufactured</th><th class="n">Approved</th><th class="n">Pending</th><th>Work Order</th><th>Start</th><th>End</th><th class="n">Lead Time</th>' + (adm ? '<th class="c">Action</th>' : "") + "</tr></thead><tbody>";
     list.forEach(function (r) {
       var c = stColor(r.row_status);
@@ -468,26 +478,33 @@
     $("#pr-dp-day").textContent = single ? dayName(S.dp.from) + ", " + nice(S.dp.from) : "Custom";
     $("#pr-dp-from").value = S.dp.from; $("#pr-dp-to").value = S.dp.to;
     $("#pr-dp-plant").value = S.dp.plant; $("#pr-dp-plant").classList.toggle("is-set", S.dp.plant !== "All");
-    $("#pr-dp-lt").checked = !!S.dp.lt; $(".pr-chk").classList.toggle("on", !!S.dp.lt);
+    $("#pr-dp-lt").classList.toggle("on", !!S.dp.lt); $("#pr-dp-lt").setAttribute("aria-pressed", S.dp.lt ? "true" : "false");
     var ul = S.dp.seg === "ultra";
     $$("#pr-dp-seg [data-seg]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-seg") === S.dp.seg); });
     $$('[data-band="daily"] .pr-ultra-only').forEach(function (x) { x.hidden = !ul; });
+    $$('[data-band="daily"] .pr-lb-only').forEach(function (x) { x.hidden = ul; });
+    /* Add Production Entry (Ultra + Large Blow): sirf "Production Entry" / "Delete & Close" access wale */
+    $("#pr-lb-add").hidden = !(S.acc && (S.acc.can_prod_entry || S.acc.can_delete_entry));
+    if (S.dp.seg === "eco" || S.dp.seg === "asm") $("#pr-lb-add").hidden = true;   /* Eco Blow / Assembly: abhi sirf dekhna */
+    $("#pr-lb-add .pr-tip").innerHTML = "<b>Production Entry</b>" + (ul ? "Add Ultra entry \u00b7 New / Old Plant" : "Add Large Blow entry");
     $("#pr-dp-analysis").hidden = !ul;   /* Daily Analysis sirf Ultra ke liye */
     $("#pr-dp-analysis").disabled = !single;
-    $("#pr-dp-analysis").title = !ul ? "Daily Analysis is for Ultra only" : (single ? "Product change by machine for " + nice(S.dp.from) : "Pick a single day to use Daily Analysis");
+    $("#pr-dp-analysis .pr-tip").innerHTML = "<b>Daily Analysis</b>" + (single ? "Product change by machine \u00b7 " + esc(nice(S.dp.from)) : "Pick a single day to use it");
   }
   function shiftDay(n) { var t = addDays(S.dp.from, n); S.dp.from = t; S.dp.to = t; syncDpBand(); syncSub(); loadDp(); }
   async function loadDp() {
-    if (S.dp.seg === "large") return loadLb();
+    if (S.dp.seg === "large" || S.dp.seg === "eco") return loadLb();   /* Large Blow + Eco Blow */
+    var asm = S.dp.seg === "asm", plant = asm ? "Assembly" : S.dp.plant, lt = !asm && S.dp.lt;
     var my = ++S.dp.seq, el = mainEl("daily");
     if (!S.dp.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
     try {
-      var m = await api({ action: "daily", from_date: S.dp.from, to_date: S.dp.to, plant: S.dp.plant, less_than_30: S.dp.lt ? 1 : 0 });
+      var m = await api({ action: "daily", from_date: S.dp.from, to_date: S.dp.to, plant: plant, less_than_30: lt ? 1 : 0 });
       if (!m || my !== S.dp.seq) return;
       var rows = m.rows || [];
       /* report jaisa: "All" plant mein Assembly nahi dikhate */
-      if (S.dp.plant === "All") rows = rows.filter(function (r) { return String(r.workstation || "").indexOf("Assembly") === -1; });
-      if (S.dp.lt) rows = rows.filter(function (r) { return (r.prod_kg || 0) < 30; });
+      if (plant === "All") rows = rows.filter(function (r) { return String(r.workstation || "").indexOf("Assembly") === -1; });
+      rows = rows.filter(function (r) { return !/eco\s*blow/i.test(r.workstation || ""); });   /* Eco Blow alag segment mein */
+      if (lt) rows = rows.filter(function (r) { return (r.prod_kg || 0) < 30; });
       S.dp.rows = rows;
       var ds = {}; rows.forEach(function (r) { if (r.production_date) ds[r.production_date] = 1; });
       S.dp.dates = Object.keys(ds).sort(); S.dp.di = 0;
@@ -548,7 +565,7 @@
   function renderDpTable() {
     var list = dpVisible(), st = dpStats(list), dt = S.dp.dates[S.dp.di];
     $("#pr-dp-title").textContent = "Production entries (" + list.length + ")";
-    $("#pr-dp-sub").textContent = (dt ? dayName(dt) + ", " + nice(dt) : (S.dp.from === S.dp.to ? nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to))) + " \u00b7 " + (S.dp.plant === "All" ? "All plants (excl. Assembly)" : S.dp.plant) + (S.dp.lt ? " \u00b7 Prod below 30 Kg \u00b7 click Job Card for item history" : " \u00b7 click a Job Card for production details");
+    $("#pr-dp-sub").textContent = (dt ? dayName(dt) + ", " + nice(dt) : (S.dp.from === S.dp.to ? nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to))) + " \u00b7 " + (S.dp.seg === "asm" ? "Assembly" : S.dp.plant === "All" ? "All plants (excl. Assembly)" : S.dp.plant) + (S.dp.lt && S.dp.seg === "ultra" ? " \u00b7 Prod below 30 Kg \u00b7 click Job Card for item history" : " \u00b7 click a Job Card for production details");
     if (!list.length) { $("#pr-dp-tw").innerHTML = '<div class="pr-empty">' + ((S.dp.rows || []).length ? "No entry matches the search." : "No production entries for these filters.") + "</div>"; $("#pr-dp-ml").innerHTML = ""; return; }
     var h = '<table class="pr-t pr-dp-t"><thead><tr><th>Date / Shift</th><th>Job Card</th><th>M/C No</th><th>Item</th><th class="n">Produced</th><th class="n">Accepted</th><th class="n">Rejected</th><th class="n">Prod (Kg)</th><th>QC Status</th><th class="n">MP / Elec Hrs</th><th>Stock Entry</th></tr></thead><tbody>';
     list.forEach(function (r) {
@@ -584,7 +601,7 @@
     var my = ++S.dp.seq, el = mainEl("daily");
     if (!S.lb.rows) el.innerHTML = loadingHTML(); el.classList.add("is-loading");
     try {
-      var m = await api({ action: "largeblow", from_date: S.dp.from, to_date: S.dp.to });
+      var m = await api({ action: "largeblow", from_date: S.dp.from, to_date: S.dp.to, kind: S.dp.seg === "eco" ? "eco" : "large" });
       if (!m || my !== S.dp.seq) return;
       var rows = m.rows || [];
       rows.sort(function (a, b) {
@@ -610,7 +627,7 @@
     var html = '<div class="pr-kpis k4">' +
       kpi("Entries", n0((S.lb.rows || []).length), "Manufacture entries", "#1565a8") +
       kpi("Machines", n0(Object.keys(t.mc).length), n0(Object.keys(t.it).length) + " products", "#6a3fa0") +
-      kpi("Total Qty", nq(t.qty), "Moved to WH7 - UCM", "#1e7e3a") +
+      kpi("Total Qty", nq(t.qty), S.dp.seg === "eco" ? "Finished goods" : "Moved to WH7 - UCM", "#1e7e3a") +
       kpi("Elec / Man Hrs", nq(t.el) + " / " + nq(t.mh), (fl.manpower ? nq(t.mp) + " manpower" : "Manpower field not found"), "#b8560c") + "</div>";
     html += '<section class="pr-reg"><div class="pr-reg-h"><div class="pr-reg-t"><h2 id="pr-lb-title"></h2><p id="pr-lb-sub"></p></div>' +
       '<div class="pr-reg-tools"><label class="pr-search">' + I.search + '<input type="search" id="pr-lb-q" placeholder="Search machine, product, entry\u2026" value="' + esc(S.lb.q) + '"></label>' +
@@ -621,9 +638,9 @@
   }
   function renderLbTable() {
     var list = lbVisible(), t = lbStats(list), fl = S.lb.fields || {};
-    $("#pr-lb-title").textContent = "Large Blow production (" + list.length + ")";
-    $("#pr-lb-sub").textContent = (S.dp.from === S.dp.to ? dayName(S.dp.from) + ", " + nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to)) + " \u00b7 Manufacture entries, finished goods to WH7 - UCM";
-    if (!list.length) { $("#pr-lb-tw").innerHTML = '<div class="pr-empty">' + ((S.lb.rows || []).length ? "No entry matches the search." : "No Large Blow entries for these dates.") + "</div>"; $("#pr-lb-ml").innerHTML = ""; return; }
+    $("#pr-lb-title").textContent = (S.dp.seg === "eco" ? "Eco Blow" : "Large Blow") + " production (" + list.length + ")";
+    $("#pr-lb-sub").textContent = (S.dp.from === S.dp.to ? dayName(S.dp.from) + ", " + nice(S.dp.from) : nice(S.dp.from) + " \u2013 " + nice(S.dp.to)) + " \u00b7 " + (S.dp.seg === "eco" ? "Manufacture entries on Eco Blow machines" : "Manufacture entries, finished goods to WH7 - UCM");
+    if (!list.length) { $("#pr-lb-tw").innerHTML = '<div class="pr-empty">' + ((S.lb.rows || []).length ? "No entry matches the search." : "No " + (S.dp.seg === "eco" ? "Eco Blow" : "Large Blow") + " entries for these dates.") + "</div>"; $("#pr-lb-ml").innerHTML = ""; return; }
     function hv(v) { return v == null ? '<span class="mut">\u2013</span>' : nq(v); }
     var h = '<table class="pr-t pr-lb-t"><thead><tr><th>Date / Shift</th><th>M/C No</th><th>Product</th><th class="n">Qty</th><th class="n">Elec Hrs</th><th class="n">Man Hrs</th><th class="n">Manpower</th><th>Stock Entry</th></tr></thead><tbody>';
     list.forEach(function (r) {
@@ -645,7 +662,7 @@
   function lbCSV() {
     var out = [["Posting Date", "Time", "Shift", "M/C No", "Item Code", "Product", "Qty", "UOM", "Electricity Hours", "Manpower Hours", "No of Manpower", "Stock Entry", "BOM", "Created By"]];
     lbVisible().forEach(function (r) { out.push([r.posting_date, r.posting_time, r.shift, r.machine, r.item_code, r.item_name, r.qty, r.uom, r.electricity_hours, r.manpower_hours, r.manpower, r.stock_entry, r.bom, r.created_by]); });
-    saveCSV(out, "large-blow-production-" + S.dp.from + "-to-" + S.dp.to + ".csv");
+    saveCSV(out, (S.dp.seg === "eco" ? "eco" : "large") + "-blow-production-" + S.dp.from + "-to-" + S.dp.to + ".csv");
   }
 
 
@@ -999,7 +1016,7 @@
 
   /* --- Daily Analysis slider (product change by machine) --- */
   var AN = { plant: "New Plant", data: null };
-  function plantCat(ws) { var x = String(ws || "").toLowerCase(); if (/new\s*plant/.test(x)) return "New Plant"; if (/old\s*plant/.test(x)) return "Old Plant"; return null; }
+  function plantCat(ws) { var x = String(ws || "").toLowerCase(); if (/eco\s*blow/.test(x)) return null; if (/new\s*plant/.test(x)) return "New Plant"; if (/old\s*plant/.test(x)) return "Old Plant"; return null; }
   function machineOf(ws) { var x = String(ws || "").replace(/(new|old)\s*plant/ig, "").replace(/^[\s\-:|]+/, "").replace(/[\s\-:|]+$/, "").replace(/\s{2,}/g, " "); return shortMachine(x) || ws || "\u2013"; }
   function simpleRows(rows, plant) {
     var out = [], seen = {};
@@ -1112,14 +1129,14 @@
     var h = '<table class="pr-t pr-nm-t"><thead><tr><th>#</th><th>Item</th><th>Item Group</th><th class="n">Inward Qty</th><th class="n">DN Out</th><th class="n">Assembly</th><th class="n">Other Out</th><th class="n">Balance Qty</th></tr></thead><tbody>';
     list.forEach(function (r, i) {
       ti += r.inward_qty || 0; tb += r.balance_qty || 0;
-      h += '<tr><td class="mut">' + (i + 1) + '</td><td class="it">' + nmTrig(r) + "<small>" + esc(r.item_code) + "</small></td><td>" + esc(r.item_group) + "</td>" +
+      h += '<tr class="pr-nm-row" data-nmi="' + esc(r.item_code) + '" data-nmn="' + esc(r.item_name) + '" title="Click to see transactions"><td class="mut">' + (i + 1) + '</td><td class="it">' + nmTrig(r) + "<small>" + esc(r.item_code) + "</small></td><td>" + esc(r.item_group) + "</td>" +
         '<td class="n"><b class="pos">' + nq(r.inward_qty) + '</b></td><td class="n mut">' + nq(r.dn_out_qty) + '</td><td class="n mut">' + nq(r.assembly_qty) + '</td><td class="n mut">' + nq(r.other_out_qty) + "</td>" +
         '<td class="n">' + ((r.balance_qty || 0) > 0 ? '<span class="pr-nm-bal">' + nq(r.balance_qty) + "</span>" : nq(r.balance_qty)) + "</td></tr>";
     });
     h += '</tbody><tfoot><tr><td colspan="3">Total \u00b7 ' + list.length + ' items</td><td class="n">' + nq(ti) + '</td><td colspan="3"></td><td class="n">' + nq(tb) + "</td></tr></tfoot></table>";
     $("#pr-nm-tw").innerHTML = h;
     $("#pr-nm-ml").innerHTML = list.map(function (r) {
-      return '<div class="pr-mcard"><div class="t">' + nmTrig(r) + "</div>" +
+      return '<div class="pr-mcard pr-nm-row" data-nmi="' + esc(r.item_code) + '" data-nmn="' + esc(r.item_name) + '"><div class="t">' + nmTrig(r) + "</div>" +
         '<div class="m"><span>' + esc(r.item_code) + " \u00b7 In " + nq(r.inward_qty) + '</span><span class="pr-nm-bal">' + nq(r.balance_qty) + "</span></div></div>";
     }).join("");
   }
@@ -1164,11 +1181,562 @@
     $("#pr-dr-body").innerHTML = h;
   }
 
+
+  /* ===================================================================
+     Large Blow: Add Production Entry (form) - abhi sirf form, save baad mein
+     Date + Shift chuno -> har machine:
+       is shift ki entry hai  -> "Entered" (sirf dikhega)
+       nahi hai               -> machine ki pichhli entry copy (editable)
+     =================================================================== */
+  var LBF = { date: "", shift: "A", data: null, rows: [], seq: 0, items: {} };
+  function lbfNum(v) { return v == null || v === "" ? "" : String(Math.round((+v || 0) * 100) / 100); }
+  function openLbf() {
+    var m = $("#pr-lbf");
+    LBF.date = LBF.date || today; LBF.data = null; LBF.rows = []; LBF.done = []; LBF.confirm = false; LBF.err = "";
+    $(".pr-modal", m).innerHTML =
+      '<div class="pr-mh"><div><h3>Large Blow \u00b7 Add Production Entry</h3><p>Pick the date and shift. Machines already entered for that shift are shown as done. The rest are copied from their last shift \u2013 change only what is different.</p></div>' +
+        '<button type="button" class="pr-ibtn" id="pr-lbf-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="pr-lbf-top"><label class="pr-f"><span>Date</span><input type="date" id="pr-lbf-date" value="' + esc(LBF.date) + '"></label>' +
+        '<div class="pr-f"><span>Shift</span><div class="pr-seg2" id="pr-lbf-shift"><button type="button" data-sh="A">Shift A</button><button type="button" data-sh="B">Shift B</button></div></div>' +
+        '<div class="pr-lbf-sum" id="pr-lbf-sum"></div></div>' +
+      '<div class="pr-mb pr-lbf-body" id="pr-lbf-body"></div>' +
+      '<div class="pr-lbf-foot" id="pr-lbf-foot"></div>';
+    m.hidden = false; lock(true);
+    $("#pr-lbf-x").addEventListener("click", closeLbf);
+    $("#pr-lbf-date").addEventListener("change", function () { if (this.value) { LBF.date = this.value; LBF.done = []; loadLbf(); } });
+    $("#pr-lbf-shift").addEventListener("click", function (e) { var b = e.target.closest("[data-sh]"); if (!b) return; LBF.shift = b.getAttribute("data-sh"); LBF.done = []; loadLbf(); });
+    var body = $("#pr-lbf-body");
+    body.addEventListener("input", function (e) {
+      var el = e.target, row = el.closest("[data-i]"); if (!row) return;
+      var r = LBF.rows[+row.getAttribute("data-i")]; if (!r) return;
+      var f = el.getAttribute("data-f");
+      if (f === "item") { r.item_code = el.value.trim(); var it = LBF.items[r.item_code]; r.item_name = it ? it.item_name : ""; r.uom = it ? it.stock_uom : r.uom; var nm = el.parentNode.querySelector(".nm"); if (nm) nm.textContent = r.item_name || (r.item_code ? "Pick from the list" : ""); lbfSearch(el.value, el); }
+      else if (f) r[f] = el.value;
+      r.changed = true; drawLbfSum();
+    });
+    body.addEventListener("change", function (e) {
+      var el = e.target; if (el.getAttribute("data-f") !== "on") return;
+      var r = LBF.rows[+el.closest("[data-i]").getAttribute("data-i")]; if (!r) return;
+      r.on = el.checked; el.closest(".pr-lbf-row").classList.toggle("off", !r.on); drawLbfSum();
+    });
+    /* product list (safed, main filter jaisa) */
+    body.addEventListener("focusin", function (e) { var el = e.target; if (el.getAttribute && el.getAttribute("data-f") === "item") lbfSearch(el.value, el); });
+    body.addEventListener("focusout", function (e) { var el = e.target; if (el.getAttribute && el.getAttribute("data-f") === "item") setTimeout(function () { var l = el.parentNode.querySelector(".pr-pick-l"); if (l) l.hidden = true; }, 150); });
+    body.addEventListener("mousedown", function (e) {
+      var b = e.target.closest(".pr-lbf-row .pr-pick-l button[data-c]"); if (!b) return; e.preventDefault();
+      var row = b.closest("[data-i]"), r = LBF.rows[+row.getAttribute("data-i")], inp = row.querySelector('input[data-f="item"]');
+      var it = LBF.items[b.getAttribute("data-c")]; if (!r || !it) return;
+      r.item_code = it.name; r.item_name = it.item_name; r.uom = it.stock_uom; r.changed = true;
+      inp.value = it.name; row.querySelector(".nm").textContent = it.item_name; b.closest(".pr-pick-l").hidden = true; drawLbfSum();
+    });
+    body.addEventListener("scroll", function () { $$(".pr-lbf-row .pr-pick-l").forEach(function (x) { x.hidden = true; }); });
+    /* Entered entry: Delete (2 baar click) -> cancel + delete */
+    var delT;
+    body.addEventListener("click", async function (e) {
+      var b = e.target.closest("[data-del]"); if (!b || b.disabled) return;
+      if (!b.classList.contains("arm")) {
+        $$("#pr-lbf .pr-lbf-del.arm").forEach(function (x) { x.classList.remove("arm"); x.textContent = "Delete"; });
+        b.classList.add("arm"); b.textContent = "Sure? Click again"; clearTimeout(delT);
+        delT = setTimeout(function () { if (b.isConnected) { b.classList.remove("arm"); b.textContent = "Delete"; } }, 4000);
+        return;
+      }
+      clearTimeout(delT); b.disabled = true; b.textContent = "Deleting\u2026";
+      var nm = b.getAttribute("data-del");
+      try {
+        await api({ action: "lb_delete", stock_entry: nm }, "POST");
+        prToast("ok", nm + " cancelled and deleted.");
+        LBF.done = []; await loadLbf();
+        if (S.dp.seg === "large") loadLb();
+      } catch (err) {
+        LBF.err = err.message; drawLbfSum();
+        b.disabled = false; b.classList.remove("arm"); b.textContent = "Delete";
+      }
+    });
+    $("#pr-lbf-foot").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-lact]"); if (!b || b.disabled) return;
+      var a = b.getAttribute("data-lact");
+      if (a === "review") { LBF.confirm = true; drawLbfSum(); }
+      else if (a === "back") { LBF.confirm = false; drawLbfSum(); }
+      else if (a === "submit") submitLbf();
+    });
+    loadLbf();
+  }
+  var lbfST;
+  function lbfSearch(q, el) {
+    clearTimeout(lbfST);
+    lbfST = setTimeout(async function () {
+      try {
+        var list = await api({ action: "lb_items", q: q || "" }) || [];
+        list.forEach(function (it) { LBF.items[it.name] = it; });
+        if (!el || d.activeElement !== el) return;
+        var box = el.parentNode.querySelector(".pr-pick-l");
+        /* list modal ke andar kat na jaaye: screen ke hisaab se (fixed) */
+        var rc = el.getBoundingClientRect(), below = w.innerHeight - rc.bottom;
+        box.style.position = "fixed"; box.style.left = rc.left + "px"; box.style.width = Math.max(rc.width, 320) + "px"; box.style.right = "auto";
+        if (below < 260 && rc.top > below) { box.style.top = "auto"; box.style.bottom = (w.innerHeight - rc.top + 4) + "px"; }
+        else { box.style.bottom = "auto"; box.style.top = (rc.bottom + 4) + "px"; }
+        box.innerHTML = list.length ? list.map(function (it) { return '<button type="button" data-c="' + esc(it.name) + '"><b>' + esc(it.name) + "</b><small>" + esc(it.item_name) + "</small></button>"; }).join("") : '<div class="pr-none">No product found</div>';
+        box.hidden = false;
+      } catch (e) { }
+    }, 180);
+  }
+  /* Submit: har chuni hui machine ki ek Manufacture Stock Entry */
+  function lbfToSubmit() {
+    return LBF.rows.filter(function (r) { return r.mode !== "entered" && r.on; });
+  }
+  function lbfCost(r) {
+    var er = +r.elec_rate || 125, wr = +r.wage_rate || 70;
+    return { er: er, wr: wr, e: (+r.electricity_hours || 0) * er, m: (+r.manpower || 0) * (+r.manpower_hours || 0) * wr };
+  }
+  async function submitLbf() {
+    if (LBF.busy) return;
+    var rows = lbfToSubmit(); if (!rows.length) return;
+    LBF.busy = true; LBF.err = ""; drawLbfSum();
+    try {
+      var m = await api({ action: "lb_submit", date: LBF.date, shift: LBF.shift, rows: rows.map(function (r) {
+        return { machine: r.machine, item_code: r.item_code, qty: +r.qty || 0, electricity_hours: +r.electricity_hours || 0, manpower_hours: +r.manpower_hours || 0, manpower: +r.manpower || 0, elec_rate: lbfCost(r).er, wage_rate: lbfCost(r).wr };
+      }) }, "POST");
+      LBF.busy = false; LBF.confirm = false; LBF.done = (m && m.entries) || [];
+      prToast("ok", LBF.done.length + " Stock Entr" + (LBF.done.length > 1 ? "ies" : "y") + " submitted for " + nice(LBF.date) + " Shift " + LBF.shift + ".");
+      await loadLbf();
+      if (S.dp.seg === "large") loadLb();
+    } catch (e) {
+      LBF.busy = false; LBF.err = "Not submitted: " + e.message; drawLbfSum();
+    }
+  }
+  function closeLbf() { var m = $("#pr-lbf"); if (!m || m.hidden) return; m.hidden = true; lock(false); }
+  async function loadLbf() {
+    var my = ++LBF.seq;
+    $$("#pr-lbf-shift [data-sh]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-sh") === LBF.shift); });
+    $("#pr-lbf-body").innerHTML = loadingHTML(); $("#pr-lbf-foot").innerHTML = ""; $("#pr-lbf-sum").innerHTML = "";
+    try {
+      var m = await api({ action: "lb_form", date: LBF.date, shift: LBF.shift });
+      if (!m || my !== LBF.seq) return;
+      LBF.data = m; LBF.rows = []; LBF.confirm = false; LBF.err = "";
+      (m.machines || []).forEach(function (x) {
+        if (x.current && x.current.length) { LBF.rows.push({ machine: x.machine, mode: "entered", entries: x.current }); return; }
+        var p = x.previous;
+        if (p) {
+          LBF.items[p.item_code] = { name: p.item_code, item_name: p.item_name, stock_uom: p.uom };
+          LBF.rows.push({ machine: x.machine, mode: "copy", on: true, from: p, item_code: p.item_code, item_name: p.item_name, uom: p.uom,
+            qty: lbfNum(p.qty), electricity_hours: lbfNum(p.electricity_hours), manpower_hours: lbfNum(p.manpower_hours), manpower: lbfNum(p.manpower),
+            elec_rate: p.elec_rate || 125, wage_rate: p.wage_rate || 70 });
+        } else LBF.rows.push({ machine: x.machine, mode: "new", on: true, item_code: "", item_name: "", uom: "", qty: "", electricity_hours: "", manpower_hours: "", manpower: "" });
+      });
+      drawLbf(); lbfSearch("");
+    } catch (e) { if (my !== LBF.seq) return; $("#pr-lbf-body").innerHTML = errorHTML(e.message); }
+  }
+  function drawLbf() {
+    var m = LBF.data || {};
+    if (!LBF.rows.length) { $("#pr-lbf-body").innerHTML = '<div class="pr-empty">No Large Blow machines found. Workstations with "Large Blow" in the name are used as the machine list.</div>'; drawLbfSum(); return; }
+    var h = '<div class="pr-lbf-head"><span></span><span>Machine</span><span>Status</span><span>Product</span><span class="n">Qty</span><span class="n">Elec Hrs</span><span class="n">Man Hrs</span><span class="n">Manpower</span></div>';
+    LBF.rows.forEach(function (r, i) {
+      var mc = esc(shortMachine(r.machine) || r.machine);
+      if (r.mode === "entered") {
+        h += r.entries.map(function (en, k) {
+          return '<div class="pr-lbf-row done"><span class="ck">' + (k ? "" : I.check) + "</span><span class=\"mc\">" + (k ? "" : "<b>" + mc + "</b>") + "</span>" +
+            '<span class="st"><em class="ok">Entered</em>' + docLink("Stock Entry", en.stock_entry) +
+              (en.by_page && S.acc && S.acc.can_delete_entry ? '<button type="button" class="pr-lbf-del" data-del="' + esc(en.stock_entry) + '" title="Cancel and delete this Stock Entry">Delete</button>' : "") + "</span>" +
+            '<span class="it"><b>' + esc(en.item_name) + "</b><small>" + esc(en.item_code) + "</small></span>" +
+            '<span class="n">' + nq(en.qty) + " <small>" + esc(en.uom || "") + '</small></span><span class="n">' + nq(en.electricity_hours) + '</span><span class="n">' + nq(en.manpower_hours) + '</span><span class="n">' + nq(en.manpower) + "</span></div>";
+        }).join("");
+        return;
+      }
+      var src = r.mode === "copy" ? '<em class="cp">Copied</em><small>from ' + esc(short(r.from.posting_date)) + (r.from.shift_letter ? " \u00b7 " + esc(r.from.shift_letter) : "") + "</small>" : '<em class="nw">New</em><small>no earlier entry</small>';
+      function inp(f, ph) { return '<input type="number" min="0" step="any" data-f="' + f + '" value="' + esc(r[f]) + '" placeholder="' + ph + '">'; }
+      h += '<div class="pr-lbf-row' + (r.on ? "" : " off") + '" data-i="' + i + '">' +
+        '<span class="ck"><input type="checkbox" data-f="on"' + (r.on ? " checked" : "") + ' title="Machine running this shift"></span>' +
+        '<span class="mc"><b>' + mc + "</b></span>" +
+        '<span class="st">' + src + "</span>" +
+        '<span class="it"><span class="pr-pick"><input type="text" data-f="item" autocomplete="off" value="' + esc(r.item_code) + '" placeholder="Type product\u2026"><span class="pr-pick-l" hidden></span></span><small class="nm">' + esc(r.item_name) + "</small></span>" +
+        '<span class="n">' + inp("qty", "Qty") + '</span><span class="n">' + inp("electricity_hours", "Elec hrs") + '</span><span class="n">' + inp("manpower_hours", "Man hrs") + '</span><span class="n">' + inp("manpower", "Manpower") + "</span></div>";
+    });
+    $("#pr-lbf-body").innerHTML = '<div class="pr-lbf-grid">' + h + "</div>";
+    drawLbfSum();
+  }
+  function drawLbfSum() {
+    var done = 0, todo = 0, off = 0, bad = 0;
+    LBF.rows.forEach(function (r) {
+      if (r.mode === "entered") { done++; return; }
+      if (!r.on) { off++; return; }
+      todo++;
+      if (!r.item_code || !LBF.items[r.item_code] || !(+r.qty > 0)) bad++;
+    });
+    var m = LBF.data || {};
+    $("#pr-lbf-sum").innerHTML = LBF.data ? '<b>' + esc(nice(m.date)) + " \u00b7 Shift " + esc(m.shift) + "</b><span>" + done + " entered \u00b7 " + todo + " to enter" + (off ? " \u00b7 " + off + " not running" : "") + "</span>" : "";
+    var foot = $("#pr-lbf-foot"); if (!foot) return;
+    if (!LBF.data) { foot.innerHTML = ""; return; }
+    var err = LBF.err ? '<div class="pr-lbf-err">' + esc(LBF.err) + "</div>" : "";
+    var done = (LBF.done && LBF.done.length) ? '<div class="pr-lbf-done"><b>Submitted:</b> ' + LBF.done.map(function (x) { return esc(shortMachine(x.machine)) + " \u2192 " + docLink("Stock Entry", x.stock_entry); }).join(" \u00b7 ") + "</div>" : "";
+    var list = lbfToSubmit();
+    var mod = $("#pr-lbf .pr-modal"); if (mod) mod.classList.toggle("is-confirm", !!(LBF.confirm && !bad && list.length));
+    if (LBF.confirm && !bad && list.length) {
+      var te = 0, tm = 0;
+      var rowsH = list.map(function (r) {
+        var c = lbfCost(r); te += c.e; tm += c.m;
+        return "<tr><td><b>" + esc(shortMachine(r.machine)) + "</b></td><td>" + esc(r.item_name || r.item_code) + "<small>" + esc(r.item_code) + '</small></td><td class="n">' + nq(r.qty) + '</td><td class="n">' + nq(r.electricity_hours) + " \u00d7 " + inr(c.er) + "<small>" + inr(c.e) + '</small></td><td class="n">' + nq(r.manpower) + " \u00d7 " + nq(r.manpower_hours) + " h \u00d7 " + inr(c.wr) + "<small>" + inr(c.m) + "</small></td></tr>";
+      }).join("");
+      foot.innerHTML = err + '<div class="pr-lbf-conf"><div class="h"><b>Submit ' + list.length + " Stock Entr" + (list.length > 1 ? "ies" : "y") + "?</b><span>" + esc(nice(LBF.date)) + " \u00b7 Shift " + esc(LBF.shift) + " \u00b7 Type Manufacture, From BOM (multi-level) \u00b7 raw material from WH6 - UCM \u00b7 finished goods to WH7 - UCM \u00b7 submitted immediately</span></div>" +
+        '<table class="pr-t pr-dt"><thead><tr><th>Machine</th><th>Product</th><th class="n">Qty</th><th class="n">Electricity cost</th><th class="n">Manpower cost</th></tr></thead><tbody>' + rowsH +
+        '</tbody><tfoot><tr><td colspan="3">Additional costs</td><td class="n">' + inr(te) + '</td><td class="n">' + inr(tm) + "</td></tr></tfoot></table>" +
+        '<div class="act"><button type="button" class="pr-btn is-soft" data-lact="back"' + (LBF.busy ? " disabled" : "") + '>Back</button><button type="button" class="pr-btn is-go" data-lact="submit"' + (LBF.busy ? " disabled" : "") + ">" + (LBF.busy ? "Submitting\u2026" : "Confirm & Submit") + "</button></div></div>";
+      return;
+    }
+    if (!(S.acc && S.acc.can_prod_entry)) {
+      foot.innerHTML = err + '<div class="pr-lbf-bar"><span class="why">You can delete entries here. Adding entries needs Production Entry access.</span></div>';
+      return;
+    }
+    foot.innerHTML = err + done + '<div class="pr-lbf-bar"><span class="why' + (bad ? " bad" : "") + '">' + (bad ? bad + " machine" + (bad > 1 ? "s need" : " needs") + " a product from the list and a qty." : (todo ? todo + " machine" + (todo > 1 ? "s" : "") + " ready. Review and submit to create the Stock Entries." : "Nothing to enter for this shift.")) + "</span>" +
+      '<button type="button" class="pr-btn" data-lact="review"' + (bad || !todo ? " disabled" : "") + ">Review & Submit</button></div>";
+  }
+  $("#pr-lbf").addEventListener("mousedown", function (e) { if (e.target === this) closeLbf(); });
+
+  /* ===================================================================
+     Ultra: Add Production Entry (New Plant / Old Plant)
+     Date + Shift + Plant chuno -> har machine:
+       is shift ki entry hai -> "Entered" (+ Product change se usi shift ki doosri entry)
+       nahi hai              -> machine ki pichhli shift ki entry copy (editable)
+     Entry = Work Order ke against "Manufacture" Stock Entry (QC baad mein pehle jaisa)
+     =================================================================== */
+  var ULF = { date: "", shift: "A", plant: "New Plant", data: null, rows: [], seq: 0, wos: {}, meta: {}, done: [], rates: {}, molds: {} };
+  function ulfMc(ws) { return "M/C " + machineOf(ws); }
+  function pickPos(el, box) {
+    var rc = el.getBoundingClientRect(), below = w.innerHeight - rc.bottom;
+    box.style.position = "fixed"; box.style.left = rc.left + "px"; box.style.width = Math.max(rc.width, 360) + "px"; box.style.right = "auto";
+    if (below < 260 && rc.top > below) { box.style.top = "auto"; box.style.bottom = (w.innerHeight - rc.top + 4) + "px"; }
+    else { box.style.bottom = "auto"; box.style.top = (rc.bottom + 4) + "px"; }
+  }
+  function ulfStr(v) { return v == null || v === "" || !(+v) ? "" : String(+v); }
+  function ulfFromEntry(mc, p) {
+    if (p.mold) ULF.molds[p.mold] = ULF.molds[p.mold] || { name: p.mold, title: "" };
+    if (p.wo_open) ULF.wos[p.work_order] = { name: p.work_order, item_code: p.item_code, item_name: p.item_name, stock_uom: p.uom, job_card_no: p.job_card_no, status: p.wo_status };
+    return { machine: mc, mode: "copy", on: true, from: p,
+      wo: p.wo_open ? p.work_order : "", item_code: p.wo_open ? p.item_code : "", item_name: p.wo_open ? p.item_name : "", jc: p.wo_open ? p.job_card_no : "", uom: p.uom,
+      qty: lbfNum(p.qty), ok: lbfNum(p.qty), hold: "", rej: "", okManual: false, elec_hrs: lbfNum(p.elec_hrs), man_hrs: lbfNum(p.man_hrs), manpower: lbfNum(p.manpower),
+      cycle_time: ulfStr(p.cycle_time), cavity: ulfStr(p.cavity), pcs_weight: ulfStr(p.pcs_weight), reason: p.reason || "", mold: p.mold || "" };
+  }
+  function ulfBlank(mc, mode) {
+    return { machine: mc, mode: mode || "new", on: true, wo: "", item_code: "", item_name: "", jc: "", uom: "", qty: "", ok: "", hold: "", rej: "", okManual: false, elec_hrs: "", man_hrs: "", manpower: "",
+      cycle_time: "", cavity: "", pcs_weight: "", reason: "", mold: "" };
+  }
+  /* usi shift mein product change: hours / manpower / rates pichhli entry se, product + qty naya */
+  function ulfExtra(r) {
+    var e = r.entries[r.entries.length - 1], x = ulfBlank(r.machine, "extra");
+    x.manpower = lbfNum(e.manpower);
+    return x;
+  }
+  function ulfSplitBad(r) { return Math.abs((+r.ok || 0) + (+r.hold || 0) + (+r.rej || 0) - (+r.qty || 0)) > 0.001 || (+r.ok || 0) < 0 || (+r.hold || 0) < 0 || (+r.rej || 0) < 0; }
+  function ulfBad(r) { return !r.wo || !ULF.wos[r.wo] || !(+r.qty > 0) || !!(r.mold && !ULF.molds[r.mold]) || ulfSplitBad(r) || ulfAnyOptBad(r); }
+  function ulfCost(r) {
+    var rt = ULF.rates[r.machine] || {}, er = +rt.elec_rate || 125, wr = +rt.wage_rate || 60;   /* Workstation ke rate */
+    return { er: er, wr: wr, e: (+r.elec_hrs || 0) * er, m: (+r.manpower || 0) * (+r.man_hrs || 0) * wr };
+  }
+  function ulfToSubmit() { return ULF.rows.filter(function (r) { return r.mode !== "entered" && r.on; }); }
+  function ulfSetWo(r, rowEl, wo, fill) {
+    r.item_code = wo ? wo.item_code : ""; r.item_name = wo ? wo.item_name : ""; r.jc = wo ? (wo.job_card_no || "") : ""; if (wo) r.uom = wo.stock_uom || r.uom;
+    if (wo && fill) {   /* naya product: item master ka CT / Cavity / Pcs Weight */
+      r.cycle_time = ulfStr(wo.cycle_time); r.cavity = ulfStr(wo.cavity); r.pcs_weight = ulfStr(wo.pcs_weight); r.mold = "";
+      ["cycle_time", "cavity", "pcs_weight", "mold"].forEach(function (f) { var i = rowEl.querySelector('[data-f="' + f + '"]'); if (i) i.value = r[f]; });
+    }
+    var nm = rowEl.querySelector(".nm");
+    if (nm) nm.textContent = wo ? wo.item_name + " · " + wo.name : "Pick a job card from the list";
+  }
+  var ulfST;
+  function ulfPicked(el) { var row = el.closest("[data-i]"), r = row && ULF.rows[+row.getAttribute("data-i")]; return !!(r && r.wo); }   /* chuna hua ho to poori list */
+  function ulfSearch(q, el) {
+    clearTimeout(ulfST);
+    ulfST = setTimeout(async function () {
+      try {
+        var list = await api({ action: "ul_wos", q: q || "" }) || [];
+        list.forEach(function (x) { ULF.wos[x.name] = x; });
+        if (!el || d.activeElement !== el) return;
+        var box = el.parentNode.querySelector(".pr-pick-l"); pickPos(el, box);
+        box.innerHTML = list.length ? list.map(function (x) {
+          return '<button type="button" data-c="' + esc(x.name) + '"><b>' + esc((x.job_card_no || x.name) + " · " + x.item_name) + "</b><small>" + esc(x.name) + " · " + esc(x.status) + " · " + nq(x.produced_qty) + " / " + nq(x.qty) + " made</small></button>";
+        }).join("") : '<div class="pr-none">No running work order found</div>';
+        box.hidden = false;
+      } catch (e) { }
+    }, 180);
+  }
+  var ulfMT;
+  function ulfMoldSearch(q, el) {   /* Mold Detail: Mold Master list */
+    clearTimeout(ulfMT);
+    ulfMT = setTimeout(async function () {
+      try {
+        var list = await api({ action: "ul_molds", q: q || "" }) || [];
+        list.forEach(function (x) { ULF.molds[x.name] = x; });
+        if (!el || d.activeElement !== el) return;
+        var row = el.closest("[data-i]"), r = row && ULF.rows[+row.getAttribute("data-i")];
+        if (r) { ulfSyncBtn(row, r); drawUlfSum(); }
+        var box = el.parentNode.querySelector(".pr-pick-l"); pickPos(el, box);
+        box.innerHTML = list.length ? list.map(function (x) {
+          return '<button type="button" data-m="' + esc(x.name) + '"><b>' + esc(x.name) + "</b>" + (x.title && x.title !== x.name ? "<small>" + esc(x.title) + "</small>" : "") + "</button>";
+        }).join("") : '<div class="pr-none">No mold found in Mold Master</div>';
+        box.hidden = false;
+      } catch (e) { }
+    }, 180);
+  }
+  function openUlf() {
+    var m = $("#pr-ulf");
+    ULF.date = ULF.date || today;
+    if (S.dp.plant === "New Plant" || S.dp.plant === "Old Plant") ULF.plant = S.dp.plant;
+    ULF.data = null; ULF.rows = []; ULF.done = []; ULF.confirm = false; ULF.err = "";
+    $(".pr-modal", m).innerHTML =
+      '<div class="pr-mh"><div><h3>Ultra · Add Production Entry</h3><p>Pick the date, shift and plant. Machines already entered for that shift are shown as done. The rest are copied from their last shift – change only what is different. One Submit per machine makes the material transfer, the Manufacture entry and the full QC (Approved / Hold / Rejected).</p></div>' +
+        '<button type="button" class="pr-ibtn" id="pr-ulf-x" title="Close">' + I.x + "</button></div>" +
+      '<div class="pr-lbf-top"><label class="pr-f"><span>Date</span><input type="date" id="pr-ulf-date" value="' + esc(ULF.date) + '" max="' + today + '"></label>' +
+        '<div class="pr-f"><span>Shift</span><div class="pr-seg2" id="pr-ulf-shift"><button type="button" data-sh="A">Shift A</button><button type="button" data-sh="B">Shift B</button></div></div>' +
+        '<div class="pr-f"><span>Plant</span><div class="pr-seg2" id="pr-ulf-plant"><button type="button" data-pl="New Plant">New Plant</button><button type="button" data-pl="Old Plant">Old Plant</button></div></div>' +
+        '<div class="pr-lbf-sum" id="pr-ulf-sum"></div></div>' +
+      '<div class="pr-mb pr-lbf-body" id="pr-ulf-body"></div>' +
+      '<div class="pr-lbf-foot" id="pr-ulf-foot"></div>';
+    m.hidden = false; lock(true);
+    $("#pr-ulf-x").addEventListener("click", closeUlf);
+    $("#pr-ulf-date").addEventListener("change", function () { if (this.value) { ULF.date = this.value; ULF.done = []; loadUlf(); } });
+    $("#pr-ulf-shift").addEventListener("click", function (e) { var b = e.target.closest("[data-sh]"); if (!b) return; ULF.shift = b.getAttribute("data-sh"); ULF.done = []; loadUlf(); });
+    $("#pr-ulf-plant").addEventListener("click", function (e) { var b = e.target.closest("[data-pl]"); if (!b) return; ULF.plant = b.getAttribute("data-pl"); ULF.done = []; loadUlf(); });
+    var body = $("#pr-ulf-body");
+    body.addEventListener("input", function (e) {
+      var el = e.target, row = el.closest("[data-i]"); if (!row) return;
+      var r = ULF.rows[+row.getAttribute("data-i")]; if (!r) return;
+      var f = el.getAttribute("data-f"); if (!f || f === "on") return;
+      if (f === "wo") { r.wo = ""; ulfSetWo(r, row, null, false); ulfSearch(el.value, el); }
+      else if (f === "mold") { r.mold = el.value.trim(); ulfMoldSearch(el.value, el); }
+      else {
+        if (ulfWhole(f) && el.value.indexOf(".") >= 0) el.value = String(Math.round(+el.value || 0));
+        r[f] = el.value;
+        if (el.type === "number") { var ob = ulfOptBad(r, f); el.classList.toggle("bad", ob); el.title = ob ? "Not allowed in ERPNext" : ""; }
+        if (f === "ok") r.okManual = el.value !== "";
+        if ((f === "qty" || f === "hold" || f === "rej") && !r.okManual) {
+          r.ok = (+r.qty || 0) > 0 ? lbfNum(Math.max((+r.qty || 0) - (+r.hold || 0) - (+r.rej || 0), 0)) : "";
+          var oi = row.querySelector('[data-f="ok"]'); if (oi) oi.value = r.ok;
+        }
+        var sp = row.querySelector(".pr-ulf-split"); if (sp) sp.classList.toggle("bad", ulfSplitBad(r) && +r.qty > 0);
+      }
+      if (r.err) { r.err = ""; var re = row.querySelector(".pr-ulf-err"); if (re) re.remove(); }
+      ulfSyncBtn(row, r); drawUlfSum();
+    });
+    body.addEventListener("change", function (e) {
+      var el = e.target; if (el.getAttribute("data-f") !== "on") return;
+      var r = ULF.rows[+el.closest("[data-i]").getAttribute("data-i")]; if (!r) return;
+      r.on = el.checked; el.closest(".pr-ulf-row").classList.toggle("off", !r.on); drawUlfSum();
+    });
+    body.addEventListener("focusin", function (e) {
+      var el = e.target, f = el.getAttribute && el.getAttribute("data-f");
+      if (f === "wo") { el.select(); ulfSearch(ulfPicked(el) ? "" : el.value, el); }
+      else if (f === "mold") { el.select(); ulfMoldSearch(ULF.molds[el.value] ? "" : el.value, el); }
+    });
+    body.addEventListener("focusout", function (e) { var el = e.target, f = el.getAttribute && el.getAttribute("data-f"); if (f === "wo" || f === "mold") setTimeout(function () { var l = el.parentNode.querySelector(".pr-pick-l"); if (l) l.hidden = true; }, 150); });
+    body.addEventListener("mousedown", function (e) {
+      var mb = e.target.closest(".pr-ulf-row .pr-pick-l button[data-m]");
+      if (mb) {   /* Mold Master se chuna */
+        e.preventDefault();
+        var mrow = mb.closest("[data-i]"), mr = ULF.rows[+mrow.getAttribute("data-i")]; if (!mr) return;
+        mr.mold = mb.getAttribute("data-m"); mrow.querySelector('input[data-f="mold"]').value = mr.mold;
+        mb.closest(".pr-pick-l").hidden = true; ulfSyncBtn(mrow, mr); drawUlfSum(); return;
+      }
+      var b = e.target.closest(".pr-ulf-row .pr-pick-l button[data-c]"); if (!b) return; e.preventDefault();
+      var row = b.closest("[data-i]"), r = ULF.rows[+row.getAttribute("data-i")], wo = ULF.wos[b.getAttribute("data-c")]; if (!r || !wo) return;
+      var prev = r.item_code; r.wo = wo.name; row.querySelector('input[data-f="wo"]').value = wo.job_card_no || wo.name;
+      ulfSetWo(r, row, wo, wo.item_code !== prev); b.closest(".pr-pick-l").hidden = true; ulfSyncBtn(row, r); drawUlfSum();
+    });
+    body.addEventListener("scroll", function () { $$(".pr-ulf-row .pr-pick-l").forEach(function (x) { x.hidden = true; }); });
+    var delT;
+    body.addEventListener("click", async function (e) {
+      var rmb = e.target.closest("[data-rmrow]");
+      if (rmb) {   /* Product change wali extra row hatao; data bhara ho to pehle confirm */
+        var ri = +rmb.getAttribute("data-rmrow"), rr = ULF.rows[ri]; if (!rr || rr.mode !== "extra") return;
+        var filled = !!(rr.wo || rr.qty || rr.elec_hrs || rr.man_hrs || rr.cycle_time || rr.cavity || rr.pcs_weight || rr.mold || rr.reason);
+        if (filled && !rmb.classList.contains("arm")) {
+          rmb.classList.add("arm"); rmb.textContent = "Data filled \u2013 remove?";
+          setTimeout(function () { if (rmb.isConnected) { rmb.classList.remove("arm"); rmb.textContent = "Remove"; } }, 4000);
+          return;
+        }
+        ULF.rows.splice(ri, 1); drawUlf(); return;
+      }
+      var sb = e.target.closest("[data-sub]");
+      if (sb) { if (!sb.disabled) ulfSubmitClick(sb); return; }
+      var pc = e.target.closest("[data-pc]");
+      if (pc) { var pi = +pc.getAttribute("data-pc"); if (ULF.rows[pi]) { ULF.rows.splice(pi + 1, 0, ulfExtra(ULF.rows[pi])); drawUlf(); } return; }
+      var b = e.target.closest("[data-del]"); if (!b || b.disabled) return;
+      if (!b.classList.contains("arm")) {
+        $$("#pr-ulf .pr-lbf-del.arm").forEach(function (x) { x.classList.remove("arm"); x.textContent = "Delete"; });
+        b.classList.add("arm"); b.textContent = "Sure? Click again"; clearTimeout(delT);
+        delT = setTimeout(function () { if (b.isConnected) { b.classList.remove("arm"); b.textContent = "Delete"; } }, 4000);
+        return;
+      }
+      clearTimeout(delT); b.disabled = true; b.textContent = "Deleting…";
+      var nm = b.getAttribute("data-del");
+      try {
+        await api({ action: "ul_delete", stock_entry: nm }, "POST");
+        prToast("ok", nm + " and its QC / material transfer entries cancelled.");
+        ULF.done = []; await loadUlf();
+        if (S.dp.seg === "ultra") loadDp();
+      } catch (err) {
+        ULF.err = err.message; drawUlfSum();
+        b.disabled = false; b.classList.remove("arm"); b.textContent = "Delete";
+      }
+    });
+    $("#pr-ulf-foot").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-uact]"); if (!b || b.disabled) return;
+      var a = b.getAttribute("data-uact");
+      if (a === "review") { ULF.confirm = true; drawUlfSum(); }
+      else if (a === "back") { ULF.confirm = false; drawUlfSum(); }
+      else if (a === "submit") submitUlf();
+    });
+    loadUlf();
+  }
+  function closeUlf() { var m = $("#pr-ulf"); if (!m || m.hidden) return; m.hidden = true; lock(false); }
+  async function loadUlf() {
+    var my = ++ULF.seq;
+    $$("#pr-ulf-shift [data-sh]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-sh") === ULF.shift); });
+    $$("#pr-ulf-plant [data-pl]").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-pl") === ULF.plant); });
+    $("#pr-ulf-body").innerHTML = loadingHTML(); $("#pr-ulf-foot").innerHTML = ""; $("#pr-ulf-sum").innerHTML = "";
+    try {
+      var m = await api({ action: "ul_form", date: ULF.date, shift: ULF.shift, plant: ULF.plant });
+      if (!m || my !== ULF.seq) return;
+      ULF.data = m; ULF.meta = m.field_meta || {}; ULF.rows = []; ULF.confirm = false; ULF.err = "";
+      (m.machines || []).forEach(function (x) {
+        ULF.rates[x.machine] = x.rates || {};
+        if (x.current && x.current.length) { ULF.rows.push({ machine: x.machine, mode: "entered", entries: x.current }); return; }
+        ULF.rows.push(x.previous ? ulfFromEntry(x.machine, x.previous) : ulfBlank(x.machine));
+      });
+      drawUlf();
+    } catch (e) { if (my !== ULF.seq) return; $("#pr-ulf-body").innerHTML = errorHTML(e.message); }
+  }
+  function ulfWhole(f) { var mt = ULF.meta[f]; return !!(mt && (mt.fieldtype === "Select" || mt.fieldtype === "Int")); }   /* CT / Cavity jaise: bina decimal */
+  function ulfOptBad(r, f) {
+    var mt = ULF.meta[f]; if (!mt || mt.fieldtype !== "Select" || r[f] === "" || r[f] == null || !(+r[f])) return false;
+    return String(mt.options || "").split("\n").indexOf(String(+r[f])) < 0;
+  }
+  function ulfAnyOptBad(r) { return ["cycle_time", "cavity", "pcs_weight", "manpower", "elec_hrs", "man_hrs"].some(function (f) { return ulfOptBad(r, f); }); }
+  function ulfNum(r, f, ph) {
+    var wh = ulfWhole(f);
+    return '<input type="number" min="0" step="' + (wh ? "1" : "any") + '"' + (wh ? ' inputmode="numeric"' : "") + ' data-f="' + f + '" value="' + esc(r[f]) + '" placeholder="' + ph + '"' +
+      (ulfOptBad(r, f) ? ' class="bad" title="Not allowed in ERPNext"' : "") + ">";
+  }
+  function ulfField(r, f, ph) {   /* Select field ho to dropdown, warna text */
+    var mt = ULF.meta[f];
+    if (mt && mt.fieldtype === "Select") {
+      var op = String(mt.options || "").split("\n");
+      if (op.indexOf("") < 0) op.unshift("");
+      if (r[f] && op.indexOf(r[f]) < 0) op.push(r[f]);
+      return '<select data-f="' + f + '">' + op.map(function (o) { return '<option value="' + esc(o) + '"' + (o === r[f] ? " selected" : "") + ">" + esc(o || "–") + "</option>"; }).join("") + "</select>";
+    }
+    return '<input type="text" data-f="' + f + '" value="' + esc(r[f]) + '" placeholder="' + ph + '">';
+  }
+  function ulfSub(l, x) { return "<label><span>" + l + "</span>" + x + "</label>"; }
+  function drawUlf() {
+    if (!ULF.rows.length) { $("#pr-ulf-body").innerHTML = '<div class="pr-empty">No ' + esc(ULF.plant) + ' machines found. Workstations with "' + esc(ULF.plant) + '" in the name are used as the machine list.</div>'; drawUlfSum(); return; }
+    var can = !!(S.acc && S.acc.can_prod_entry);
+    var h = '<div class="pr-ulf-head"><span></span><span>Machine</span><span>Status</span><span>Job Card No \u00b7 Item</span><span class="n">Qty</span><span class="n">Elec Hrs</span><span class="n">Man Hrs</span><span class="n">Manpower</span></div>';
+    ULF.rows.forEach(function (r, i) {
+      var mc = esc(ulfMc(r.machine));
+      if (r.mode === "entered") {
+        h += r.entries.map(function (en, k) {
+          var last = k === r.entries.length - 1;
+          return '<div class="pr-ulf-row done"><span class="ck">' + (k ? "" : I.check) + '</span><span class="mc">' + (k ? "" : "<b>" + mc + "</b>") + "</span>" +
+            '<span class="st"><em class="ok">Entered</em>' + docLink("Stock Entry", en.stock_entry) + (en.has_qc && !en.qc ? "<small>QC started</small>" : "") +
+              (en.by_page && S.acc && S.acc.can_delete_entry ? '<button type="button" class="pr-lbf-del" data-del="' + esc(en.stock_entry) + '" title="Cancel the whole entry: final QC transfer, quality transfer, QI, Manufacture and material transfer">Delete</button>' : "") +
+              (last && can ? '<button type="button" class="pr-ulf-pc" data-pc="' + i + '" title="Machine changed product in this shift – add another entry">+ Product change</button>' : "") + "</span>" +
+            '<span class="it"><b>' + esc((en.job_card_no ? en.job_card_no + " · " : "") + en.item_name) + "</b><small>" + esc(en.work_order) + "</small>" +
+              '<span class="pr-ulf-spec"><em>CT <b>' + nq(en.cycle_time) + ' s</b></em><em>Cavity <b>' + nq(en.cavity) + '</b></em><em>Pcs Wt <b>' + nq(en.pcs_weight) + "</b></em>" +
+                (en.mold ? "<em>Mold <b>" + esc(en.mold) + "</b></em>" : "") + (en.reason ? "<em>Extra MP <b>" + esc(en.reason) + "</b></em>" : "") +
+                (en.qc ? '<em class="q ok">OK <b>' + nq(en.qc.ok) + "</b></em>" + (en.qc.hold ? '<em class="q hd">Hold <b>' + nq(en.qc.hold) + "</b></em>" : "") + (en.qc.rej ? '<em class="q rj">Rej <b>' + nq(en.qc.rej) + "</b></em>" : "") : "") + "</span></span>" +
+            '<span class="n">' + nq(en.qty) + " <small>" + esc(en.uom || "") + '</small></span><span class="n">' + nq(en.elec_hrs) + '</span><span class="n">' + nq(en.man_hrs) + '</span><span class="n">' + nq(en.manpower) + "</span>" +
+            "</div>";
+        }).join("");
+        return;
+      }
+      var src = r.mode === "copy" ? '<em class="cp">Copied</em><small>from ' + esc(short(r.from.posting_date)) + (r.from.shift_letter ? " · " + esc(r.from.shift_letter) : "") + "</small>" +
+          (!r.from.wo_open ? '<small class="bad">Last WO ' + esc(r.from.work_order) + " is " + esc(r.from.wo_status) + " – pick a running one</small>" : "")
+        : r.mode === "extra" ? '<em class="nw">Product change</em><small>2nd entry this shift</small>' : '<em class="nw">New</em><small>no earlier entry</small>';
+      var lastP = r.mode === "copy" && !r.from.wo_open ? "Last: " + (r.from.job_card_no || r.from.item_name || "") : "Job Card No or product…";
+      h += '<div class="pr-ulf-row' + (r.on ? "" : " off") + '" data-i="' + i + '">' +
+        '<span class="ck"></span>' +
+        '<span class="mc"><b>' + mc + "</b>" +
+          '<button type="button" class="pr-ulf-go" data-sub="' + i + '"' + (!can || ulfBad(r) ? " disabled" : "") + ' title="' + (can ? "Submit this machine only" : "Needs Production Entry access") + '">Submit</button>' +
+          (r.mode === "extra" ? '<button type="button" class="pr-ulf-rm" data-rmrow="' + i + '" title="Remove this extra row (nothing is saved yet)">Remove</button>' : "") + "</span>" +
+        '<span class="st">' + src + "</span>" +
+        '<span class="it"><span class="pr-pick"><input type="text" data-f="wo" autocomplete="off" value="' + esc(r.wo ? (r.jc || r.wo) : "") + '" placeholder="' + esc(lastP) + '"><span class="pr-pick-l" hidden></span></span>' +
+          '<small class="nm">' + esc(r.wo ? r.item_name + " · " + r.wo : "") + "</small></span>" +
+        '<span class="n">' + ulfNum(r, "qty", "Qty") + '</span><span class="n">' + ulfNum(r, "elec_hrs", "Elec hrs") + '</span><span class="n">' + ulfNum(r, "man_hrs", "Man hrs") + '</span><span class="n">' + ulfNum(r, "manpower", "Manpower") + "</span>" +
+        '<div class="pr-ulf-sub"><div class="pr-ulf-split' + (ulfSplitBad(r) && +r.qty > 0 ? " bad" : "") + '" title="Approved + Hold + Rejected must equal Qty">' +
+          ulfSub("Approved", ulfNum(r, "ok", "OK")) + ulfSub("Hold", ulfNum(r, "hold", "0")) + ulfSub("Rejected", ulfNum(r, "rej", "0")) + "</div>" +
+          ulfSub("CT (sec)", ulfNum(r, "cycle_time", "CT")) + ulfSub("Cavity", ulfNum(r, "cavity", "Cav")) + ulfSub("Pcs Weight", ulfNum(r, "pcs_weight", "PW")) +
+          ulfSub("Mold Detail", '<span class="pr-pick"><input type="text" data-f="mold" autocomplete="off" value="' + esc(r.mold) + '" placeholder="Type mold\u2026"><span class="pr-pick-l" hidden></span></span>') + ulfSub("Extra Manpower Reason", ulfField(r, "reason", "Reason")) + "</div>" +
+        (r.err ? '<div class="pr-ulf-err"><b>Not submitted:</b> ' + esc(r.err) + "</div>" : "") + "</div>";
+    });
+    $("#pr-ulf-body").innerHTML = '<div class="pr-ulf-grid">' + h + "</div>";
+    drawUlfSum();
+  }
+  function drawUlfSum() {
+    var done = 0, todo = 0, bad = 0;
+    ULF.rows.forEach(function (r) { if (r.mode === "entered") { done += r.entries.length; return; } todo++; if (ulfBad(r)) bad++; });
+    var m = ULF.data || {};
+    $("#pr-ulf-sum").innerHTML = ULF.data ? "<b>" + esc(nice(m.date)) + " \u00b7 Shift " + esc(m.shift) + " \u00b7 " + esc(m.plant) + "</b><span>" + done + " entered \u00b7 " + todo + " to enter</span>" : "";
+    var foot = $("#pr-ulf-foot"); if (!foot) return;
+    if (!ULF.data) { foot.innerHTML = ""; return; }
+    var err = ULF.err ? '<div class="pr-lbf-err">' + esc(ULF.err) + "</div>" : "";
+    var dn = ULF.done.length ? '<div class="pr-lbf-done"><b>Submitted:</b> ' + ULF.done.map(function (x) { return esc(ulfMc(x.machine)) + " \u2192 " + docLink("Stock Entry", x.stock_entry); }).join(" \u00b7 ") + "</div>" : "";
+    if (!(S.acc && S.acc.can_prod_entry)) {
+      foot.innerHTML = err + '<div class="pr-lbf-bar"><span class="why">You can delete entries here. Adding entries needs Production Entry access.</span></div>';
+      return;
+    }
+    foot.innerHTML = err + dn + '<div class="pr-lbf-bar"><span class="why">' + (todo ? "Submit one machine at a time: fill the row, click its <b>Submit</b>, then <b>Confirm</b>. One Submit makes the material transfer, Manufacture and the full QC." + (bad ? " " + bad + " machine" + (bad > 1 ? "s still need" : " still needs") + " a job card from the list, a qty, and Approved + Hold + Rejected = Qty (mold, if filled, must be picked from the list)." : "") : "Nothing left to enter for this shift.") + "</span></div>";
+  }
+  function ulfSyncBtn(row, r) {
+    var sb = row.querySelector("[data-sub]"); if (!sb || ULF.busy) return;
+    sb.disabled = ulfBad(r) || !(S.acc && S.acc.can_prod_entry); sb.classList.remove("arm"); sb.textContent = "Submit";
+  }
+  var ulfSubT;
+  function ulfSubmitClick(b) {
+    var i = +b.getAttribute("data-sub"), r = ULF.rows[i]; if (!r || ULF.busy || ulfBad(r) || !(S.acc && S.acc.can_prod_entry)) return;
+    if (!b.classList.contains("arm")) {
+      $$("#pr-ulf .pr-ulf-go.arm").forEach(function (x) { x.classList.remove("arm"); x.textContent = "Submit"; });
+      var c = ulfCost(r);
+      b.classList.add("arm"); b.textContent = "Confirm?";
+      b.title = ulfMc(r.machine) + " \u00b7 " + (r.jc || r.wo) + " \u00b7 Total " + nq(r.qty) + " = OK " + nq(r.ok) + " + Hold " + nq(+r.hold || 0) + " + Rej " + nq(+r.rej || 0) +
+        " \u00b7 Elec " + inr(c.e) + " + Manpower " + inr(c.m) + " \u2013 click again: material transfer, manufacture, QC";
+      clearTimeout(ulfSubT); ulfSubT = setTimeout(function () { if (b.isConnected && !ULF.busy) { b.classList.remove("arm"); b.textContent = "Submit"; } }, 5000);
+      return;
+    }
+    clearTimeout(ulfSubT); submitUlfRow(i, b);
+  }
+  /* ek baar mein sirf ek machine */
+  async function submitUlfRow(i, b) {
+    var r = ULF.rows[i]; if (!r || ULF.busy) return;
+    ULF.busy = true; ULF.err = ""; b.disabled = true; b.textContent = "Submitting\u2026";
+    $$("#pr-ulf .pr-ulf-go").forEach(function (x) { x.disabled = true; });
+    var c = ulfCost(r);
+    try {
+      var m = await api({ action: "ul_submit", date: ULF.date, shift: ULF.shift, plant: ULF.plant, rows: [{
+        machine: r.machine, work_order: r.wo, qty: +r.qty || 0, elec_hrs: +r.elec_hrs || 0, man_hrs: +r.man_hrs || 0, manpower: +r.manpower || 0,
+        cycle_time: +r.cycle_time || 0, cavity: +r.cavity || 0, pcs_weight: +r.pcs_weight || 0, reason: r.reason || "", mold: r.mold || "",
+        ok: +r.ok || 0, hold: +r.hold || 0, rej: +r.rej || 0 }] }, "POST");
+      var en = ((m && m.entries) || [])[0] || {};
+      ULF.done.push({ machine: r.machine, stock_entry: en.stock_entry });
+      /* sirf yahi row "Entered" banti hai, baaki rows ke bhare hue values waise hi rehte hain */
+      ULF.rows[i] = { machine: r.machine, mode: "entered", entries: [{ stock_entry: en.stock_entry, work_order: r.wo, job_card_no: r.jc, item_name: r.item_name, qty: en.qty || +r.qty, uom: r.uom,
+        elec_hrs: +r.elec_hrs || 0, man_hrs: +r.man_hrs || 0, manpower: +r.manpower || 0, elec_rate: c.er, wage_rate: c.wr,
+        cycle_time: +r.cycle_time || 0, cavity: +r.cavity || 0, pcs_weight: +r.pcs_weight || 0, mold: r.mold, reason: r.reason, by_page: 1, has_qc: 1, qc: { ok: +r.ok || 0, hold: +r.hold || 0, rej: +r.rej || 0 } }] };
+      ULF.busy = false;
+      prToast("ok", ulfMc(r.machine) + " \u2192 " + (en.stock_entry || "Stock Entry") + " submitted with material transfer and QC (OK " + nq(+r.ok || 0) + ", Rej " + nq(+r.rej || 0) + ").");
+      drawUlf();
+      if (S.dp.seg === "ultra") loadDp();
+    } catch (e) {
+      ULF.busy = false; ULF.err = ""; r.err = e.message; drawUlf();
+      var er = $('#pr-ulf [data-i="' + i + '"]'); if (er) er.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+  $("#pr-ulf").addEventListener("mousedown", function (e) { if (e.target === this) closeUlf(); });
+
+
   /* ===================================================================
      events
      =================================================================== */
   $("#pr-scrim").addEventListener("click", closeDrawer);
-  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (!$("#pr-set").hidden) closeSettings(); else closeDrawer(); } });
+  d.addEventListener("keydown", function (e) { if (e.key === "Escape") { if (!$("#pr-ulf").hidden) closeUlf(); else if (!$("#pr-lbf").hidden) closeLbf(); else if (!$("#pr-set").hidden) closeSettings(); else closeDrawer(); } });
   $("#pr-drawer").addEventListener("click", function (e) {
     var b;
     if (e.target.closest("#pr-dr-x")) { closeDrawer(); return; }
@@ -1184,7 +1752,7 @@
     var b;
     /* job card trigger (dono tab) */
     if ((b = e.target.closest("[data-main] .pr-jc[data-pp]"))) {
-      if (b.closest('[data-main="daily"]') && S.dp.lt) openItemHistory(b.getAttribute("data-ic"), b.getAttribute("data-in"));
+      if (b.closest('[data-main="daily"]') && S.dp.lt && S.dp.seg === "ultra") openItemHistory(b.getAttribute("data-ic"), b.getAttribute("data-in"));
       else openJobCard(b.getAttribute("data-pp"), b.getAttribute("data-jc"));
       return;
     }
@@ -1192,7 +1760,9 @@
     if (e.target.closest("#pr-jc-csv")) { jcCSV(); return; }
     if (e.target.closest("#pr-dp-prev")) { shiftDay(-1); return; }
     if (e.target.closest("#pr-dp-next")) { shiftDay(1); return; }
+    if (e.target.closest("#pr-dp-lt")) { S.dp.lt = S.dp.lt ? 0 : 1; syncDpBand(); syncSub(); loadDp(); return; }   /* < 30 Kg on / off */
     if (e.target.closest("#pr-dp-analysis")) { openAnalysis(); return; }
+    if (e.target.closest("#pr-lb-add")) { if (S.dp.seg === "large") openLbf(); else if (S.dp.seg === "ultra") openUlf(); return; }
     if ((b = e.target.closest("[data-pg]"))) { var n = S.dp.di + (+b.getAttribute("data-pg")); if (n >= 0 && n < S.dp.dates.length) { S.dp.di = n; renderDp(); } return; }
     if ((b = e.target.closest("[data-di]"))) { S.dp.di = +b.getAttribute("data-di"); renderDp(); return; }
     if (e.target.closest("#pr-dp-csv")) { dpCSV(); return; }
@@ -1200,7 +1770,8 @@
     if (e.target.closest("#pr-jlb-csv")) { jlbCSV(); return; }
     if (e.target.closest("#pr-nm-csv")) { nmCSV(); return; }
     if ((b = e.target.closest(".pr-closepp"))) { if (!b.disabled) closePlan(b); return; }
-    if ((b = e.target.closest("[data-nmi]"))) { openNmItem(b.getAttribute("data-nmi"), b.getAttribute("data-nmn")); return; }
+    /* Non Moving: row mein kahin bhi click \u2192 slider (link par click ho to link hi khule) */
+    if (!e.target.closest("a") && (b = e.target.closest("[data-nmi]"))) { openNmItem(b.getAttribute("data-nmi"), b.getAttribute("data-nmn")); return; }
     if (e.target.closest("#pr-nm-prev") || e.target.closest("#pr-nm-next")) { var n0d = parseIso(S.nm.from); setNmMonth(new Date(n0d.getFullYear(), n0d.getMonth() + (e.target.closest("#pr-nm-prev") ? -1 : 1), 1)); syncNmBand(); syncSub(); loadNm(); return; }
     if ((b = e.target.closest("#pr-jc-seg [data-jseg]"))) {
       var js = b.getAttribute("data-jseg"); if (js === S.jlb.seg) return;
@@ -1211,7 +1782,7 @@
     if ((b = e.target.closest("#pr-dp-seg [data-seg]"))) {
       var sg = b.getAttribute("data-seg"); if (sg === S.dp.seg) return;
       S.dp.seg = sg; store("dp-seg", sg); syncDpBand(); syncSub();
-      if (sg === "large") { if (S.lb.rows) renderLb(); else loadLb(); } else { if (S.dp.rows) renderDp(); else loadDp(); }
+      S.lb.rows = null; S.dp.rows = null; loadDp();   /* segment badla: naya data */
       return;
     }
     if ((b = e.target.closest("[data-main] .pr-jc[data-ct]"))) { openCT(b.getAttribute("data-ct"), b.getAttribute("data-jc")); return; }
@@ -1243,7 +1814,6 @@
     else if (id === "pr-jlb-month") { S.jlb.month = v; syncJcBand(); syncSub(); loadJlb(); }
     else if (id === "pr-jc-month") { S.jc.month = v; S.jc.card = "all"; syncJcBand(); syncSub(); loadJc(); }
     else if (id === "pr-dp-plant") { S.dp.plant = v; store("dp-plant", v); syncDpBand(); syncSub(); loadDp(); }
-    else if (id === "pr-dp-lt") { S.dp.lt = e.target.checked ? 1 : 0; syncDpBand(); syncSub(); loadDp(); }
     else if (id === "pr-pf-status") { S.pf.status = v; syncPfBand(); syncSub(); loadPf(); }
     else if (id === "pr-pl-month") { S.pl.month = v; S.pl.card = "all"; syncPlBand(); syncSub(); loadPl(); }
     else if (id === "pr-pf-from" || id === "pr-pf-to") {
@@ -1265,7 +1835,7 @@
   /* --- section switch --- */
   function syncSub() {
     var sub = S.sec === "jobcard" ? (S.jlb.seg === "large" ? "Job Card \u00b7 Large Blow \u00b7 " + jlbLabel() : "Job Card \u00b7 Ultra \u00b7 " + (S.jc.status === "All" ? "All status" : S.jc.status) + " \u00b7 " + jcScope())
-      : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
+      : S.sec === "daily" ? "Daily Production \u00b7 " + (S.dp.from === S.dp.to ? nice(S.dp.from) : short(S.dp.from) + " \u2013 " + short(S.dp.to)) + " \u00b7 " + (S.dp.seg === "large" ? "Large Blow" : S.dp.seg === "eco" ? "Eco Blow" : S.dp.seg === "asm" ? "Assembly" : "Ultra \u00b7 " + (S.dp.plant === "All" ? "All plants" : S.dp.plant))
       : S.sec === "perf" ? "Performance \u00b7 " + monthOf(S.pf.from, S.pf.to) + " \u00b7 " + (S.pf.status === "All" ? "All status" : S.pf.status)
       : S.sec === "nonmoving" ? "Non Moving \u00b7 " + monthOf(S.nm.from, S.nm.to) + " \u00b7 " + S.nm.wh + " \u00b7 " + S.nm.ig
       : "Planning \u00b7 " + ((PL_MONTHS.filter(function (m) { return m[0] === S.pl.month; })[0] || [0, "All months"])[1]);
@@ -1279,7 +1849,7 @@
     $$("[data-main]").forEach(function (x) { x.hidden = x.getAttribute("data-main") !== sec; });
     syncSub();
     if (sec === "jobcard") { syncJcBand(); if (S.jlb.seg === "large" ? !S.jlb.rows : !S.jc.rows) loadJc(); }
-    else if (sec === "daily") { syncDpBand(); if (S.dp.seg === "large" ? !S.lb.rows : !S.dp.rows) loadDp(); }
+    else if (sec === "daily") { syncDpBand(); if ((S.dp.seg === "large" || S.dp.seg === "eco") ? !S.lb.rows : !S.dp.rows) loadDp(); }
     else if (sec === "perf") { syncPfBand(); if (!S.pf.rows) loadPf(); }
     else if (sec === "nonmoving") { syncNmBand(); if (!S.nm.rows) loadNm(); }
     else { syncPlBand(); if (!S.pl.rows) loadPl(); }
@@ -1291,7 +1861,9 @@
   var SV = { users: [], cand: [], pick: null, add: { jobcard: 1, daily: 1, perf: 1, planning: 1, nonmoving: 1 } };
   function closeChip(u) {
     return '<button type="button" class="pr-clchip' + (u.close ? " on" : "") + '" data-u="' + esc(u.user) + '" data-cl="' + (u.close ? 0 : 1) + '" title="' +
-      (u.close ? "Can close Production Plans from Job Card \u2013 click to remove" : "Give access to the Close button in Job Card") + '">' + I.check + "Close Plan</button>";
+      (u.close ? "Delete & Close: can close Production Plans (Job Card) and delete Large Blow entries \u2013 click to remove" : "Give Delete & Close access (Close button in Job Card + Delete in Add Production Entry)") + '">' + I.check + "Delete &amp; Close</button>" +
+      '<button type="button" class="pr-clchip is-entry' + (u.entry ? " on" : "") + '" data-u="' + esc(u.user) + '" data-cl="' + (u.entry ? 0 : 1) + '" data-perm="entry" title="' +
+      (u.entry ? "Can add / delete Large Blow production entries \u2013 click to remove" : "Give access to Add Production Entry (Large Blow) in Daily Production") + '">' + I.check + "Production Entry</button>";
   }
   function repToggles(sel, attr) {
     var full = REP_KEYS.every(function (k) { return sel[k]; });
@@ -1308,7 +1880,7 @@
   function openSettings() {
     var m = $("#pr-set");
     $(".pr-modal", m).innerHTML =
-      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning / Non Moving. Reports are view only. System Managers always have full access, except <b>Close Plan</b> (the Close button in Job Card), which is given separately to each user, System Managers included. Disabled users are not listed.</p></div>' +
+      '<div class="pr-mh"><div><h3>Report access</h3><p>Give <b>Full</b> access or pick any of Job Card / Daily Production / Performance / Planning / Non Moving. Reports are view only. System Managers always have full access, except <b>Delete &amp; Close</b> (Close button in Job Card + Delete in Add Production Entry) and <b>Production Entry</b> (adding Large Blow entries), which are given separately to each user, System Managers included. Disabled users are not listed.</p></div>' +
         '<button type="button" class="pr-ibtn" id="pr-set-x" title="Close">' + I.x + "</button></div>" +
       '<div class="pr-mb"><div class="pr-msg" id="pr-set-msg"></div>' +
         '<div class="pr-addbox"><div class="pr-add"><div class="pr-pick"><input type="text" id="pr-set-u" placeholder="Type user name or email\u2026" autocomplete="off"><div class="pr-pick-l" id="pr-set-l" hidden></div></div>' +
@@ -1344,10 +1916,11 @@
     $("#pr-set-list").addEventListener("click", async function (e) {
       var b = e.target.closest("button[data-u]"); if (!b || b.disabled) return;
       if (b.hasAttribute("data-cl")) {
-        var cw = b.getAttribute("data-u"), con = b.getAttribute("data-cl") === "1";
+        var cw = b.getAttribute("data-u"), con = b.getAttribute("data-cl") === "1", perm = b.getAttribute("data-perm") || "close";
         b.disabled = true;
-        if (await settingsCall({ action: "set_close", user: cw, on: con ? 1 : 0 })) {
-          setMsg((con ? "Close Plan access given to " : "Close Plan access removed for ") + cw + "." + (cw === (S.acc && S.acc.user) ? " Refresh the page to see the change." : ""), true);
+        var plbl = perm === "entry" ? "Production Entry" : "Delete & Close";
+        if (await settingsCall({ action: "set_close", user: cw, on: con ? 1 : 0, perm: perm })) {
+          setMsg((con ? plbl + " access given to " : plbl + " access removed for ") + cw + "." + (cw === (S.acc && S.acc.user) ? " Refresh the page to see the change." : ""), true);
         } else b.disabled = false;
         return;
       }
@@ -1436,6 +2009,13 @@
     $("#pr-gate").hidden = true; $("#pr-app").hidden = false;
     $("#pr-gear").hidden = !S.acc.is_admin;
     mergeNav();
+    if (S.acc.ver !== PROD_VER) {
+      /* JS aur Server Script alag version ke hain: access galat dikh sakta hai, isliye buttons band */
+      S.acc.can_close_plan = false; S.acc.can_delete_entry = false; S.acc.can_prod_entry = false;
+      var vb = d.createElement("div"); vb.className = "pr-error pr-verwarn";
+      vb.innerHTML = "<b>Old files on this page.</b> Page JS is <b>" + esc(PROD_VER) + "</b> but the ucm_production_web Server Script is <b>" + esc(S.acc.ver || "old") + "</b>. Paste the latest Server Script and JS. Close / Delete / Production Entry are turned off until then.";
+      $("#pr-app").insertBefore(vb, $("#pr-app").firstChild);
+    }
     setSection(S.secs[0]);   /* page khulne par hamesha Job Card (access ho to) */
   }
   boot();
